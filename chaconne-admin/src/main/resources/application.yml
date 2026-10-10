@@ -1,6 +1,0 @@
-server:
-  port: 6142
-  
-spring:
-  application:
-    name: chaconne-admin-service
