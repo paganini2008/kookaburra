@@ -1,0 +1,57 @@
+/*
+ * Kookaburra Neon: dark / neon palette (design §17.2). Applied after studio.css.
+ *
+ * @Author: Fred Feng
+ * @Date: 11/10/2026
+ * @Version 1.0.0
+ */
+.root {
+    /* Kookaburra Neon palette (design §17.2), used on top of AtlantaFX Dracula. */
+    -k-bg-0: #0B0E14;
+    -k-bg-1: #11151F;
+    -k-bg-2: #1A2030;
+    -k-border: #26304A;
+    -k-fg: #E6EDF7;
+    -k-fg-muted: #7A8BA8;
+    -k-accent: #00E5FF;
+    -k-accent-2: #FF2BD6;
+    -k-ok: #39FF88;
+    -k-warn: #FFC14D;
+    -k-err: #FF4D6D;
+    -k-on-accent: #00131A;
+    -k-glow: rgba(0, 229, 255, 0.55);
+
+    /* AtlantaFX looked-up colors */
+    -color-bg-default: -k-bg-0;
+    -color-bg-subtle: -k-bg-1;
+    -color-bg-overlay: -k-bg-1;
+    -color-bg-inset: -k-bg-0;
+    -color-fg-default: -k-fg;
+    -color-fg-muted: -k-fg-muted;
+    -color-fg-subtle: -k-fg-muted;
+    -color-border-default: -k-border;
+    -color-border-muted: -k-border;
+    -color-border-subtle: -k-bg-2;
+    -color-accent-fg: -k-accent;
+    -color-accent-emphasis: #00B8D4;
+    -color-accent-muted: rgba(0, 229, 255, 0.25);
+    -color-accent-subtle: rgba(0, 229, 255, 0.12);
+    -color-danger-fg: -k-err;
+    -color-success-fg: -k-ok;
+    -color-warning-fg: -k-warn;
+
+}
+
+.k-welcome {
+    -fx-background-color: radial-gradient(center 25% 0%, radius 60%, rgba(0, 229, 255, 0.12), transparent),
+                          radial-gradient(center 80% 10%, radius 50%, rgba(255, 43, 214, 0.10), transparent),
+                          -k-bg-0;
+}
+
+.table-row-cell:selected {
+    -fx-background-color: rgba(0, 229, 255, 0.18);
+}
+
+.k-code .op {
+    -fx-fill: #9AD1FF;
+}

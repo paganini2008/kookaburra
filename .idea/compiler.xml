@@ -7,12 +7,19 @@
         <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
         <outputRelativeToContentRoot value="true" />
         <module name="chaconne-cluster" />
-        <module name="chaconne-admin" />
         <module name="chaconne-common" />
         <module name="chaconne-spring-boot-starter" />
         <module name="chaconne-client" />
+        <module name="chaconne-admin" />
+        <module name="kookaburra-core" />
         <module name="chaconne-core" />
       </profile>
     </annotationProcessing>
+  </component>
+  <component name="JavacSettings">
+    <option name="ADDITIONAL_OPTIONS_OVERRIDE">
+      <module name="kookaburra-core" options="-Xlint:all,-processing,-serial -parameters" />
+      <module name="kookaburra-processor" options="-Xlint:all,-processing,-serial -parameters" />
+    </option>
   </component>
 </project>
