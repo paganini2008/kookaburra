@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kookaburra</title>
+<meta name="description" content="Kookaburra: an embedded object database for Java 17+ with type-safe Stream-like queries and OQL on RoaringBitmap indexes, plus the Kookaburra Studio admin tool.">
+<link rel="icon" href="https://paganini2008.github.io/kookaburra/assets/logo_64.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg0: #0B0E14; --bg1: #11151F; --bg2: #1A2030; --border: #26304A;
+  --fg: #E6EDF7; --muted: #7A8BA8; --accent: #00E5FF; --accent2: #FF2BD6; --ok: #39FF88; --warn: #FFC14D;
+  --mono: "JetBrains Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg0); color: var(--fg); font: 16px/1.6 Inter, system-ui, -apple-system, sans-serif; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, pre { font-family: var(--mono); }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px; }
+section { padding: 72px 0; border-top: 1px solid var(--border); }
+h2 { font-size: 30px; margin: 0 0 8px; letter-spacing: -.01em; }
+.lead { color: var(--muted); margin: 0 0 32px; max-width: 720px; }
+.kicker { color: var(--accent2); font: 600 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; margin-bottom: 10px; }
+
+/* nav */
+nav { position: sticky; top: 0; z-index: 10; background: rgba(11,14,20,.86); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); }
+nav .wrap { display: flex; align-items: center; gap: 20px; height: 58px; }
+nav .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--fg); }
+nav .links { margin-left: auto; display: flex; gap: 18px; font-size: 14px; }
+nav .links a { color: var(--muted); }
+nav .links a:hover { color: var(--fg); text-decoration: none; }
+@media (max-width: 760px) { nav .links a.opt { display: none; } }
+
+/* hero */
+.hero { padding: 72px 0 56px; border-top: 0; background: radial-gradient(900px 420px at 50% -10%, rgba(0,229,255,.16), transparent 70%), radial-gradient(700px 360px at 90% 10%, rgba(255,43,214,.10), transparent 70%); }
+.hero .top { display: flex; align-items: center; gap: 28px; flex-wrap: wrap; }
+.hero img.logo { width: 120px; height: auto; filter: drop-shadow(0 0 24px rgba(0,229,255,.35)); }
+.hero h1 { font-size: clamp(38px, 7vw, 62px); line-height: 1.05; margin: 0; letter-spacing: -.02em; }
+.hero .slogan { font-size: clamp(18px, 2.6vw, 24px); color: var(--accent); margin: 8px 0 0; font-weight: 600; }
+.hero p.pos { max-width: 760px; color: #C3CEE0; font-size: 18px; margin: 24px 0 28px; }
+.btns { display: flex; gap: 12px; flex-wrap: wrap; }
+.btn { display: inline-block; padding: 11px 20px; border-radius: 10px; font-weight: 600; border: 1px solid var(--border); color: var(--fg); background: var(--bg2); }
+.btn:hover { text-decoration: none; border-color: var(--accent); box-shadow: 0 0 18px rgba(0,229,255,.25); }
+.btn.primary { background: var(--accent); color: #001018; border-color: var(--accent); }
+.shot { margin-top: 44px; border-radius: 14px; border: 1px solid var(--border); box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 40px rgba(0,229,255,.08); width: 100%; height: auto; display: block; }
+.badges { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
+.badge { font: 600 12px/1 var(--mono); color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 6px 10px; }
+
+/* cards */
+.grid { display: grid; gap: 16px; }
+.g4 { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+.g3 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.card { background: var(--bg1); border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
+.card h3 { margin: 0 0 6px; font-size: 17px; }
+.card p { margin: 0; color: var(--muted); font-size: 15px; }
+.card .ico { font-size: 22px; width: 42px; height: 42px; display: grid; place-items: center; border-radius: 10px; background: rgba(0,229,255,.08); border: 1px solid rgba(0,229,255,.25); margin-bottom: 14px; }
+.pain .ico { background: rgba(255,43,214,.08); border-color: rgba(255,43,214,.3); }
+a.card:hover { text-decoration: none; border-color: var(--accent); }
+
+/* how */
+.how { display: grid; grid-template-columns: 1.4fr 1fr; gap: 28px; align-items: center; }
+@media (max-width: 860px) { .how { grid-template-columns: 1fr; } }
+.diagram { background: var(--bg1); border: 1px solid var(--border); border-radius: 14px; padding: 18px; overflow-x: auto; text-align: center; }
+.diagram svg { max-width: 100% !important; height: auto; min-height: 380px; }
+.how ul { color: #C3CEE0; padding-left: 18px; }
+.how li { margin: 8px 0; }
+
+/* code */
+.code { position: relative; background: #0E1220; border: 1px solid var(--border); border-radius: 12px; margin: 0 0 14px; }
+.code .label { font: 600 11px/1 var(--mono); color: var(--muted); padding: 12px 16px 0; letter-spacing: .08em; text-transform: uppercase; }
+.code pre { margin: 0; padding: 12px 16px 16px; overflow-x: auto; font-size: 13.5px; line-height: 1.55; color: #D6E2F5; }
+.copy { position: absolute; top: 8px; right: 8px; font: 600 12px/1 Inter, sans-serif; color: var(--fg); background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; cursor: pointer; }
+.copy:hover { border-color: var(--accent); }
+.k { color: var(--accent2); } .s { color: var(--ok); } .c { color: var(--muted); } .a { color: var(--warn); } .t { color: var(--accent); }
+.out { border-left: 3px solid var(--ok); }
+
+/* examples */
+.ex .card pre { background: #0E1220; border: 1px solid var(--border); border-radius: 10px; padding: 12px; font-size: 12.5px; overflow-x: auto; margin: 12px 0 0; color: #D6E2F5; }
+.ex .card .res { font: 12.5px/1.5 var(--mono); color: var(--ok); margin-top: 8px; white-space: pre-wrap; }
+
+/* perf */
+.perf { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+@media (max-width: 860px) { .perf { grid-template-columns: 1fr; } }
+.bars .row { display: grid; grid-template-columns: 170px 1fr 82px; gap: 10px; align-items: center; margin: 10px 0; font-size: 14px; }
+@media (max-width: 520px) { .bars .row { grid-template-columns: 120px 1fr 70px; font-size: 13px; } }
+.bars .bar { height: 12px; border-radius: 6px; background: var(--bg2); overflow: hidden; }
+.bars .bar span { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+.bars .v { font: 600 13px var(--mono); color: var(--fg); text-align: right; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 600; }
+td.n { font-family: var(--mono); color: var(--accent); white-space: nowrap; }
+.env { color: var(--muted); font-size: 13px; margin-top: 14px; }
+
+footer { border-top: 1px solid var(--border); padding: 32px 0 48px; color: var(--muted); font-size: 14px; }
+footer .wrap { display: flex; gap: 20px; flex-wrap: wrap; align-items: center; }
+footer .sp { margin-left: auto; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#"><img src="https://paganini2008.github.io/kookaburra/assets/logo_64.png" width="30" height="24" alt="">Kookaburra</a>
+    <div class="links">
+      <a class="opt" href="#features">Features</a>
+      <a class="opt" href="#how">How it works</a>
+      <a href="#start">Quick start</a>
+      <a class="opt" href="#performance">Performance</a>
+      <a href="#docs">Docs</a>
+      <a href="https://github.com/paganini2008/kookaburra">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<!-- 1. Hero -->
+<header class="hero">
+  <div class="wrap">
+    <div class="top">
+      <img class="logo" src="https://paganini2008.github.io/kookaburra/assets/logo_256.png" alt="Kookaburra logo">
+      <div>
+        <h1>Kookaburra</h1>
+        <p class="slogan">Query Java objects like a database — bitmaps underneath, streams on top.</p>
+      </div>
+    </div>
+    <p class="pos">An <b>embedded object database for Java 17+</b>. Store plain annotated objects and query them with a type-safe,
+      Stream-like API or JPQL-style <b>OQL</b>. Filters, sorts and aggregates run on <b>RoaringBitmap</b> indexes over memory-mapped segments,
+      and every write goes through a WAL with crash recovery.</p>
+    <div class="btns">
+      <a class="btn primary" href="#start">Get Started</a>
+      <a class="btn" href="https://github.com/paganini2008/kookaburra">GitHub</a>
+      <a class="btn" href="design.html">Documentation</a>
+    </div>
+    <div class="badges">
+      <span class="badge">Java 17+</span><span class="badge">Apache-2.0</span><span class="badge">RoaringBitmap 1.6</span>
+      <span class="badge">ANTLR 4 OQL</span><span class="badge">coverage ≥ 90%</span><span class="badge">Windows · Linux · macOS</span>
+    </div>
+    <img class="shot" src="https://paganini2008.github.io/kookaburra/assets/studio-data.png" alt="Kookaburra Studio: data grid" width="1320" height="820">
+  </div>
+</header>
+
+<!-- 2. Why -->
+<section id="why">
+  <div class="wrap">
+    <div class="kicker">Why Kookaburra</div>
+    <h2>Local data shouldn't need a server or an ORM</h2>
+    <p class="lead">Typical pain points when an application needs to keep and query its own objects:</p>
+    <div class="grid g4">
+      <div class="card pain"><div class="ico">🧱</div><h3>ORM + SQL for local state</h3><p>Mapping layers, schemas and a database server just to persist and filter your own objects.</p></div>
+      <div class="card pain"><div class="ico">🐢</div><h3>Streams over lists don't scale</h3><p><code>list.stream().filter(...)</code> scans everything, every time, and lives only in the heap.</p></div>
+      <div class="card pain"><div class="ico">🔤</div><h3>Stringly-typed queries</h3><p>Field names in strings break silently when you refactor.</p></div>
+      <div class="card pain"><div class="ico">🔍</div><h3>No way to look inside</h3><p>Binary stores give you nothing to browse, fix or export data with.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- 3. Features -->
+<section id="features">
+  <div class="wrap">
+    <div class="kicker">Features</div>
+    <h2>Everything in one small library</h2>
+    <p class="lead">Embedded, durable, indexed and queryable, with a desktop tool to look inside.</p>
+    <div class="grid g4">
+      <div class="card"><div class="ico">🧭</div><h3>Type-safe queries</h3><p><code>where(Book::getYear).ge(1960)</code> or the generated <code>Book_</code> metamodel. Refactoring-safe.</p></div>
+      <div class="card"><div class="ico">⚡</div><h3>Bitmap indexes</h3><p>Roaring postings, sorted dictionaries and value-sorted docs: millisecond filters on 10 M objects.</p></div>
+      <div class="card"><div class="ico">🔤</div><h3>OQL</h3><p>JPQL-style SELECT / UPDATE / DELETE with the SQL-92 core: CASE, LIKE, DISTINCT, GROUP BY … HAVING.</p></div>
+      <div class="card"><div class="ico">🧬</div><h3>Rich models</h3><p>Inheritance, embedded objects, lists, maps and references with fetch.</p></div>
+      <div class="card"><div class="ico">🛡</div><h3>Durable & consistent</h3><p>WAL with group commit, crash recovery, MVCC snapshots, atomic batches, optimistic locks.</p></div>
+      <div class="card"><div class="ico">🧩</div><h3>Dynamic API</h3><p>A self-describing schema with evolution. Open any database without its classes.</p></div>
+      <div class="card"><div class="ico">🗜</div><h3>Compact & fast restart</h3><p>Zero-copy mmap segments, ~150 B / object, 1.6 ms reopen, 6.5 MiB heap for 10 M objects.</p></div>
+      <div class="card"><div class="ico">🖥</div><h3>Kookaburra Studio</h3><p>CRUD, OQL console, schema &amp; segments, JSON / JSONL / CSV export. One jar for every OS.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- 4. How it works -->
+<section id="how">
+  <div class="wrap">
+    <div class="kicker">How it works</div>
+    <h2>An LSM store with bitmap-indexed segments</h2>
+    <div class="how">
+      <div class="diagram">
+        <pre class="mermaid">
+flowchart TB
+  A["Typed API / OQL / Dynamic"] --> P["Planner"] --> X["Executor"]
+  X --> V["MVCC snapshot"]
+  V --> M["MemSegments"]
+  V --> S["Segments (mmap)<br/>dict · ord · postings · sdoc"]
+  W["Writers"] --> Q["Sequencer<br/>group commit"] --> L["WAL"]
+  Q --> M
+  M -- flush --> S
+  S -- compaction --> S
+        </pre>
+      </div>
+      <ul>
+        <li>All three APIs compile to the same <b>predicate plan</b>. The planner pushes conditions down to postings and ordinals and orders them by cost.</li>
+        <li>Writes are encoded on the caller's thread. A <b>single sequencer</b> logs each group to the WAL with one fsync, applies it to lock-free MemSegments and publishes a new snapshot.</li>
+        <li>MemSegments flush to <b>immutable, memory-mapped segment files</b>, and tiered compaction merges them in the background.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 5. Quick start -->
+<section id="start">
+  <div class="wrap">
+    <div class="kicker">Quick start</div>
+    <h2>Three steps</h2>
+    <p class="lead">Add the dependency, annotate a class, query it.</p>
+    <div class="code"><div class="label">1 · pom.xml</div><button class="copy">Copy</button><pre>&lt;dependency&gt;
+    &lt;groupId&gt;com.github.paganini2008&lt;/groupId&gt;
+    &lt;artifactId&gt;kookaburra-core&lt;/artifactId&gt;
+    &lt;version&gt;1.0.0-SNAPSHOT&lt;/version&gt;
+&lt;/dependency&gt;</pre></div>
+    <div class="code"><div class="label">2 · Entity</div><button class="copy">Copy</button><pre><span class="a">@Entity</span>
+<span class="k">public class</span> <span class="t">Book</span> {
+    <span class="a">@Id</span> <span class="k">long</span> oid;
+    <span class="a">@Version</span> <span class="k">long</span> version;
+    <span class="a">@Index</span> String title;
+    <span class="a">@Index</span> Genre genre;
+    <span class="a">@Index</span>(IndexKind.ORDINAL) <span class="k">int</span> year;
+    <span class="k">double</span> price;
+    <span class="c">// constructors, getters …</span>
+}</pre></div>
+    <div class="code"><div class="label">3 · Store &amp; query</div><button class="copy">Copy</button><pre><span class="k">try</span> (ObjectDB db = ObjectDB.open(Path.of(<span class="s">"data"</span>))) {
+    db.batch()
+      .insert(<span class="k">new</span> Book(<span class="s">"Dune"</span>, Genre.SCIFI, <span class="a">1965</span>, <span class="a">9.99</span>))
+      .insert(<span class="k">new</span> Book(<span class="s">"Neuromancer"</span>, Genre.SCIFI, <span class="a">1984</span>, <span class="a">12.50</span>))
+      .insert(<span class="k">new</span> Book(<span class="s">"Hyperion"</span>, Genre.SCIFI, <span class="a">1989</span>, <span class="a">14.20</span>))
+      .commit();
+
+    List&lt;String&gt; titles = db.from(Book.<span class="k">class</span>)
+            .filter(where(Book::getGenre).eq(Genre.SCIFI))
+            .filter(where(Book::getYear).ge(<span class="a">1960</span>))
+            .sorted(where(Book::getYear).desc())
+            .limit(<span class="a">2</span>)
+            .map(where(Book::getTitle))
+            .toList();
+    System.out.println(titles);
+}</pre></div>
+    <div class="code out"><div class="label">Output</div><pre>[Hyperion, Neuromancer]</pre></div>
+  </div>
+</section>
+
+<!-- 6. Examples / Use cases -->
+<section id="examples" class="ex">
+  <div class="wrap">
+    <div class="kicker">Examples</div>
+    <h2>Use cases</h2>
+    <p class="lead">Each example: input → code → output, from a real run on six books.</p>
+    <div class="grid g3">
+      <div class="card"><h3>Group &amp; aggregate</h3><p>Count and average price per genre.</p>
+<pre>db.from(Book.class)
+  .groupBy(where(Book::getGenre))
+  .agg(Q.count().as("books"),
+       Q.avg(where(Book::getPrice)).as("avgPrice"))
+  .toList();</pre>
+        <div class="res">SCIFI   books=4 avg=11.36
+FANTASY books=1 avg=10.00
+CRIME   books=1 avg=7.40</div></div>
+      <div class="card"><h3>OQL for tools &amp; scripts</h3><p>JPQL-style text queries with parameters.</p>
+<pre>db.oql("SELECT b.author, b.year FROM Book b " +
+       "WHERE b.year &lt; :y ORDER BY b.year")
+  .param("y", 1950).rows();</pre>
+        <div class="res">J.R.R. Tolkien 1937
+Raymond Chandler 1939</div></div>
+      <div class="card"><h3>Generated metamodel</h3><p>Compile-time field constants from the annotation processor.</p>
+<pre>db.from(Book.class)
+  .filter(Book_.tags.contains("classic"))
+  .filter(Book_.price.lt(10.0))
+  .count();</pre>
+        <div class="res">2</div></div>
+      <div class="card"><h3>Admin without classes</h3><p>Dynamic access to any stored class.</p>
+<pre>DynamicCollection books = db.dynamic("Book");
+books.from()
+  .filter(books.field("author").startsWith("J"))
+  .toList().get(0).get("title");</pre>
+        <div class="res">"The Hobbit"</div></div>
+      <div class="card"><h3>Safe concurrent edits</h3><p>Optimistic locking with <code>@Version</code>.</p>
+<pre>dune.setPrice(11.99);
+db.update(dune);
+// OptimisticLockException if changed meanwhile</pre>
+        <div class="res">dune=11.99</div></div>
+      <div class="card"><h3>See the plan</h3><p>Which index answers each condition.</p>
+<pre>db.from(Book.class)
+  .filter(where(Book::getGenre).eq(SCIFI))
+  .filter(where(Book::getYear).between(1950, 1970))
+  .explain();</pre>
+        <div class="res">genre = 'SCIFI'  [sorted docs card=3]
+year IN [1950, 1970]  [sorted docs card=6]</div></div>
+    </div>
+    <img class="shot" src="https://paganini2008.github.io/kookaburra/assets/studio-query.png" alt="Kookaburra Studio: OQL console" width="1320" height="820">
+  </div>
+</section>
+
+<!-- 7. Performance -->
+<section id="performance">
+  <div class="wrap">
+    <div class="kicker">Performance</div>
+    <h2>10 million objects, milliseconds</h2>
+    <p class="lead">p50 latency from the <code>kookaburra-bench</code> stress harness (warm-up, repeated runs, consistency checks after every phase).</p>
+    <div class="perf">
+      <div class="card bars">
+        <h3>Query latency (lower is better, log scale)</h3>
+        <div class="row"><span>get(oid)</span><div class="bar"><span style="width:6%"></span></div><span class="v">0.7 µs</span></div>
+        <div class="row"><span>unique key (OQL)</span><div class="bar"><span style="width:28%"></span></div><span class="v">0.11 ms</span></div>
+        <div class="row"><span>eq + range + limit</span><div class="bar"><span style="width:32%"></span></div><span class="v">0.2 ms</span></div>
+        <div class="row"><span>count(city = ?)</span><div class="bar"><span style="width:35%"></span></div><span class="v">0.3 ms</span></div>
+        <div class="row"><span>top-10 of 2.3 M</span><div class="bar"><span style="width:40%"></span></div><span class="v">0.6 ms</span></div>
+        <div class="row"><span>GROUP BY count</span><div class="bar"><span style="width:52%"></span></div><span class="v">3.9 ms</span></div>
+        <div class="row"><span>OQL GROUP BY + AVG</span><div class="bar"><span style="width:80%"></span></div><span class="v">253 ms</span></div>
+        <div class="row"><span>unindexed full scan</span><div class="bar"><span style="width:95%"></span></div><span class="v">0.78 s</span></div>
+      </div>
+      <div class="card">
+        <h3>Writes, storage, recovery</h3>
+        <table>
+          <tr><th>Metric</th><th>Result</th></tr>
+          <tr><td>bulk insert, batches of 100 (ASYNC)</td><td class="n">485 k/s</td></tr>
+          <tr><td>durable inserts, 16 / 128 threads (SYNC)</td><td class="n">3.1 / 19.7 k/s</td></tr>
+          <tr><td>compact 10 M objects (1.4 GB)</td><td class="n">10.1 s</td></tr>
+          <tr><td>reopen</td><td class="n">1.6 ms</td></tr>
+          <tr><td>heap after reopen</td><td class="n">6.5 MiB</td></tr>
+          <tr><td>disk footprint</td><td class="n">148 B / obj</td></tr>
+        </table>
+        <p class="env">Apple M2 Max · 32 GB · SSD (fsync ≈ 4 ms) · JDK 17 · -Xmx8g. Durable single writes scale with concurrency: one fsync per commit group.
+          <a href="benchmark-10m.md">Full report →</a></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 8. Documentation -->
+<section id="docs">
+  <div class="wrap">
+    <div class="kicker">Documentation</div>
+    <h2>Learn more</h2>
+    <div class="grid g4" style="margin-top:24px">
+      <a class="card" href="#start"><div class="ico">🚀</div><h3>Getting Started</h3><p>Dependency, first entity, first query.</p></a>
+      <a class="card" href="https://github.com/paganini2008/kookaburra#examples"><div class="ico">🧪</div><h3>Examples</h3><p>Typed API, OQL, grouping, dynamic access.</p></a>
+      <a class="card" href="https://github.com/paganini2008/kookaburra#configuration"><div class="ico">⚙️</div><h3>Configuration</h3><p>One <code>kookaburra.properties</code> for every setting.</p></a>
+      <a class="card" href="design.html"><div class="ico">📘</div><h3>API Reference</h3><p>QueryStream, fields, OQL grammar, dynamic API.</p></a>
+      <a class="card" href="design.html"><div class="ico">🏗</div><h3>Architecture</h3><p>Segment format, execution, MVCC, recovery.</p></a>
+    </div>
+  </div>
+</section>
+
+<!-- 9. Community -->
+<section id="community">
+  <div class="wrap">
+    <div class="kicker">Community</div>
+    <h2>Get involved</h2>
+    <div class="grid g4" style="margin-top:24px">
+      <a class="card" href="https://github.com/paganini2008/kookaburra"><div class="ico">⭐</div><h3>GitHub</h3><p>Source, releases, stars.</p></a>
+      <a class="card" href="https://github.com/paganini2008/kookaburra/issues"><div class="ico">🐞</div><h3>Issues</h3><p>Bugs and feature requests.</p></a>
+      <a class="card" href="https://github.com/paganini2008/kookaburra/discussions"><div class="ico">💬</div><h3>Discussions</h3><p>Questions and ideas.</p></a>
+      <a class="card" href="https://github.com/paganini2008/kookaburra#contributing--license"><div class="ico">🤝</div><h3>Contributing</h3><p><code>mvn verify</code>: tests and ≥ 90% coverage.</p></a>
+    </div>
+  </div>
+</section>
+
+<!-- 10. Footer -->
+<footer>
+  <div class="wrap">
+    <img src="https://paganini2008.github.io/kookaburra/assets/logo_64.png" width="30" height="24" alt="">
+    <a href="https://github.com/paganini2008/kookaburra">GitHub</a>
+    <a href="design.html">Docs</a>
+    <a href="https://github.com/paganini2008/kookaburra/blob/main/LICENSE">License (Apache-2.0)</a>
+    <span class="sp">© 2026 Fred Feng</span>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: "dark", themeVariables: {
+    background: "#11151F", primaryColor: "#1A2030", primaryTextColor: "#E6EDF7", primaryBorderColor: "#00E5FF",
+    lineColor: "#7A8BA8", fontFamily: "Inter, sans-serif" } });
+  document.querySelectorAll(".copy").forEach(b => b.addEventListener("click", () => {
+    const text = b.parentElement.querySelector("pre").innerText;
+    const done = () => { b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy", 1400); };
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(done, () => b.textContent = "Select & copy");
+    } else {
+      b.textContent = "Select & copy";
+    }
+  }));
+</script>
+</body>
+</html>

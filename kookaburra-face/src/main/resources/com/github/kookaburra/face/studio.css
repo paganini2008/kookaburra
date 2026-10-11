@@ -1,0 +1,303 @@
+/*
+ * Kookaburra Studio layout styles; colors come from the active theme (design §17.2).
+ *
+ * @Author: Fred Feng
+ * @Date: 11/10/2026
+ * @Version 1.0.0
+ */
+.root {
+    /* Tokens follow the active AtlantaFX theme; neon.css replaces them with the neon palette. */
+    -k-bg-0: -color-bg-default;
+    -k-bg-1: -color-bg-subtle;
+    -k-bg-2: -color-bg-inset;
+    -k-border: -color-border-default;
+    -k-fg: -color-fg-default;
+    -k-fg-muted: -color-fg-muted;
+    -k-accent: -color-accent-fg;
+    -k-accent-2: -color-danger-fg;
+    -k-ok: -color-success-fg;
+    -k-warn: -color-warning-fg;
+    -k-err: -color-danger-fg;
+    -k-on-accent: -color-fg-emphasis;
+    -k-glow: -color-accent-muted;
+
+    -fx-font-family: "Inter", "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    -fx-font-size: 13px;
+    -fx-background-color: -k-bg-0;
+}
+
+/* ---------------------------------------------------------------- chrome */
+
+.k-toolbar {
+    -fx-background-color: linear-gradient(to bottom, -k-bg-1, -k-bg-0);
+    -fx-border-color: transparent transparent -k-border transparent;
+    -fx-padding: 6 10 6 10;
+    -fx-spacing: 6;
+}
+
+.k-brand {
+    -fx-font-weight: bold;
+    -fx-font-size: 15px;
+    -fx-text-fill: -k-fg;
+    -fx-padding: 0 18 0 4;
+}
+
+.k-tool {
+    -fx-background-color: transparent;
+    -fx-background-radius: 6;
+    -fx-border-color: transparent;
+    -fx-padding: 6 8 6 8;
+}
+
+.k-tool:hover, .button:hover {
+    -fx-effect: dropshadow(gaussian, -k-glow, 12, 0.35, 0, 0);
+}
+
+.k-icon {
+    -fx-icon-color: -k-fg-muted;
+    -fx-icon-size: 18;
+}
+
+.button:hover .k-icon, .tab:selected .k-icon {
+    -fx-icon-color: -k-accent;
+}
+
+.button.accent {
+    -fx-background-color: -k-accent;
+    -fx-text-fill: -k-on-accent;
+    -fx-font-weight: bold;
+    -fx-background-radius: 6;
+}
+
+.button.accent .k-icon {
+    -fx-icon-color: -k-on-accent;
+}
+
+.k-sidebar {
+    -fx-background-color: -k-bg-1;
+}
+
+.k-section-title {
+    -fx-text-fill: -k-fg-muted;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+    -fx-padding: 10 10 6 10;
+}
+
+.k-status {
+    -fx-background-color: -k-bg-1;
+    -fx-border-color: -k-border transparent transparent transparent;
+}
+
+.k-status .label {
+    -fx-font-family: "JetBrains Mono", "Menlo", "Consolas", monospace;
+    -fx-font-size: 12px;
+    -fx-text-fill: -k-fg-muted;
+}
+
+.k-status .k-icon {
+    -fx-icon-color: -k-ok;
+}
+
+.tab-pane > .tab-header-area > .headers-region > .tab:selected {
+    -fx-border-color: transparent transparent -k-accent transparent;
+    -fx-border-width: 0 0 2 0;
+}
+
+/* ---------------------------------------------------------------- tables */
+
+.table-view {
+    -fx-background-color: -k-bg-0;
+}
+
+.table-view .column-header, .table-view .filler {
+    -fx-background-color: -k-bg-2;
+}
+
+.table-row-cell:odd {
+    -fx-background-color: -k-bg-1;
+}
+
+.table-row-cell:even {
+    -fx-background-color: -k-bg-2;
+}
+
+.table-row-cell:selected {
+    -fx-background-color: -color-accent-subtle;
+    -fx-border-color: transparent transparent transparent -k-accent;
+    -fx-border-width: 0 0 0 2;
+}
+
+.k-rownum-col {
+    -fx-alignment: CENTER-RIGHT;
+    -fx-text-fill: -k-fg-muted;
+    -fx-font-family: "JetBrains Mono", "Menlo", "Consolas", monospace;
+}
+
+.k-system-col {
+    -fx-font-family: "JetBrains Mono", "Menlo", "Consolas", monospace;
+}
+
+.k-filter-bar, .k-pager, .k-console-bar {
+    -fx-background-color: -k-bg-1;
+}
+
+/* ---------------------------------------------------------------- code (OQL / JSON) */
+
+.k-code, .k-code-text {
+    -fx-font-family: "JetBrains Mono", "Menlo", "Consolas", monospace;
+    -fx-font-size: 13px;
+    -fx-background-color: -k-bg-1;
+}
+
+.k-code .text {
+    -fx-fill: -k-fg;
+}
+
+.k-code .kw {
+    -fx-fill: -k-accent-2;
+    -fx-font-weight: bold;
+}
+
+.k-code .str {
+    -fx-fill: -k-ok;
+}
+
+.k-code .num {
+    -fx-fill: -k-warn;
+}
+
+.k-code .ident, .k-code .key {
+    -fx-fill: -k-accent;
+}
+
+.k-code .comment {
+    -fx-fill: -k-fg-muted;
+    -fx-font-style: italic;
+}
+
+.k-code .op {
+    -fx-fill: -k-fg-muted;
+}
+
+.k-code .error {
+    -fx-fill: -k-err;
+    -fx-underline: true;
+}
+
+.k-code .caret {
+    -fx-stroke: -k-accent;
+}
+
+.k-code .lineno {
+    -fx-background-color: -k-bg-1;
+    -fx-text-fill: -k-fg-muted;
+}
+
+.k-code-text .content {
+    -fx-background-color: -k-bg-1;
+}
+
+.k-message {
+    -fx-font-family: "JetBrains Mono", "Menlo", "Consolas", monospace;
+    -fx-text-fill: -k-fg-muted;
+}
+
+.k-error {
+    -fx-text-fill: -k-err;
+}
+
+/* ---------------------------------------------------------------- editor and dialogs */
+
+.k-editor-header {
+    -fx-font-size: 15px;
+    -fx-font-weight: bold;
+    -fx-text-fill: -k-accent;
+    -fx-padding: 4 0 10 0;
+}
+
+.k-field-label {
+    -fx-text-fill: -k-fg-muted;
+    -fx-font-family: "JetBrains Mono", "Menlo", "Consolas", monospace;
+}
+
+.k-muted {
+    -fx-text-fill: -k-fg-muted;
+}
+
+.text-field:focused, .combo-box:focused, .date-picker:focused {
+    -fx-effect: dropshadow(gaussian, -k-glow, 10, 0.3, 0, 0);
+}
+
+/* ---------------------------------------------------------------- welcome */
+
+.k-welcome {
+    -fx-background-color: radial-gradient(center 25% 0%, radius 60%, -color-accent-subtle, transparent), -k-bg-0;
+}
+
+.k-hero-title {
+    -fx-font-size: 34px;
+    -fx-font-weight: bold;
+    -fx-text-fill: -k-fg;
+}
+
+.k-hero-logo {
+    -fx-effect: dropshadow(gaussian, -k-glow, 32, 0.2, 0, 0);
+}
+
+/* ---------------------------------------------------------------- about */
+
+.k-about-title {
+    -fx-font-size: 20px;
+    -fx-font-weight: bold;
+    -fx-text-fill: -k-fg;
+}
+
+/* ---------------------------------------------------------------- metadata */
+
+.k-metadata {
+    -fx-background-color: -k-bg-1;
+}
+
+.k-meta-class {
+    -fx-font-family: "JetBrains Mono", "Menlo", "Consolas", monospace;
+    -fx-text-fill: -k-accent;
+}
+
+/* ---------------------------------------------------------------- splash */
+
+.k-splash {
+    -fx-background-color: linear-gradient(to bottom, #11151F, #0B0E14);
+    -fx-background-radius: 16;
+    -fx-border-color: #00E5FF55;
+    -fx-border-radius: 16;
+    -fx-border-width: 1;
+    -fx-padding: 28;
+    -fx-effect: dropshadow(gaussian, #00E5FF66, 28, 0.25, 0, 0);
+}
+
+.k-splash-name {
+    -fx-font-size: 24px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #E6EDF7;
+}
+
+.k-splash-version {
+    -fx-font-family: "JetBrains Mono", "Menlo", "Consolas", monospace;
+    -fx-text-fill: #00E5FF;
+}
+
+.k-splash-status {
+    -fx-text-fill: #7A8BA8;
+}
+
+.k-splash-bar > .bar {
+    -fx-background-color: linear-gradient(to right, #00E5FF, #FF2BD6);
+    -fx-background-insets: 0;
+    -fx-background-radius: 3;
+}
+
+.k-splash-bar > .track {
+    -fx-background-color: #1A2030;
+    -fx-background-radius: 3;
+}

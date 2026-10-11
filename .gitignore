@@ -1,31 +1,74 @@
-# Compiled class file
+# ---------------------------------------------------------------- Java
 *.class
-
-# Log file
 *.log
-
-# BlueJ files
 *.ctxt
-
-# Mobile Tools for Java (J2ME)
 .mtj.tmp/
-
-# Package Files #
 *.jar
 *.war
 *.nar
 *.ear
-# *.zip
 *.tar.gz
 *.rar
-
-# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
-/target/
 
-#Eclipse
+# ---------------------------------------------------------------- Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+!.mvn/wrapper/maven-wrapper.jar
+
+# ---------------------------------------------------------------- IntelliJ IDEA (shared project files stay tracked)
+*.iml
+*.ipr
+*.iws
+out/
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/usage.statistics.xml
+.idea/dictionaries/
+.idea/shelf/
+.idea/httpRequests/
+.idea/dataSources/
+.idea/dataSources.local.xml
+.idea/sqldialects.xml
+.idea/libraries/
+.idea/modules.xml
+.idea/artifacts/
+.idea/caches/
+.idea/uiDesigner.xml
+
+# ---------------------------------------------------------------- Eclipse / VS Code / NetBeans
 .classpath
 .project
-.settings
+.settings/
+.factorypath
+.apt_generated/
+bin/
+.vscode/
+nbproject/private/
+nbbuild/
+nbdist/
 
+# ---------------------------------------------------------------- OS
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+
+# ---------------------------------------------------------------- Kookaburra
+# Database directories created by tests, samples and Studio runs
+*.kkdb/
+/data/
+/sample-db/
+# Studio packaging output
+kookaburra-face/dist/
+
+#Other
+change_logs
