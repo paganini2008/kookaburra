@@ -1,5 +1,6 @@
 package com.github.kookaburra.mapping;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -65,6 +66,9 @@ public final class Record {
         TypeDef t = layout.fields().get(i).type();
         String rest = path.substring(dot + 1);
         while (v != null) {
+            if (t.kind() == ValueType.EMBEDDED_LIST) {
+                return elementValues((List<?>) v, t.element(), rest);
+            }
             if (t.kind() != ValueType.EMBEDDED) {
                 return null;
             }
@@ -82,6 +86,27 @@ public final class Record {
             rest = rest.substring(dot + 1);
         }
         return null;
+    }
+
+    /**
+     * Values of {@code rest} in every element of an embedded list, flattened ("any element" semantics; nulls
+     * skipped), or null if no element has the path.
+     */
+    public static List<Object> elementValues(List<?> elements, TypeDef element, String rest) {
+        List<Object> out = new ArrayList<>();
+        for (Object e : elements) {
+            Object v = e == null ? null : new Record(0, new Layout(0, element.fields()), (Object[]) e).get(rest);
+            if (v instanceof List<?> l) {
+                l.forEach(x -> {
+                    if (x != null) {
+                        out.add(x);
+                    }
+                });
+            } else if (v != null) {
+                out.add(v);
+            }
+        }
+        return out;
     }
 
     private static int indexOf(TypeDef t, String name) {

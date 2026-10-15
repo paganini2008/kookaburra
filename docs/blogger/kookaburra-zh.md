@@ -6,9 +6,17 @@
 
 **Kookaburra**：*Query Java objects like a database — bitmaps underneath, streams on top.*
 
-Kookaburra 是面向 **Java 17+ 的嵌入式对象数据库**。普通的注解类直接存进去，就可以用类型安全的 Stream 风格 API 或类 JPQL 的 **OQL** 查询。过滤、排序、聚合跑在 **RoaringBitmap** 索引和内存映射的段文件上。另外配了一个桌面管理工具 **Kookaburra Studio**。
+Kookaburra 是面向 **Java 17+ 的嵌入式对象数据库**。普通的注解类直接存进去，就可以用类型安全的链式 API 或类 JPQL 的 **OQL** 查询。过滤、排序、聚合跑在 **RoaringBitmap** 索引和内存映射的段文件上，支持可选的**快照隔离事务**、嵌套对象和大字段（长文本、图片）。另外配了一个桌面管理工具 **Kookaburra Studio**。
 
 ![Kookaburra Studio](https://paganini2008.github.io/kookaburra/assets/studio-data.png)
+
+**教学视频（2 分 33 秒，英文字幕）**：
+
+<video controls preload="metadata" playsinline width="100%" poster="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial-poster.jpg">
+  <source src="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4" type="video/mp4">
+</video>
+
+如果视频没有显示，可以[在项目网站观看](https://paganini2008.github.io/kookaburra/#tutorial)，或[直接打开 MP4](https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4)。
 
 ## 2. 解决什么问题
 
@@ -21,7 +29,9 @@ Kookaburra 把这两者结合：**写法和 Java Stream 一样，执行像数据
 | ORM / SQL 映射层太重 | 直接存注解对象，无需建表 |
 | `stream().filter()` 全量扫描 | 位图 / 序号索引，在 1000 万对象上毫秒级 |
 | 字符串字段名，重构后静默失效 | `where(Book::getYear)` 或生成的 `Book_` 元模型 |
-| 二进制存储看不见、改不了 | Studio：浏览、增删改查、OQL、导出 |
+| 多个对象要一起改（转账、库存） | 可选的快照隔离事务，冲突时抛出 `ConflictException` |
+| 领域模型有多层嵌套 | 嵌入对象、嵌入对象列表和 Map 都能用点号路径查询 |
+| 二进制存储看不见、改不了 | Studio：多库并存、带事务的增删改、嵌套对象查看器、图片预览、OQL、导出 |
 
 ## 3. 快速开始
 
@@ -41,13 +51,13 @@ try (ObjectDB db = ObjectDB.open(Path.of("data"))) {
       .insert(new Book("Hyperion", "Dan Simmons", Genre.SCIFI, 1989, 14.20))
       .commit();
 
-    System.out.println(db.from(Book.class)
-            .filter(where(Book::getGenre).eq(Genre.SCIFI))
-            .filter(where(Book::getYear).ge(1960))
-            .sorted(where(Book::getYear).desc())
+    List<Book> books = db.query(Book.class)
+            .where(Book::getGenre).eq(Genre.SCIFI)
+            .where(Book::getYear).ge(1960)
+            .orderBy(Book::getYear).desc()
             .limit(2)
-            .map(where(Book::getTitle))
-            .toList());
+            .list();
+    System.out.println(books.stream().map(Book::getTitle).toList());
 }
 ```
 
@@ -95,7 +105,7 @@ flowchart LR
 - 执行：
 
 ```java
-db.from(Book.class).groupBy(where(Book::getGenre))
+db.query(Book.class).groupBy(where(Book::getGenre))
   .agg(Q.count().as("books"), Q.avg(where(Book::getPrice)).as("avgPrice"))
   .sortedBy(Q.count().as("books").desc())
   .toList();
@@ -129,8 +139,49 @@ updated=1
 
 **示例三：注解处理器生成的元模型**
 
-- 执行：`db.from(Book.class).filter(Book_.tags.contains("classic")).filter(Book_.price.lt(10.0)).count()`
+- 执行：`db.query(Book.class).filter(Book_.tags.contains("classic")).filter(Book_.price.lt(10.0)).count()`
 - 输出：`2`
+
+**示例四：事务（需要设置 `kookaburra.transactions=true`）**
+
+- 输入：两个账户，ann 余额 100，bob 余额 0
+- 执行：
+
+```java
+try (Transaction tx = db.begin(Isolation.SNAPSHOT)) {
+    Account a = tx.get(Account.class, from);
+    tx.update(a.balance(a.getBalance() - 30));
+    tx.increment(Account.class, to, "balance", 30);   // 原子增量，不会冲突
+    tx.commit();                                      // 期间 a 被别人改过 → ConflictException
+}                                                     // 没有提交 → 自动回滚
+```
+
+- 输出：ann = 70，bob = 30；两个事务并发修改同一对象时，后提交的那个抛出 `ConflictException`
+
+**示例五：嵌套对象**
+
+- 输入：`Shipment` 包含 `Route route`（两层嵌入）、`List<Item> items`、`Map<String, Place> stops`
+- 执行：
+
+```java
+db.oql("SELECT s.code FROM Shipment s WHERE s.route.to.city = 'Perth'").list();
+db.query(Shipment.class).whereAny(Shipment::getItems, Item::getSku).contains("pear").list();
+db.oql("SELECT s.code FROM Shipment s WHERE 'kiwi' MEMBER OF s.items.sku").list();
+```
+
+- 输出：`[S-1]`、`S-1`、`[S-2]`（经过嵌入对象列表的路径表示“任一元素满足”，与 JPQL `MEMBER OF` 一致）
+
+**示例六：长文本与图片**
+
+```java
+db.insert(new Document("scan", text, Files.readAllBytes(Path.of("scan.png"))));
+```
+
+已测试 200 万字符的 Unicode 文本和 5～16 MiB 的二进制数据，覆盖刷盘、合并、事务和重新打开；导出成 JSON / CSV 时二进制用 Base64 表示。
+
+**Studio 中的嵌套对象**：表格里嵌入对象列表显示为 `[ 2 elements ]`；右侧 Inspector 以 Key / Value / Type 树展示每一层；编辑器里用元素表格增删和调整顺序；图片字段可以预览、载入和保存。
+
+![嵌套对象](https://paganini2008.github.io/kookaburra/assets/studio-nested.png)
 
 ## 7. 配置
 
@@ -143,6 +194,9 @@ updated=1
 | `kookaburra.durability` | `SYNC` | `SYNC` 每组提交 fsync；`ASYNC` 只写入页缓存 |
 | `kookaburra.group-commit-micros` | `200` | 等待更多提交并入同一次 fsync 的时间 |
 | `kookaburra.auto-postings-ratio` | `16` | AUTO 索引在"行数 / 不同值数 ≥ 该值"时写倒排 |
+| `kookaburra.compaction-garbage-ratio` | `0.3` | 段中已删除行的比例达到该值时单独重写该段；完全删空的段直接丢弃 |
+| `kookaburra.transactions` | `false` | 开启事务；关闭时每次写入直接提交 |
+| `kookaburra.tx-timeout` / `tx-retries` | `60s` / `3` | 事务超时；`inTransaction` 冲突后的重试次数 |
 | `kookaburra.data` | jar 同级 `data/` | Studio 默认数据目录 |
 | `kookaburra.log-dir` / `log-level` | jar 同级 `logs/` / `INFO` | Studio 日志 |
 
@@ -152,31 +206,35 @@ updated=1
 
 | 操作（1000 万对象） | p50 |
 |---|---|
-| 批量写入（每批 100 条，ASYNC） | 48.5 万对象/秒 |
-| 持久化单条写入（SYNC），16 / 128 线程 | 3.1k/s / 19.7k/s（组提交） |
-| `get(oid)` | 0.7 µs |
-| 位图等值计数 | 0.3 ms |
-| 等值 + 范围 + limit 100 | 0.2 ms |
-| 230 万命中中按索引列取前 10 | 0.6 ms |
-| `GROUP BY city COUNT(*)` | 3.9 ms |
+| 批量写入（每批 100 条，ASYNC） | 63.2 万对象/秒 |
+| 持久化单条写入（SYNC），16 / 128 线程 | 3.7k/s / 27.8k/s（组提交） |
+| `get(oid)` | 0.75 µs |
+| 位图等值计数 | 0.24 ms |
+| 等值 + 范围 + limit 100 | 0.21 ms |
+| 230 万命中中按索引列取前 10 | 0.40 ms |
+| `GROUP BY city COUNT(*)` | 4.1 ms |
 | 唯一键查找（OQL） | 0.11 ms |
-| 未建索引条件的全量扫描 | 0.78 s |
-| 重新打开 / 打开后堆占用 | 1.6 ms / 6.5 MiB |
+| 未建索引条件的全量扫描 | 0.76 s |
+| 事务转账（读 2 写 2），16 线程 | 13.5 万次/秒，每次提交平均重试 0.022 次 |
+| 热点计数器原子增量，16 线程 | 25.1 万次/秒，没有丢失更新 |
+| OQL 删除全部 1060 万对象 → compact 后的磁盘占用 | 116 万对象/秒 → 0 B（空间完全回收） |
+| 重新打开 / 打开后堆占用 | 2.4 ms / 6.4 MiB |
 
 **调优前后对比**：
 
 | 项 | 调优前 | 调优后 | 做法 |
 |---|---|---|---|
-| GROUP BY 计数 | 902 ms | 3.9 ms | 直接用倒排做 `andCardinality`，不访问任何行 |
-| top-10 排序 | 187 ms | 0.6 ms | 按索引顺序遍历，凑够 N 条即停 |
+| GROUP BY 计数 | 902 ms | 4.1 ms | 直接用倒排做 `andCardinality`，不访问任何行 |
+| top-10 排序 | 187 ms | 0.40 ms | 按索引顺序遍历，凑够 N 条即停 |
 | 唯一键查找 | 13 ms | 0.11 ms | 新增按值排序的文档列表 |
-| 未建索引的扫描 | 跑不完 | 0.78 s | 按路径只解码需要的字段 |
+| 未建索引的扫描 | 跑不完 | 0.76 s | 按路径只解码需要的字段 |
+| 删光后的磁盘空间 | 1.5 GB 不回收 | 0 B | 按垃圾比例触发合并，完全删空的段直接丢弃 |
 
 ## 9. 局限与取舍
 
 - 持久化单条写入受 fsync 延迟限制：吞吐 ≈ 并发数 ÷ fsync 延迟；大批量写入请用批量或 `ASYNC`。
 - 只支持单集合查询，不做跨集合 JOIN（可用引用 + `fetch` / 半连接 `in(...)`）。
-- 不支持交互式事务：提供原子批量写、快照读和乐观锁。
+- 事务是快照隔离（与 Oracle、PostgreSQL 的 REPEATABLE READ 相同），不是可串行化：可能出现写偏斜，需要用共享写来保护不变量。
 - 不适合：多进程同时写同一目录、需要 SQL 生态（BI 工具 / JDBC）的场景、TB 级数据。
 
 ## 10. 总结
@@ -187,5 +245,8 @@ updated=1
 4. 写入走 WAL + 组提交，读取走 MVCC 快照，崩溃后可恢复。
 5. 在 1000 万对象上，常见查询都在亚毫秒到毫秒级。
 6. mmap 段文件：打开快、堆占用小。
-7. Studio 一个 jar 在三大平台都能双击运行，支持增删改查、OQL 和导出。
-8. 只有一个配置文件，默认值即最佳实践。
+7. 可选的快照隔离事务：读到自己的写入，先提交者胜，原子增量。
+8. 嵌套对象（多层嵌入、嵌入对象列表、Map）和大字段（长文本、图片）都能存取和查询。
+9. Studio 一个 jar 在三大平台都能双击运行：多库并存、带事务的增删改查、嵌套对象查看器、OQL 和导出。
+10. 共享的测试套件在内存版和磁盘版各跑一遍，覆盖率 ≥ 90%，并做了 1000 万对象的压测。
+11. 只有一个配置文件，默认值即最佳实践。

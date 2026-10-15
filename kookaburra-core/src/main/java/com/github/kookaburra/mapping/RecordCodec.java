@@ -69,6 +69,9 @@ public class RecordCodec {
             if (dot < 0) {
                 return readValue(in, t);
             }
+            if (t.kind() == ValueType.EMBEDDED_LIST) {
+                return Record.elementValues((List<?>) readValue(in, t), t.element(), rest.substring(dot + 1));
+            }
             if (t.kind() != ValueType.EMBEDDED) {
                 return null;
             }

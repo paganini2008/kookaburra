@@ -290,12 +290,12 @@ class SegmentTest {
 
     @Test
     void mappedFilesFromDisk(@TempDir Path dir) throws Exception {
-        Path p = dir.resolve("seg_1.seg");
+        Path p = dir.resolve("seg_1.odbf");
         Record r = records.get(1);
         Files.write(p, SegmentWriter.write(List.of(new SegmentWriter.Entry(5, 1, r, RecordCodec.encode(r))), columns(), 0.01));
         MappedFile mf = MappedFile.map(p);
         assertThat(mf.isMapped()).isTrue();
-        assertThat(mf.name()).isEqualTo("seg_1.seg");
+        assertThat(mf.name()).isEqualTo("seg_1.odbf");
         Segment s = new Segment(1, mf, registry::schema, new SegmentDeletes(new RoaringBitmap()));
         assertThat(s.record(0)).isEqualTo(r);
         assertThat(mf.getByte(0)).isEqualTo((byte) 'K');

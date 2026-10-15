@@ -16,6 +16,8 @@ import javafx.scene.control.Label;
 import javafx.scene.control.MenuButton;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SelectionMode;
+import javafx.scene.control.SplitPane;
+import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
@@ -29,6 +31,7 @@ import javafx.stage.FileChooser;
 
 import java.io.File;
 import java.util.List;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -52,6 +55,8 @@ public class DataView extends BorderPane {
     final Button prev = new Button();
     final Button next = new Button();
     final Label pageLabel = new Label();
+    final ObjectInspector inspector;
+    final SplitPane split;
     final ComboBox<Integer> pageSize = new ComboBox<>();
     private final Supplier<Session> session;
     private final Tasks tasks;
@@ -65,7 +70,7 @@ public class DataView extends BorderPane {
     private boolean rebuilding;
 
     public DataView(Supplier<Session> session, Tasks tasks, Consumer<String> status, Consumer<Throwable> error,
-                    Consumer<DynamicObject> onOpen) {
+                    Consumer<DynamicObject> onOpen, BiConsumer<String, Long> onOpenRef) {
         this.session = session;
         this.tasks = tasks;
         this.status = status;
@@ -120,7 +125,12 @@ public class DataView extends BorderPane {
             }
             return true;
         });
-        setCenter(table);
+        inspector = new ObjectInspector(c -> session.get().classDef(c), onOpenRef);
+        table.getSelectionModel().selectedItemProperty().addListener((o, a, b) -> inspector.show(b));
+        split = new SplitPane(table, inspector);
+        split.setDividerPositions(0.68);
+        SplitPane.setResizableWithParent(inspector, false);
+        setCenter(split);
 
         prev.setGraphic(Icons.of("mdi2c-chevron-left"));
         next.setGraphic(Icons.of("mdi2c-chevron-right"));
@@ -143,6 +153,23 @@ public class DataView extends BorderPane {
         bottom.setPadding(new Insets(6, 8, 6, 8));
         bottom.getStyleClass().add("k-pager");
         setBottom(bottom);
+        updatePager();
+    }
+
+    /** Shows nothing (no class selected, e.g. after switching databases). */
+    public void clear() {
+        className = null;
+        page = null;
+        pageIndex = 0;
+        orderBy = null;
+        descending = false;
+        filter.clear();
+        rebuilding = true;
+        table.getSortOrder().clear();
+        table.getColumns().clear();
+        rebuilding = false;
+        table.getItems().clear();
+        inspector.show(null);
         updatePager();
     }
 
@@ -238,7 +265,17 @@ public class DataView extends BorderPane {
             TableColumn<DynamicObject, String> tc = new TableColumn<>(c.path());
             tc.setUserData(c.path());
             tc.setSortable(c.sortable());
-            tc.setCellValueFactory(d -> new SimpleStringProperty(Display.text(s.cell(d.getValue(), c))));
+            tc.setCellValueFactory(d -> new SimpleStringProperty(Display.cell(s.cell(d.getValue(), c))));
+            tc.setCellFactory(col -> new TableCell<>() {
+                @Override
+                protected void updateItem(String text, boolean empty) {
+                    super.updateItem(text, empty);
+                    setText(empty ? null : text);
+                    DynamicObject o = empty || getTableRow() == null ? null : getTableRow().getItem();
+                    Object v = o == null ? null : s.cell(o, c);
+                    setTooltip(Display.nested(v) ? new Tooltip(Display.tooltip(v)) : null);
+                }
+            });
             tc.getStyleClass().add(c.system() ? "k-system-col" : "k-col");
             tc.setPrefWidth(c.system() ? 140 : 130);
             table.getColumns().add(tc);

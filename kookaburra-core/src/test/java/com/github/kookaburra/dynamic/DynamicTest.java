@@ -1,5 +1,6 @@
 package com.github.kookaburra.dynamic;
 
+import com.github.kookaburra.TestDbs;
 import com.github.kookaburra.Config;
 import com.github.kookaburra.ObjectDB;
 import com.github.kookaburra.OptimisticLockException;
@@ -40,7 +41,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class DynamicTest {
 
-    private final ObjectDB db = ObjectDB.inMemory(Config.defaults().withMemSegmentBytes(8192));
+    private final ObjectDB db = TestDbs.create(Config.defaults().withMemSegmentBytes(8192));
 
     @AfterEach
     void close() {

@@ -76,6 +76,14 @@ public class Q {
     // ---------------------------------------------------------------- predicates
 
     /** Polymorphic filter: rows whose concrete class is {@code type} or a subclass of it. */
+    /**
+     * A property of the elements of a list of embedded objects, as a multi-valued field ("any element"):
+     * {@code whereAny(Shipment::getItems, Item::getSku).contains("x")}.
+     */
+    public static <T, E, V> ListField<T, V> whereAny(CollectionGetter<T, E> list, Getter<E, V> element) {
+        return Fields.elementsOf(list, element);
+    }
+
     public static <T> Pred<T> instanceOf(Class<? extends T> type) {
         return new Pred.InstanceOf<>(type);
     }

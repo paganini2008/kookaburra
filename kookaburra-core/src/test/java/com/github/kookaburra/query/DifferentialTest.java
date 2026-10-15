@@ -1,5 +1,6 @@
 package com.github.kookaburra.query;
 
+import com.github.kookaburra.TestDbs;
 import com.github.kookaburra.Config;
 import com.github.kookaburra.ObjectDB;
 import com.github.kookaburra.engine.Database;
@@ -54,7 +55,7 @@ public class DifferentialTest {
     private static final String[] TAGS = {"vip", "new", "old", "x"};
     private static final double[] WEIGHTS = {-0.0, 0.0, Double.NaN, 1.5, -2.0, 70.25, Double.POSITIVE_INFINITY};
 
-    private ObjectDB db = ObjectDB.inMemory();
+    private ObjectDB db = TestDbs.create();
     private final Map<Long, Person> model = new LinkedHashMap<>();
 
     @AfterEach
@@ -68,7 +69,7 @@ public class DifferentialTest {
     void randomQueriesAgreeWithJavaStreams(long memBytes) {
         db.close();
         Config cfg = Config.defaults().withMemSegmentBytes(memBytes);
-        db = ObjectDB.inMemory(memBytes < 65536 ? cfg.withCompactionFanIn(2).withMaxSegments(16) : cfg);
+        db = TestDbs.create(memBytes < 65536 ? cfg.withCompactionFanIn(2).withMaxSegments(16) : cfg);
         for (long seed = 1; seed <= 4; seed++) {
             Random r = new Random(seed);
             for (int i = 0; i < 300; i++) {

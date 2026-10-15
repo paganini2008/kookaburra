@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
  * Database directory layout (design §4):
  * <pre>
  * LOCK · CURRENT · commit_N · schema/schema_V · wal/wal_&lt;firstSeq&gt;.log
- * col/&lt;collection&gt;/seg_&lt;id&gt;.seg · col/&lt;collection&gt;/seg_&lt;id&gt;_&lt;gen&gt;.del
+ * col/&lt;collection&gt;/seg_&lt;id&gt;.odbf · col/&lt;collection&gt;/seg_&lt;id&gt;_&lt;gen&gt;.del
  * </pre>
  * Every file is written to a temp name, fsync'ed, atomically renamed, and its directory fsync'ed.
  *
@@ -45,7 +45,11 @@ class DiskStorage implements Storage {
     private static final Pattern SCHEMA = Pattern.compile("schema_(\\d+)");
     private static final Pattern COMMIT = Pattern.compile("commit_(\\d+)");
     private static final Pattern WAL = Pattern.compile("wal_(\\d+)\\.log");
-    private static final Pattern SEG = Pattern.compile("seg_(\\d+)\\.seg");
+    /** Extension of segment data files ("object database file"). */
+    static final String SEGMENT_EXT = ".odbf";
+    /** Extension used before 1.0; such files are renamed when the database is opened. */
+    static final String LEGACY_SEGMENT_EXT = ".seg";
+    private static final Pattern SEG = Pattern.compile("seg_(\\d+)\\.odbf");
     private static final Pattern DEL = Pattern.compile("seg_(\\d+)_(\\d+)\\.del");
 
     private final Path dir;
@@ -139,14 +143,23 @@ class DiskStorage implements Storage {
 
     @Override
     public MappedFile writeSegment(String collection, int id, byte[] bytes) {
-        Path p = collectionDir(collection).resolve("seg_" + id + ".seg");
+        Path p = collectionDir(collection).resolve("seg_" + id + SEGMENT_EXT);
         writeAtomically(p, bytes);
         return MappedFile.map(p);
     }
 
     @Override
     public MappedFile openSegment(String collection, int id) {
-        return MappedFile.map(collectionDir(collection).resolve("seg_" + id + ".seg"));
+        Path p = collectionDir(collection).resolve("seg_" + id + SEGMENT_EXT);
+        Path legacy = collectionDir(collection).resolve("seg_" + id + LEGACY_SEGMENT_EXT);
+        if (!Files.exists(p) && Files.exists(legacy)) {
+            try {
+                Files.move(legacy, p, StandardCopyOption.ATOMIC_MOVE);
+            } catch (IOException e) {
+                throw new UncheckedIOException("cannot rename " + legacy + " to " + p.getFileName(), e);
+            }
+        }
+        return MappedFile.map(p);
     }
 
     @Override

@@ -1,5 +1,6 @@
 package com.github.kookaburra.engine;
 
+import com.github.kookaburra.TestDbs;
 import com.github.kookaburra.Config;
 import com.github.kookaburra.Durability;
 import com.github.kookaburra.KookaburraException;
@@ -41,7 +42,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class DatabaseTest {
 
-    private final ObjectDB db = ObjectDB.inMemory();
+    private final ObjectDB db = TestDbs.create();
 
     @AfterEach
     void close() {
@@ -85,7 +86,7 @@ class DatabaseTest {
         assertThatThrownBy(() -> db.delete(new Person())).hasMessageContaining("no OID");
         assertThat(db.get(Person.class, 999_999)).isNull();
         assertThat(db.delete(Person.class, Oids.make(1, 12345))).isFalse();
-        assertThat(db.path()).isNull();
+        assertThat(db.path() == null).isEqualTo(!TestDbs.onDisk());
     }
 
     @Test
@@ -202,7 +203,7 @@ class DatabaseTest {
 
     @Test
     void snapshotsSurviveFlushesAndSegmentDeletes() {
-        try (ObjectDB small = ObjectDB.inMemory(Config.defaults().withMemSegmentBytes(2048))) {
+        try (ObjectDB small = TestDbs.create(Config.defaults().withMemSegmentBytes(2048))) {
             List<Person> people = new ArrayList<>();
             for (int i = 0; i < 200; i++) {
                 Person p = new Person("p" + i, "C" + (i % 5), i);
@@ -240,7 +241,7 @@ class DatabaseTest {
     @Test
     void writesDuringCompactionAreKept() throws Exception {
         Config cfg = Config.defaults().withMemSegmentBytes(4096).withCompactionFanIn(2).withMaxSegments(16);
-        try (ObjectDB small = ObjectDB.inMemory(cfg)) {
+        try (ObjectDB small = TestDbs.create(cfg)) {
             Map<Long, Integer> model = new HashMap<>();
             Random r = new Random(11);
             for (int i = 0; i < 3000; i++) {
@@ -321,7 +322,7 @@ class DatabaseTest {
 
     @Test
     void closedDatabaseRejectsCalls() {
-        ObjectDB other = ObjectDB.inMemory(Config.defaults().withDurability(Durability.ASYNC));
+        ObjectDB other = TestDbs.create(Config.defaults().withDurability(Durability.ASYNC));
         other.close();
         other.close();
         assertThatThrownBy(() -> other.insert(new Person())).isInstanceOf(KookaburraException.class);

@@ -1,5 +1,6 @@
 package com.github.kookaburra.oql;
 
+import com.github.kookaburra.TestDbs;
 import com.github.kookaburra.Config;
 import com.github.kookaburra.ObjectDB;
 import com.github.kookaburra.Ref;
@@ -33,7 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class OqlDifferentialTest {
 
-    private final ObjectDB db = ObjectDB.inMemory(Config.defaults().withMemSegmentBytes(16384));
+    private final ObjectDB db = TestDbs.create(Config.defaults().withMemSegmentBytes(16384));
 
     @AfterEach
     void close() {

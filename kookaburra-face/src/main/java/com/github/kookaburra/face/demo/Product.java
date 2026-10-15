@@ -16,4 +16,6 @@ public class Product {
     @Id long oid;
     @Index String title;
     @Index double price;
+    /** PNG thumbnail (binary content). */
+    byte[] photo;
 }

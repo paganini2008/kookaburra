@@ -7,6 +7,7 @@ import com.github.kookaburra.annotation.Index;
 import com.github.kookaburra.annotation.Version;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Purchase of the demo data set: references a customer and a product.
@@ -23,4 +24,6 @@ public class Purchase {
     @Index Ref<Product> product;
     int quantity;
     @Index Instant placedAt;
+    /** Order lines: a list of embedded objects, each with a nested price. */
+    List<Line> lines;
 }

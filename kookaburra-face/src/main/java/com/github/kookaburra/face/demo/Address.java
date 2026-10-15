@@ -14,6 +14,7 @@ import com.github.kookaburra.annotation.Index;
 public class Address {
     @Index String city;
     String street;
+    Geo geo;
 
     public Address() {
     }
@@ -21,5 +22,10 @@ public class Address {
     public Address(String city, String street) {
         this.city = city;
         this.street = street;
+    }
+
+    public Address(String city, String street, Geo geo) {
+        this(city, street);
+        this.geo = geo;
     }
 }

@@ -1,5 +1,6 @@
 package com.github.kookaburra.face.view;
 
+import com.github.kookaburra.ConflictException;
 import com.github.kookaburra.OptimisticLockException;
 import com.github.kookaburra.dynamic.DynamicObject;
 import com.github.kookaburra.face.StudioPaths;
@@ -19,6 +20,7 @@ import javafx.scene.control.MenuButton;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.RadioMenuItem;
+import javafx.scene.control.Separator;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
@@ -42,7 +44,11 @@ import javafx.stage.Window;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -58,7 +64,7 @@ import java.util.function.Supplier;
 public class MainView extends BorderPane {
 
     final Tasks tasks;
-    final TreeView<ClassInfo> tree = new TreeView<>();
+    final TreeView<NavNode> tree = new TreeView<>();
     final DataView data;
     final QueryView query;
     final SchemaView schema = new SchemaView();
@@ -74,12 +80,24 @@ public class MainView extends BorderPane {
     final Button delete = button("delete", "mdi2d-delete-outline", "Delete selected objects");
     final Button run = button("run-toolbar", "mdi2p-play", "Run query (Ctrl+Enter)");
     final Button about = button("about", "mdi2i-information-outline", "About Kookaburra Studio");
+    final Button closeDb = button("close-db", "mdi2d-database-remove-outline", "Close the current database");
+    final Button txBegin = button("tx-begin", "mdi2s-source-branch", "Begin transaction: changes stay private until Commit");
+    final Button txCommit = button("tx-commit", "mdi2c-check-circle-outline", "Commit the transaction");
+    final Button txRollback = button("tx-rollback", "mdi2u-undo-variant", "Roll back the transaction (discard its changes)");
+    final Label txStatus = new Label();
+    /** Status text of the open transaction as of the last refresh, or null (autocommit). */
+    private String txLabel;
     /** Opens a URL in the system browser (set by the application; no-op in tests). */
     Consumer<String> browser = url -> { };
     final MenuButton themes = new MenuButton();
     private Theme theme = Theme.NEON;
     final VBox welcome;
     private final SplitPane workspace;
+    /** Every open database, in opening order; {@code session} is the one the tabs and tools act on. */
+    private final List<Session> sessions = new ArrayList<>();
+    /** Navigator labels and transaction states per database (as of the last refresh). */
+    private final Map<Session, String> labels = new HashMap<>();
+    private final Map<Session, String> txLabels = new HashMap<>();
     private Session session;
     /** Opens an editor and returns the edited object or empty (replaceable in tests). */
     Function<ObjectEditor, Optional<DynamicObject>> editorDialog = this::showEditor;
@@ -100,17 +118,18 @@ public class MainView extends BorderPane {
     public MainView() {
         getStyleClass().add("k-main");
         tasks = new Tasks(b -> busy.setVisible(b));
-        data = new DataView(() -> session, tasks, this::status, this::error, this::editObject);
+        data = new DataView(() -> session, tasks, this::status, this::error, this::editObject, this::openRef);
         query = new QueryView(() -> session, tasks, this::status, this::refresh);
 
         open.setOnAction(e -> {
             File dir = directoryChooser.get();
-            if (dir != null && (!Session.isForeignDirectory(dir.toPath()) || Dialogs.confirm(window(), "Create database",
-                    dir + " is not empty and is not a Kookaburra database.\nCreate a new database in this directory?"))) {
+            if (dir != null && !switchToOpen(dir.toPath()) && (!Session.isForeignDirectory(dir.toPath()) || Dialogs.confirm(window(),
+                    "Create database", dir + " is not empty and is not a Kookaburra database.\nCreate a new database in this directory?"))) {
                 tasks.run(() -> Session.open(dir.toPath()), this::open, this::error);
             }
         });
         demo.setOnAction(e -> tasks.run(Session::demo, this::open, this::error));
+        closeDb.setOnAction(e -> closeCurrent());
         refresh.setOnAction(e -> refresh());
         add.setOnAction(e -> newObject());
         edit.setOnAction(e -> {
@@ -152,7 +171,16 @@ public class MainView extends BorderPane {
             themes.getItems().add(item);
         }
         about.setOnAction(e -> About.show(window(), browser));
-        ToolBar toolbar = new ToolBar(logo, brand, new Region(), open, demo, refresh, add, edit, delete, run, gap, busy, themes, about);
+        txBegin.setText("Begin");
+        txCommit.setText("Commit");
+        txRollback.setText("Rollback");
+        txCommit.getStyleClass().add("success");
+        txRollback.getStyleClass().add("danger");
+        txBegin.setOnAction(e -> beginTransaction());
+        txCommit.setOnAction(e -> commitTransaction());
+        txRollback.setOnAction(e -> rollbackTransaction());
+        ToolBar toolbar = new ToolBar(logo, brand, new Region(), open, demo, closeDb, refresh, add, edit, delete, run, new Separator(),
+                txBegin, txCommit, txRollback, gap, busy, themes, about);
         toolbar.getStyleClass().add("k-toolbar");
         setTop(toolbar);
 
@@ -160,32 +188,59 @@ public class MainView extends BorderPane {
         tree.setShowRoot(false);
         tree.setCellFactory(t -> new TreeCell<>() {
             @Override
-            protected void updateItem(ClassInfo item, boolean empty) {
+            protected void updateItem(NavNode item, boolean empty) {
                 super.updateItem(item, empty);
+                getStyleClass().removeAll("k-nav-db", "k-nav-db-current", "k-nav-tx");
                 if (empty || item == null) {
                     setText(null);
                     setGraphic(null);
+                    setTooltip(null);
+                } else if (item.isDatabase()) {
+                    setText(item.text());
+                    setGraphic(Icons.of(item.session().dir() == null ? "mdi2d-database-eye-outline" : "mdi2d-database"));
+                    setTooltip(new Tooltip(item.session().title() + (item.txLabel() == null ? "" : "\n" + item.txLabel())));
+                    getStyleClass().add(item.session() == session ? "k-nav-db-current" : "k-nav-db");
+                    if (item.txLabel() != null) {
+                        getStyleClass().add("k-nav-tx");
+                    }
                 } else {
-                    setText(item.simpleName() + "  " + item.count());
-                    setGraphic(Icons.of(item.children().isEmpty() ? "mdi2t-table" : "mdi2f-file-tree"));
+                    setText(item.text());
+                    setGraphic(Icons.of(item.cls().children().isEmpty() ? "mdi2t-table" : "mdi2f-file-tree"));
+                    setTooltip(null);
                 }
             }
         });
         tree.getSelectionModel().selectedItemProperty().addListener((o, a, b) -> {
-            if (b != null && b.getValue() != null) {
-                if (b.getValue().name().equals(data.className())) {
-                    data.refresh();       // same class re-selected after a refresh: keep filter, sort and page
-                    return;
+            if (b == null || b.getValue() == null) {
+                return;
+            }
+            NavNode n = b.getValue();
+            boolean switched = n.session() != session;
+            if (switched) {
+                use(n.session());
+            }
+            if (n.isDatabase()) {
+                if (switched) {
+                    data.clear();
+                    refresh();
                 }
-                tabs.getSelectionModel().select(0);
-                data.show(b.getValue().name());
-                Session s = session;
-                String name = b.getValue().name();
-                tasks.run(() -> s.meta(name), schema.metadata::show, this::error);
+                return;
+            }
+            String name = n.cls().name();
+            if (!switched && name.equals(data.className())) {
+                data.refresh();           // same class re-selected after a refresh: keep filter, sort and page
+                return;
+            }
+            tabs.getSelectionModel().select(0);
+            data.show(name);
+            Session s = session;
+            tasks.run(() -> s.meta(name), schema.metadata::show, this::error);
+            if (switched) {
+                refresh();
             }
         });
         BorderPane treePane = new BorderPane(tree);
-        Label collections = new Label("COLLECTIONS");
+        Label collections = new Label("DATABASES");
         collections.getStyleClass().add("k-section-title");
         treePane.setTop(collections);
         treePane.getStyleClass().add("k-sidebar");
@@ -204,7 +259,12 @@ public class MainView extends BorderPane {
         seq.setId("seq");
         Region gap2 = new Region();
         HBox.setHgrow(gap2, Priority.ALWAYS);
-        HBox bar = new HBox(10, Icons.of("mdi2c-circle-medium"), status, gap2, seq);
+        txStatus.setId("tx-status");
+        txStatus.getStyleClass().add("k-tx-status");
+        txStatus.setGraphic(Icons.of("mdi2s-source-branch"));
+        txStatus.setVisible(false);
+        txStatus.managedProperty().bind(txStatus.visibleProperty());
+        HBox bar = new HBox(10, Icons.of("mdi2c-circle-medium"), status, gap2, txStatus, seq);
         bar.setAlignment(Pos.CENTER_LEFT);
         bar.setPadding(new Insets(4, 10, 4, 10));
         bar.getStyleClass().add("k-status");
@@ -292,38 +352,130 @@ public class MainView extends BorderPane {
         return session;
     }
 
-    /** Switches to a session (closing the previous one). */
+    /** Opens one more database next to the open ones and makes it current. */
     public void open(Session s) {
-        if (session != null) {
-            session.close();
-        }
-        session = s;
+        sessions.add(s);
+        labels.put(s, uniqueLabel(s));
+        use(s);
+        data.clear();
         setCenter(workspace);
-        if (getScene() != null && getScene().getWindow() instanceof Stage st) {
-            st.setTitle("Kookaburra Studio — " + s.title());
-        }
-        updateButtons();
         refresh();
     }
 
-    public void refresh() {
+    /** All open databases, in opening order. */
+    public List<Session> sessions() {
+        return List.copyOf(sessions);
+    }
+
+    /** Makes an open database the one the tabs and tools act on. */
+    void use(Session s) {
+        session = s;
+        if (getScene() != null && getScene().getWindow() instanceof Stage st) {
+            st.setTitle("Kookaburra Studio — " + labels.getOrDefault(s, s.title())
+                    + (sessions.size() > 1 ? "  (" + sessions.size() + " databases)" : ""));
+        }
+        showTransaction(txLabels.get(s));
+    }
+
+    /** If {@code dir} is already open, makes it current and returns true. */
+    boolean switchToOpen(Path dir) {
+        Path wanted = dir.toAbsolutePath().normalize();
+        for (Session s : sessions) {
+            if (wanted.equals(s.dir())) {
+                use(s);
+                status(labels.get(s) + " is already open");
+                refresh();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String uniqueLabel(Session s) {
+        String base = s.dir() == null ? "demo" : s.dir().getFileName() == null ? s.dir().toString() : s.dir().getFileName().toString();
+        String label = base;
+        for (int i = 2; labels.containsValue(label); i++) {
+            label = base + " (" + i + ")";
+        }
+        return label;
+    }
+
+    /** Closes the current database (asks first if its transaction has uncommitted changes). */
+    void closeCurrent() {
         Session s = session;
-        if (s == null) {
+        if (s == null || !confirmDiscard(s)) {
             return;
         }
+        sessions.remove(s);
+        labels.remove(s);
+        txLabels.remove(s);
+        tasks.run(() -> {
+            s.close();
+            return true;
+        }, ok -> { }, this::error);
+        data.clear();
+        if (sessions.isEmpty()) {
+            session = null;
+            tree.setRoot(null);
+            setCenter(welcome);
+            status("No database open");
+            showTransaction(null);
+            if (getScene() != null && getScene().getWindow() instanceof Stage st) {
+                st.setTitle("Kookaburra Studio");
+            }
+        } else {
+            use(sessions.get(sessions.size() - 1));
+            refresh();
+        }
+    }
+
+    /** Reloads the navigator (every open database) and the schema of the current one. */
+    public void refresh() {
+        Session current = session;
+        if (current == null) {
+            return;
+        }
+        List<Session> all = List.copyOf(sessions);
         String selected = data.className();
-        tasks.run(() -> new Object[]{s.classes(), s.schemaText(), s.seq(), s.segments()}, r -> {
+        tasks.run(() -> {
+            Map<Session, Object[]> trees = new LinkedHashMap<>();
+            for (Session s : all) {
+                trees.put(s, new Object[]{s.classes(), s.txLabel()});
+            }
+            return new Object[]{trees, current.schemaText(), current.seq(), current.segments()};
+        }, r -> {
             @SuppressWarnings("unchecked")
-            List<ClassInfo> classes = (List<ClassInfo>) r[0];
-            TreeItem<ClassInfo> root = new TreeItem<>();
-            TreeItem<ClassInfo> toSelect = null;
-            for (ClassInfo c : classes) {
-                TreeItem<ClassInfo> item = item(c);
-                root.getChildren().add(item);
-                TreeItem<ClassInfo> found = find(item, selected);
-                toSelect = toSelect != null ? toSelect : found;
+            Map<Session, Object[]> trees = (Map<Session, Object[]>) r[0];
+            TreeItem<NavNode> root = new TreeItem<>();
+            TreeItem<NavNode> toSelect = null;
+            for (Map.Entry<Session, Object[]> e : trees.entrySet()) {
+                Session s = e.getKey();
+                if (!sessions.contains(s)) {
+                    continue;                                  // closed meanwhile
+                }
+                String tx = (String) e.getValue()[1];
+                txLabels.put(s, tx);
+                TreeItem<NavNode> db = new TreeItem<>(new NavNode(s, labels.get(s), null, tx));
+                db.setExpanded(true);
+                @SuppressWarnings("unchecked")
+                List<ClassInfo> classes = (List<ClassInfo>) e.getValue()[0];
+                for (ClassInfo c : classes) {
+                    TreeItem<NavNode> item = item(s, c);
+                    db.getChildren().add(item);
+                    if (s == current && toSelect == null) {
+                        toSelect = find(item, selected);
+                    }
+                }
+                root.getChildren().add(db);
+                if (s == current && toSelect == null && selected == null) {
+                    toSelect = db;
+                }
             }
             tree.setRoot(root);
+            if (current != session) {
+                return;                                        // another database became current meanwhile: its refresh selects
+            }
+            showTransaction(txLabels.get(current));
             @SuppressWarnings("unchecked") List<SegmentInfo> segs = (List<SegmentInfo>) r[3];
             schema.show(segs, (String) r[1]);
             seq.setText("snapshot seq " + r[2]);
@@ -333,22 +485,22 @@ public class MainView extends BorderPane {
         }, this::error);
     }
 
-    private static TreeItem<ClassInfo> item(ClassInfo c) {
-        TreeItem<ClassInfo> i = new TreeItem<>(c);
-        c.children().forEach(x -> i.getChildren().add(item(x)));
+    private static TreeItem<NavNode> item(Session s, ClassInfo c) {
+        TreeItem<NavNode> i = new TreeItem<>(new NavNode(s, null, c, null));
+        c.children().forEach(x -> i.getChildren().add(item(s, x)));
         i.setExpanded(true);
         return i;
     }
 
-    private static TreeItem<ClassInfo> find(TreeItem<ClassInfo> item, String name) {
+    private static TreeItem<NavNode> find(TreeItem<NavNode> item, String name) {
         if (name == null) {
             return null;
         }
-        if (item.getValue().name().equals(name)) {
+        if (item.getValue().cls().name().equals(name)) {
             return item;
         }
-        for (TreeItem<ClassInfo> c : item.getChildren()) {
-            TreeItem<ClassInfo> f = find(c, name);
+        for (TreeItem<NavNode> c : item.getChildren()) {
+            TreeItem<NavNode> f = find(c, name);
             if (f != null) {
                 return f;
             }
@@ -367,6 +519,21 @@ public class MainView extends BorderPane {
         if (session != null) {
             edit(o);
         }
+    }
+
+    /** Opens the target of a reference (double-click in the inspector). */
+    void openRef(String className, long oid) {
+        Session s = session;
+        if (s == null) {
+            return;
+        }
+        tasks.run(() -> s.get(className, oid), o -> {
+            if (o == null) {
+                status("dangling reference: " + className.substring(className.lastIndexOf('.') + 1) + " #" + oid + " does not exist");
+            } else {
+                edit(o);
+            }
+        }, this::error);
     }
 
     private void edit(DynamicObject o) {
@@ -450,6 +617,95 @@ public class MainView extends BorderPane {
         edit.setDisable(none);
         delete.setDisable(none);
         run.setDisable(none);
+        closeDb.setDisable(none);
+        txBegin.setDisable(none || txLabel != null);
+        txCommit.setDisable(txLabel == null);
+        txRollback.setDisable(txLabel == null);
+    }
+
+    // ---------------------------------------------------------------- transactions
+
+    /** Shows the transaction state computed on the database thread (null = autocommit). */
+    void showTransaction(String label) {
+        txLabel = label;
+        if (session != null) {
+            txLabels.put(session, label);
+        }
+        txStatus.setText(label == null ? "" : label);
+        txStatus.setVisible(label != null);
+        updateButtons();
+    }
+
+    void beginTransaction() {
+        Session s = session;
+        if (s == null) {
+            return;
+        }
+        tasks.run(() -> {
+            s.begin();
+            return s.txLabel();
+        }, label -> {
+            showTransaction(label);
+            status("transaction started: changes stay private until Commit");
+            refresh();
+        }, this::error);
+    }
+
+    void commitTransaction() {
+        Session s = session;
+        if (s == null || txLabel == null) {
+            return;
+        }
+        tasks.run(() -> {
+            s.commit();
+            return true;
+        }, ok -> {
+            status("transaction committed");
+            refresh();
+        }, t -> {
+            showTransaction(null);
+            if (t instanceof ConflictException) {
+                status("commit failed: conflict");
+                Dialogs.error(window(), "Commit failed", t.getMessage()
+                        + "\n\nThe transaction was rolled back; reload and apply your changes again.");
+            } else {
+                error(t);
+            }
+            refresh();
+        });
+    }
+
+    void rollbackTransaction() {
+        Session s = session;
+        if (s == null || txLabel == null || !Dialogs.confirm(window(), "Rollback", "Discard the changes of " + txLabel + "?")) {
+            return;
+        }
+        tasks.run(() -> {
+            s.rollback();
+            return true;
+        }, ok -> {
+            status("transaction rolled back");
+            refresh();
+        }, this::error);
+    }
+
+    /** True when the database has nothing uncommitted to lose, or the user agrees to discard it. */
+    boolean confirmDiscard(Session s) {
+        String tx = txLabels.get(s);
+        return tx == null || Dialogs.confirm(window(), "Uncommitted changes",
+                labels.get(s) + ": " + tx + " is still open. Discard its changes?");
+    }
+
+    /** Before the window closes: true when no open database has an open transaction, or the user agrees. */
+    public boolean confirmDiscardAll() {
+        List<String> open = new ArrayList<>();
+        for (Session s : sessions) {
+            if (txLabels.get(s) != null) {
+                open.add(labels.get(s) + ": " + txLabels.get(s));
+            }
+        }
+        return open.isEmpty() || Dialogs.confirm(window(), "Uncommitted changes",
+                "Open transactions:\n" + String.join("\n", open) + "\n\nDiscard their changes and quit?");
     }
 
     void status(String text) {
@@ -457,6 +713,9 @@ public class MainView extends BorderPane {
     }
 
     void error(Throwable t) {
+        if (session != null && txLabel != null) {
+            refresh();                                         // a timeout may have ended the transaction
+        }
         status("error: " + t.getMessage());
         Dialogs.error(window(), "Error", String.valueOf(t.getMessage()));
     }
@@ -466,9 +725,11 @@ public class MainView extends BorderPane {
     }
 
     public void close() {
-        if (session != null) {
-            session.close();
+        for (Session s : sessions) {
+            s.close();
         }
+        sessions.clear();
+        session = null;
         tasks.close();
     }
 }

@@ -17,6 +17,11 @@ import java.util.Map;
  * try (ObjectDB db = ObjectDB.open(Path.of("db"))) {
  *     long oid = db.insert(new Person("Ann", "Sydney", 30));
  *     List<Person> ps = db.from(Person.class).filter(where(Person::getAge).gt(20)).toList();
+ *     db.inTransaction(tx -> {
+ *         Person p = tx.get(Person.class, oid);
+ *         p.setAge(31);
+ *         tx.update(p);
+ *     });
  * }
  * }</pre>
  *
@@ -58,6 +63,35 @@ public interface ObjectDB extends AutoCloseable {
 
     WriteBatch batch();
 
+    /** Atomically adds {@code delta} to a numeric field of an object, on its latest value (never conflicts). */
+    void increment(Class<?> type, long oid, String field, Number delta);
+
+    // ---------------------------------------------------------------- transactions (docs/transaction-design.md)
+
+    /** Starts a SNAPSHOT transaction; close it (try-with-resources) — an uncommitted one is rolled back. */
+    Transaction begin();
+
+    /** {@code begin(TxOptions.defaults().isolation(isolation))}. */
+    Transaction begin(Isolation isolation);
+
+    Transaction begin(TxOptions options);
+
+    /** Runs {@code work} in a transaction and commits; retries on {@link ConflictException} ({@code kookaburra.tx-retries}). */
+    void inTransaction(TxWork work);
+
+    void inTransaction(TxWork work, int retries);
+
+    /**
+     * Like {@link #inTransaction(TxWork)}, returning the body's result (a separate name, so that
+     * {@code tx -> tx.insert(x)} is not ambiguous between the two forms).
+     */
+    <R> R inTransactionResult(TxFunction<R> work);
+
+    <R> R inTransactionResult(TxFunction<R> work, int retries);
+
+    /** Number of open transactions. */
+    int activeTransactions();
+
     /** The object with this OID, whatever its class; null if it does not exist. */
     Object get(long oid);
 
@@ -68,6 +102,11 @@ public interface ObjectDB extends AutoCloseable {
 
     /** Query over {@code type} and its subclasses. */
     <T> QueryStream<T> from(Class<T> type);
+
+    /** Same as {@link #from(Class)}, for the fluent style {@code query(Order.class).where(Order::getOwner).eq(oid).list()}. */
+    default <T> QueryStream<T> query(Class<T> type) {
+        return from(type);
+    }
 
     Snapshot snapshot();
 

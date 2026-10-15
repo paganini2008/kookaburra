@@ -23,6 +23,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -94,10 +95,10 @@ class ModelTest {
         assertThat(book.idField()).isEqualTo("oid");
         assertThat(book.versionField()).isNull();
         assertThat(book.layouts()).isEqualTo(1);
-        assertThat(book.fields()).extracting(ClassMeta.FieldMeta::path).containsExactly("title", "price", "author", "pages");
+        assertThat(book.fields()).extracting(ClassMeta.FieldMeta::path).containsExactly("title", "price", "photo", "author", "pages");
         assertThat(book.fields().get(0).declaredIn()).isEqualTo("Product");
-        assertThat(book.fields().get(2).index()).isEqualTo("AUTO");
-        assertThat(book.fields().get(3).index()).isEmpty();
+        assertThat(book.fields().get(3).index()).isEqualTo("AUTO");
+        assertThat(book.fields().get(4).index()).isEmpty();
         ClassMeta customer = demo.meta(CUSTOMER);
         assertThat(customer.fields()).extracting(ClassMeta.FieldMeta::type).contains("ENUM(BRONZE, SILVER, GOLD)", "LIST(STRING)");
         assertThat(customer.fields()).filteredOn(f -> f.path().equals("address.city")).singleElement()
@@ -187,6 +188,19 @@ class ModelTest {
         assertThat(rows.get(0)).startsWith("oid,version,").contains("customer");
         assertThat(rows.get(1)).doesNotContain("→");                    // refs as plain OIDs
 
+        // binary fields: Base64 in CSV and JSON (as Jackson writes byte[] and MongoDB Extended JSON's $binary.base64)
+        Path products = dir.resolve("products.csv");
+        assertThat(Export.write(demo, PRODUCT, "", "title", false, Export.Format.CSV, products)).isEqualTo(30);
+        List<String> productRows = Files.readAllLines(products);
+        List<String> header = List.of(productRows.get(0).split(","));
+        DynamicObject firstProduct = demo.page(PRODUCT, "", "title", false, 0, 1).rows().get(0);
+        String photoCell = productRows.get(1).split(",")[header.indexOf("photo")];
+        assertThat(Base64.getDecoder().decode(photoCell)).isEqualTo((byte[]) firstProduct.get("photo"));
+        Path productJson = dir.resolve("products.jsonl");
+        Export.write(demo, PRODUCT, "", "title", false, Export.Format.JSONL, productJson);
+        Map<?, ?> firstJson = (Map<?, ?>) Json.parse(Files.readAllLines(productJson).get(0));
+        assertThat(Base64.getDecoder().decode((String) firstJson.get("photo"))).isEqualTo((byte[]) firstProduct.get("photo"));
+
         assertThat(Export.csv(null)).isEmpty();
         assertThat(Export.csv("plain")).isEqualTo("plain");
         assertThat(Export.csv("a,b")).isEqualTo("\"a,b\"");
@@ -198,6 +212,26 @@ class ModelTest {
         assertThat(ObjectJson.text(Map.of("k", 1))).isEqualTo("{\"k\":1}");
         assertThat(Json.compact(Map.of("k", List.of(1, Map.of())))).isEqualTo("{\"k\":[1,{}]}");
         assertThat(Export.Format.CSV.extension()).isEqualTo("csv");
+
+        // query console results: whole objects, scalars, statements with their own LIMIT
+        Path objects = dir.resolve("q/objects.jsonl");
+        assertThat(Export.writeQuery(demo, "SELECT c FROM Customer c", Export.Format.JSONL, objects)).isEqualTo(250);
+        assertThat(Files.readAllLines(objects)).hasSize(250).allMatch(l -> l.contains("\"name\":"));
+        Path scalars = dir.resolve("q/tiers.csv");
+        assertThat(Export.writeQuery(demo, "SELECT c.tier, COUNT(*) FROM Customer c GROUP BY c.tier ORDER BY 1",
+                Export.Format.CSV, scalars)).isEqualTo(3);
+        assertThat(Files.readAllLines(scalars).get(0)).isEqualTo("c.tier,COUNT(*)");
+        Path limited = dir.resolve("q/limited.json");
+        assertThat(Export.writeQuery(demo, "SELECT c.name FROM Customer c ORDER BY c.name LIMIT 7", Export.Format.JSON, limited)).isEqualTo(7);
+        assertThat((List<?>) Json.parse(Files.readString(limited))).hasSize(7);
+        Path none = dir.resolve("q/none.json");
+        assertThat(Export.writeQuery(demo, "SELECT c FROM Customer c WHERE c.age > 1000", Export.Format.JSON, none)).isZero();
+        assertThat((List<?>) Json.parse(Files.readString(none))).isEmpty();
+        assertThatThrownBy(() -> Export.writeQuery(demo, "DELETE FROM Customer c", Export.Format.CSV, dir.resolve("x.csv")))
+                .hasMessageContaining("only SELECT");
+        assertThatThrownBy(() -> Export.writeQuery(demo, "EXPLAIN SELECT c FROM Customer c", Export.Format.CSV, dir.resolve("x.csv")))
+                .hasMessageContaining("only SELECT");
+        assertThat(ObjectJson.jsonValue(Ref.of(5))).isEqualTo(5L);
         assertThat(Export.write(demo, cls, "x.age > 1000", null, false, Export.Format.CSV, dir.resolve("new/sub/x.csv"))).isZero();
         Path blocker = Files.writeString(dir.resolve("blocker"), "a file, not a directory");
         assertThatThrownBy(() -> Export.write(demo, cls, null, null, false, Export.Format.CSV, blocker.resolve("x.csv")))
@@ -261,7 +295,7 @@ class ModelTest {
         assertThat(Display.text(null)).isEmpty();
         assertThat(Display.text(Ref.of(5))).isEqualTo("→ 5");
         assertThat(Display.text(Instant.EPOCH)).isEqualTo("1970-01-01T00:00:00Z UTC");
-        assertThat(Display.text(new byte[3])).isEqualTo("bytes[3]");
+        assertThat(Display.text(new byte[3])).isEqualTo("Binary · 3 B");
         assertThat(Display.text(Map.of("a", 1))).isEqualTo("{a=1}");
         assertThat(Display.text(List.of(1, "b"))).isEqualTo("[1, b]");
         assertThat(Display.text(2.0)).isEqualTo("2.0");
@@ -303,5 +337,83 @@ class ModelTest {
         assertThat(Completion.prefix("ab cd.e", 7)).isEqualTo("cd.e");
         assertThat(Completion.aliases("SELECT x FROM Nope n", schema)).isEmpty();
         assertThat(new Column("a", ValueType.INT32, true, false).sortable()).isTrue();
+    }
+
+    @Test
+    void nestedAndBinaryDisplay() {
+        assertThat(Display.cell(List.of(Map.of("a", 1), Map.of("a", 2)))).isEqualTo("[ 2 elements ]");
+        assertThat(Display.cell(List.of(Map.of("a", 1)))).isEqualTo("[ 1 element ]");
+        assertThat(Display.cell(List.of("x", "y"))).isEqualTo("[x, y]");
+        assertThat(Display.cell(Map.of("k", 1))).isEqualTo("{ 1 entry }");
+        assertThat(Display.cell(new LinkedHashMap<>(Map.of("k", 1, "j", 2)))).isEqualTo("{ 2 entries }");
+        assertThat(Display.nested(List.of("x"))).isFalse();
+        assertThat(Display.nested("short")).isFalse();
+        assertThat(Display.nested(null)).isFalse();
+        String longText = "line one\n" + "x".repeat(3000);
+        assertThat(Display.cell(longText)).hasSize(Display.CELL_MAX + 1).startsWith("line one x").endsWith("…");
+        assertThat(Display.nested(longText)).isTrue();
+        assertThat(Display.tooltip(longText)).hasSizeLessThan(Display.TOOLTIP_MAX + 40).contains("3,009 chars");
+        assertThat(Display.tooltip(Map.of("k", List.of(1)))).contains("\"k\"").contains("\n");
+        assertThat(Display.size(5, "bytes")).isEqualTo("5 B");
+        assertThat(Display.size(2048, "bytes")).isEqualTo("2.0 KiB");
+        assertThat(Display.size(3 << 20, "bytes")).isEqualTo("3.0 MiB");
+        assertThat(Display.size(1234, "chars")).isEqualTo("1,234 chars");
+        assertThat(Display.format(bytes(0x89, 'P', 'N', 'G'))).isEqualTo("PNG");
+        assertThat(Display.format(bytes(0xFF, 0xD8, 0xFF, 0xE0))).isEqualTo("JPEG");
+        assertThat(Display.format(bytes('G', 'I', 'F', '8', '9'))).isEqualTo("GIF");
+        assertThat(Display.format(bytes('B', 'M', 0))).isEqualTo("BMP");
+        assertThat(Display.format(bytes('R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'E', 'B', 'P'))).isEqualTo("WEBP");
+        assertThat(Display.format(bytes('R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E'))).isNull();
+        assertThat(Display.format(bytes('R', 'I', 'F', 'F'))).isNull();
+        assertThat(Display.format(bytes('%', 'P', 'D', 'F'))).isEqualTo("PDF");
+        assertThat(Display.format(bytes('P', 'K', 3, 4))).isEqualTo("ZIP");
+        assertThat(Display.format(bytes(0x1F, 0x8B))).isEqualTo("GZIP");
+        assertThat(Display.format(bytes(1))).isNull();
+        assertThat(Display.format(new byte[0])).isNull();
+        assertThat(Display.isImage(bytes('%', 'P', 'D', 'F'))).isFalse();
+        assertThat(Display.isImage(bytes(1))).isFalse();
+        assertThat(Display.isImage(bytes('G', 'I', 'F', '8'))).isTrue();
+        assertThat(Display.text(bytes(0x89, 'P', 'N', 'G'))).isEqualTo("PNG · 4 B");
+        assertThat(Display.pretty(List.of(Ref.of(5)))).contains("5");
+    }
+
+    private static byte[] bytes(int... v) {
+        byte[] b = new byte[v.length];
+        for (int i = 0; i < v.length; i++) {
+            b[i] = (byte) v[i];
+        }
+        return b;
+    }
+
+    @Test
+    void editorJsonKeepsLargeBinariesAndConvertsMaps() {
+        ClassDef def = demo.classDef(PRODUCT);
+        DynamicObject p = demo.page(PRODUCT, "", null, false, 0, 1).rows().get(0);
+        byte[] big = new byte[ObjectJson.EDITOR_INLINE_MAX + 1];
+        p.set("photo", big);
+        Map<String, byte[]> kept = new LinkedHashMap<>();
+        String json = ObjectJson.toEditorJson(p, def, kept);
+        assertThat(json).contains("<photo: binary · 64.0 KiB — kept unchanged").hasSizeLessThan(1000);
+        assertThat(kept).hasSize(1);
+        assertThat((byte[]) ObjectJson.fromJson(p, def, json, kept).get("photo")).isSameAs(big);
+        assertThatThrownBy(() -> ObjectJson.fromJson(p, def, json)).hasMessageContaining("photo: not valid Base64");
+        p.set("photo", new byte[]{1, 2});
+        assertThat(ObjectJson.toEditorJson(p, def, kept)).contains("\"AQI=\"");
+
+        // maps of embedded values: converted by the schema; wrong shapes are reported with the path
+        ClassDef customer = demo.classDef(CUSTOMER);
+        DynamicObject c = demo.page(CUSTOMER, "", null, false, 0, 1).rows().get(0);
+        DynamicObject withContacts = ObjectJson.fromJson(c, customer,
+                "{\"name\": \"M\", \"contacts\": {\"work\": {\"city\": \"Perth\", \"geo\": {\"lat\": -31.9, \"lon\": 115.8}}}}");
+        assertThat(withContacts.get("contacts.work.geo.lat")).isEqualTo(-31.9);
+        assertThatThrownBy(() -> ObjectJson.fromJson(c, customer, "{\"contacts\": [1]}")).hasMessageContaining("contacts: expected an object");
+        assertThatThrownBy(() -> ObjectJson.fromJson(c, customer, "{\"contacts\": {\"w\": {\"planet\": 1}}}"))
+                .hasMessageContaining("contacts.w has no field 'planet'");
+        Map<String, Object> nested = new LinkedHashMap<>();
+        nested.put("list", List.of(Map.of("b", new byte[ObjectJson.EDITOR_INLINE_MAX + 5])));
+        DynamicObject holder = new DynamicObject(CUSTOMER);
+        holder.set("contacts", nested);
+        Map<String, byte[]> k2 = new LinkedHashMap<>();
+        assertThat(ObjectJson.toEditorJson(holder, customer, k2)).contains("<contacts.list[0].b: binary");
     }
 }

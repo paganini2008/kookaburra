@@ -67,6 +67,9 @@ class BeanMapper {
             case MAP -> {
                 key = JavaTypes.typeArg(f.getGenericType(), 0, 2);
                 element = JavaTypes.typeArg(f.getGenericType(), 1, 2);
+                if (t.element().kind() == ValueType.EMBEDDED) {
+                    nested = new BeanMapper(element, t.element().fields());      // map of embedded values
+                }
             }
             default -> {
             }

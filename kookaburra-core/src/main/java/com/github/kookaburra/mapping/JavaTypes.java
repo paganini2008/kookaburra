@@ -110,7 +110,8 @@ class JavaTypes {
             case MAP: {
                 Class<?> k = typeArg(generic, 0, 2);
                 Class<?> v = typeArg(generic, 1, 2);
-                if (k != null && v != null && ValueType.of(k).isScalar() && ValueType.of(v).isScalar()) {
+                if (k != null && v != null && ValueType.of(k).isScalar()
+                        && (ValueType.of(v).isScalar() || ValueType.of(v) == ValueType.EMBEDDED)) {
                     return TypeDef.map(describe(k, k, stack, where), describe(v, v, stack, where));
                 }
                 return object(raw, where);

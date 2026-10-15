@@ -1,5 +1,6 @@
 package com.github.kookaburra.field;
 
+import com.github.kookaburra.mapping.ValueType;
 import com.github.kookaburra.query.Pred;
 
 import java.util.Arrays;
@@ -23,7 +24,7 @@ public class ListField<T, E> extends AbstractField<T, Collection<E>> {
 
     /** Java class of the elements. */
     public Class<?> elementType() {
-        return leaf().elementType();
+        return viaList() && leaf().type() != ValueType.MULTI ? leaf().javaType() : leaf().elementType();
     }
 
     public Pred<T> contains(E value) {

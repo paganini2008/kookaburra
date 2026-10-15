@@ -28,6 +28,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiFunction;
 import java.util.function.Predicate;
@@ -259,11 +260,34 @@ class Engine {
                 }
             } else if (cur instanceof Map<?, ?> m) {
                 cur = m.get(part);
+            } else if (cur instanceof List<?> elements) {
+                return elementValues(elements, parts.subList(i, parts.size()));   // embedded list: any element
             } else {
                 return null;
             }
         }
         return cur;
+    }
+
+    /** The values of a path in every element of an embedded list, flattened (nulls skipped). */
+    private static List<Object> elementValues(List<?> elements, List<String> parts) {
+        List<Object> out = new ArrayList<>();
+        for (Object e : elements) {
+            Object cur = e;
+            for (int i = 0; i < parts.size() && cur != null; i++) {
+                if (cur instanceof List<?> nested) {
+                    cur = elementValues(nested, parts.subList(i, parts.size()));
+                    break;
+                }
+                cur = cur instanceof Map<?, ?> m ? m.get(parts.get(i)) : null;
+            }
+            if (cur instanceof List<?> l) {
+                l.stream().filter(Objects::nonNull).forEach(out::add);
+            } else if (cur != null) {
+                out.add(cur);
+            }
+        }
+        return out;
     }
 
     private DynamicObject deref(long oid) {
