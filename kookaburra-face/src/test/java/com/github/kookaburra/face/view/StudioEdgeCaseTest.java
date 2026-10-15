@@ -1,7 +1,6 @@
 package com.github.kookaburra.face.view;
 
 import com.github.kookaburra.face.StudioApplication;
-import com.github.kookaburra.face.model.ClassInfo;
 import com.github.kookaburra.face.model.Export;
 import com.github.kookaburra.face.model.Session;
 import javafx.application.Platform;
@@ -11,7 +10,6 @@ import javafx.scene.control.ButtonType;
 import javafx.scene.control.DialogPane;
 import javafx.scene.control.TabPane;
 import javafx.scene.control.TextField;
-import javafx.scene.control.TreeItem;
 import javafx.stage.Stage;
 import org.fxmisc.richtext.CodeArea;
 import org.junit.jupiter.api.AfterEach;
@@ -102,13 +100,7 @@ class StudioEdgeCaseTest {
     }
 
     private void select(FxRobot robot, String simple) {
-        robot.interact(() -> {
-            for (TreeItem<ClassInfo> i : view.tree.getRoot().getChildren()) {
-                if (i.getValue().simpleName().equals(simple)) {
-                    view.tree.getSelectionModel().select(i);
-                }
-            }
-        });
+        robot.interact(() -> view.tree.getSelectionModel().select(StudioUiTest.findClass(view, simple)));
         settle();
     }
 
@@ -238,7 +230,7 @@ class StudioEdgeCaseTest {
     }
 
     @Test
-    void consoleEdges(FxRobot robot) {
+    void consoleEdges(FxRobot robot, @TempDir Path tmp) throws IOException {
         open();
         robot.interact(() -> view.tabs.getSelectionModel().select(1));
         assertThat(run(robot, "SELECT c FROM Customer c LIMIT 0")).startsWith("rows=0");
@@ -258,8 +250,29 @@ class StudioEdgeCaseTest {
         // DML refreshes the class tree and counts
         assertThat(run(robot, "DELETE FROM Purchase p WHERE p.quantity > 0")).contains("750 objects affected");
         settle();
-        assertThat(view.tree.getRoot().getChildren()).anyMatch(i -> i.getValue().simpleName().equals("Purchase")
-                && i.getValue().count() == 0);
+        assertThat(StudioUiTest.findClass(view, "Purchase").getValue().cls().count()).isZero();
+
+        // export the console result: every row, not just the visible page
+        Path exported = tmp.resolve("console/customers.jsonl");
+        view.query.exportChooser = f -> f == Export.Format.JSONL ? exported.toFile() : null;
+        robot.interact(() -> view.query.setText("SELECT c FROM Customer c"));
+        robot.interact(() -> view.query.export.show());                               // the menu opens on screen
+        settle();
+        robot.interact(() -> view.query.export.getItems().stream()
+                .filter(i -> "console-export-jsonl".equals(i.getId())).findFirst().orElseThrow().fire());
+        robot.interact(() -> view.query.export.hide());
+        settle();
+        assertThat(view.query.message.getText()).isEqualTo("exported 250 rows → customers.jsonl");
+        assertThat(Files.readAllLines(exported)).hasSize(250);
+        robot.interact(() -> view.query.exportAs(Export.Format.CSV));                 // chooser cancelled: nothing
+        robot.interact(() -> view.query.setText("DELETE FROM Customer c"));
+        view.query.exportChooser = f -> tmp.resolve("console/x." + f.extension()).toFile();
+        robot.interact(() -> view.query.exportAs(Export.Format.JSON));
+        settle();
+        assertThat(view.query.message.getText()).contains("only SELECT");
+        assertThat(rows("SELECT COUNT(*) FROM Customer c")).containsExactly(250L);      // nothing was deleted
+        robot.interact(() -> view.query.setText("   "));
+        robot.interact(() -> view.query.exportAs(Export.Format.JSON));                // empty editor: nothing
 
         run(robot, "SELECT c FROM Customer c");
         for (int i = 0; i < 10 && !view.query.next.isDisabled(); i++) {
@@ -315,7 +328,7 @@ class StudioEdgeCaseTest {
         Session s = Session.demo();
         Platform.runLater(() -> view.open(s));
         settle();
-        await(() -> view.tree.getRoot() != null && !view.tree.getRoot().getChildren().isEmpty(), 5000);
+        await(() -> view.tree.getRoot() != null && StudioUiTest.findClass(view, "Customer") != null, 5000);
     }
 
     private List<Object> rows(String oql) {

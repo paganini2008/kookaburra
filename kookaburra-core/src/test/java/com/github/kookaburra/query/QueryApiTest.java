@@ -1,5 +1,6 @@
 package com.github.kookaburra.query;
 
+import com.github.kookaburra.TestDbs;
 import com.github.kookaburra.ObjectDB;
 import com.github.kookaburra.OptimisticLockException;
 import com.github.kookaburra.Ref;
@@ -40,7 +41,7 @@ class QueryApiTest {
 
     @BeforeEach
     void setUp() {
-        db = ObjectDB.inMemory();
+        db = TestDbs.create();
         Company ai = new Company();
         ai.setIndustry("AI");
         aiCompany = db.insert(ai);

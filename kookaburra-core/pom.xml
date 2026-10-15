@@ -64,6 +64,36 @@
                     <listener>false</listener>
                 </configuration>
             </plugin>
+            <!-- The shared suites run twice: in memory (default-test) and on disk (disk-suite, real segment files / WAL). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>disk-suite</id>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <systemPropertyVariables>
+                                <kookaburra.test.storage>disk</kookaburra.test.storage>
+                            </systemPropertyVariables>
+                            <includes>
+                                <include>**/DynamicTest.java</include>
+                                <include>**/DatabaseTest.java</include>
+                                <include>**/OqlTest.java</include>
+                                <include>**/OqlDifferentialTest.java</include>
+                                <include>**/DifferentialTest.java</include>
+                                <include>**/QueryApiTest.java</include>
+                                <include>**/FluentQueryTest.java</include>
+                                <include>**/ReadmeExamplesTest.java</include>
+                                <include>**/TransactionTest.java</include>
+                            </includes>
+                            <reportNameSuffix>disk</reportNameSuffix>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 </project>

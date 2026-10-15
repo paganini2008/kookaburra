@@ -174,7 +174,10 @@ public class AstBuilder extends OqlBaseVisitor<Object> {
 
     private Ast.Path path(OqlParser.PathContext p) {
         List<String> parts = new ArrayList<>();
-        p.identifier().forEach(i -> parts.add(id(i)));
+        parts.add(id(p.identifier()));
+        for (OqlParser.SegmentContext seg : p.segment()) {
+            parts.add(seg.identifier() != null ? id(seg.identifier()) : seg.getText());   // a keyword used as a field name
+        }
         return new Ast.Path(parts, p.start.getLine(), p.start.getCharPositionInLine());
     }
 

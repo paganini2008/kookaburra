@@ -79,7 +79,32 @@ class PersistenceTest {
             verify(db, r);
         }
         try (Stream<Path> files = Files.list(dir.resolve("col").resolve(Person.class.getName()))) {
-            assertThat(files.filter(f -> f.toString().endsWith(".seg")).count()).as("old segment files deleted").isLessThan(5);
+            assertThat(files.filter(f -> f.toString().endsWith(".odbf")).count()).as("old segment files deleted").isLessThan(5);
+        }
+    }
+
+    @Test
+    void segmentFilesUseOdbfAndLegacySegFilesAreRenamed() throws IOException {
+        Path dir = tmp.resolve("legacy");
+        Random r = new Random(5);
+        try (ObjectDB db = ObjectDB.open(dir, small())) {
+            workload(db, r, 200);
+            db.flush();
+        }
+        Path col = dir.resolve("col").resolve(Person.class.getName());
+        List<Path> segs;
+        try (Stream<Path> files = Files.list(col)) {
+            segs = files.filter(f -> f.toString().endsWith(".odbf")).toList();
+        }
+        assertThat(segs).isNotEmpty();
+        for (Path p : segs) {                                          // an older database: .seg files
+            Files.move(p, p.resolveSibling(p.getFileName().toString().replace(".odbf", ".seg")));
+        }
+        try (ObjectDB db = ObjectDB.open(dir, small())) {
+            verify(db, r);
+        }
+        try (Stream<Path> files = Files.list(col)) {
+            assertThat(files.map(f -> f.getFileName().toString())).noneMatch(n -> n.endsWith(".seg")).anyMatch(n -> n.endsWith(".odbf"));
         }
     }
 
@@ -119,12 +144,12 @@ class PersistenceTest {
         Files.write(wal, new byte[]{20, 0, 0, 0, 1, 2, 3}, StandardOpenOption.APPEND);
         // orphan segment from an interrupted flush
         Path col = crash.resolve("col").resolve(Person.class.getName());
-        Files.write(col.resolve("seg_99999.seg"), new byte[]{1});
-        Files.write(col.resolve("seg_99999.seg.tmp"), new byte[]{1});
+        Files.write(col.resolve("seg_99999.odbf"), new byte[]{1});
+        Files.write(col.resolve("seg_99999.odbf.tmp"), new byte[]{1});
         try (ObjectDB db = ObjectDB.open(crash, small())) {
             verify(db, r);
-            assertThat(Files.exists(col.resolve("seg_99999.seg"))).isFalse();
-            assertThat(Files.exists(col.resolve("seg_99999.seg.tmp"))).isFalse();
+            assertThat(Files.exists(col.resolve("seg_99999.odbf"))).isFalse();
+            assertThat(Files.exists(col.resolve("seg_99999.odbf.tmp"))).isFalse();
             workload(db, r, 20);
             verify(db, r);
         }

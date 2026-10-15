@@ -63,7 +63,8 @@ class Convert {
             case MAP: {
                 Map<Object, Object> out = new LinkedHashMap<>();
                 for (Map.Entry<?, ?> e : ((Map<?, ?>) v).entrySet()) {
-                    Object val = e.getValue() == null ? null : scalar(e.getValue(), def.element(), where);
+                    Object val = e.getValue() == null ? null : def.element().kind() == ValueType.EMBEDDED
+                            ? nested.toCanonical(e.getValue()) : scalar(e.getValue(), def.element(), where);
                     out.put(scalar(requireElement(e.getKey(), where), def.key(), where), val);
                 }
                 return out;
@@ -137,7 +138,9 @@ class Convert {
             case MAP: {
                 Map<Object, Object> out = newMap(raw);
                 for (Map.Entry<?, ?> e : ((Map<?, ?>) c).entrySet()) {
-                    out.put(scalarToJava(e.getKey(), key), e.getValue() == null ? null : scalarToJava(e.getValue(), element));
+                    Object v = e.getValue();
+                    out.put(scalarToJava(e.getKey(), key), v == null ? null : src.element().kind() == ValueType.EMBEDDED
+                            ? nested.toJava((Object[]) v, src.element().fields()) : scalarToJava(v, element));
                 }
                 return out;
             }

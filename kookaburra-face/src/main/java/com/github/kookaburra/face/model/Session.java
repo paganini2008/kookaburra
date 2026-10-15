@@ -3,7 +3,10 @@ package com.github.kookaburra.face.model;
 import com.github.kookaburra.Config;
 import com.github.kookaburra.ObjectDB;
 import com.github.kookaburra.Snapshot;
+import com.github.kookaburra.Transaction;
+import com.github.kookaburra.TxOptions;
 import com.github.kookaburra.WriteBatch;
+import com.github.kookaburra.dynamic.DynamicCollection;
 import com.github.kookaburra.dynamic.DynamicObject;
 import com.github.kookaburra.engine.Database;
 import com.github.kookaburra.exec.SegmentView;
@@ -22,6 +25,7 @@ import java.io.IOException;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -41,9 +45,21 @@ public class Session implements AutoCloseable {
     private final ObjectDB db;
     private final String title;
 
-    private Session(ObjectDB db, String title) {
+    /** Studio transactions are interactive: long enough for manual edits, short enough not to pin history forever. */
+    static final Duration TX_TIMEOUT = Duration.ofMinutes(30);
+
+    private Transaction tx;
+    private final Path dir;
+
+    private Session(ObjectDB db, String title, Path dir) {
         this.db = db;
         this.title = title;
+        this.dir = dir;
+    }
+
+    /** Directory of the database, or null for an in-memory one. */
+    public Path dir() {
+        return dir;
     }
 
     /** Opens a database directory (created if missing); failures name the directory and the reason. */
@@ -52,7 +68,7 @@ public class Session implements AutoCloseable {
             throw new IllegalArgumentException(dir + " is a file, not a directory");
         }
         try {
-            return new Session(ObjectDB.open(dir, Config.fromSettings(StudioPaths.settings())), dir.toAbsolutePath().toString());
+            return new Session(ObjectDB.open(dir, config()), dir.toAbsolutePath().toString(), dir.toAbsolutePath().normalize());
         } catch (RuntimeException e) {
             Throwable root = e;
             while (root.getCause() != null && root.getCause() != root) {
@@ -77,10 +93,75 @@ public class Session implements AutoCloseable {
 
     /** An in-memory database filled with the demo data set. */
     public static Session demo() {
-        ObjectDB db = ObjectDB.inMemory(Config.fromSettings(StudioPaths.settings()));
+        ObjectDB db = ObjectDB.inMemory(config());
         DemoData.fill(db, StudioPaths.integer(StudioPaths.DEMO_CUSTOMERS), 42);
         db.flush();
-        return new Session(db, "demo (in memory)");
+        return new Session(db, "demo (in memory)", null);
+    }
+
+    /** Settings from {@code kookaburra.properties}; transactions always enabled (no cost until one is begun). */
+    private static Config config() {
+        return Config.fromSettings(StudioPaths.settings()).withTransactions(true);
+    }
+
+    // ---------------------------------------------------------------- transaction (docs/transaction-design.md)
+
+    /** Starts a SNAPSHOT transaction: until commit / rollback every read sees and every write joins it. */
+    public synchronized Transaction begin() {
+        if (tx() != null) {
+            throw new IllegalStateException("a transaction is already open");
+        }
+        tx = db.begin(TxOptions.defaults().timeout(TX_TIMEOUT));
+        return tx;
+    }
+
+    /** Commits the open transaction; on a conflict it is rolled back and the exception is rethrown. */
+    public synchronized void commit() {
+        Transaction t = tx();
+        if (t == null) {
+            throw new IllegalStateException("no open transaction");
+        }
+        tx = null;
+        t.commit();
+    }
+
+    /** Discards the open transaction, if any. */
+    public synchronized void rollback() {
+        Transaction t = tx;
+        tx = null;
+        if (t != null) {
+            t.rollback();
+        }
+    }
+
+    /** The open transaction, or null (also after it ended by itself, e.g. a timeout). */
+    public synchronized Transaction tx() {
+        if (tx != null && tx.state() != Transaction.State.ACTIVE) {
+            tx = null;
+        }
+        return tx;
+    }
+
+    /** Status text of the open transaction, or null. */
+    public synchronized String txLabel() {
+        Transaction t = tx();
+        return t == null ? null : "TX #" + t.id() + " · " + t.isolation() + " · " + t.pendingWrites() + " pending change"
+                + (t.pendingWrites() == 1 ? "" : "s");
+    }
+
+    private synchronized OqlQuery<Object> oql(String text) {
+        Transaction t = tx();
+        return t == null ? db.oql(text) : t.oql(text);
+    }
+
+    private synchronized <T> OqlQuery<T> oql(String text, Class<T> type) {
+        Transaction t = tx();
+        return t == null ? db.oql(text, type) : t.oql(text, type);
+    }
+
+    private synchronized DynamicCollection dynamic(String className) {
+        Transaction t = tx();
+        return t == null ? db.dynamic(className) : t.dynamic(className);
     }
 
     public String title() {
@@ -121,7 +202,7 @@ public class Session implements AutoCloseable {
                 children.add(info(s, x));
             }
         }
-        return new ClassInfo(c.name(), c.simpleName(), db.dynamic(c.name()).from().count(), children);
+        return new ClassInfo(c.name(), c.simpleName(), dynamic(c.name()).from().count(), children);
     }
 
     /** Grid columns of a class: OID, version, then stored fields (embedded paths flattened). */
@@ -160,9 +241,9 @@ public class Session implements AutoCloseable {
         String cond = where == null || where.isBlank() ? "" : " WHERE (" + where + ")";   // a condition only: no LIMIT / ORDER BY
         String order = orderBy == null ? "" : " ORDER BY x." + orderBy + (descending ? " DESC" : " ASC");
         String from = " FROM " + className + " x";
-        List<DynamicObject> rows = db.oql("SELECT x" + from + cond + order, DynamicObject.class)
+        List<DynamicObject> rows = oql("SELECT x" + from + cond + order, DynamicObject.class)
                 .offset((long) pageIndex * pageSize).limit(pageSize).list();
-        long total = (Long) db.oql("SELECT COUNT(*)" + from + cond).list().get(0);
+        long total = (Long) oql("SELECT COUNT(*)" + from + cond).list().get(0);
         return new Page(columns(className), rows, total, pageIndex, pageSize, (System.nanoTime() - start) / 1_000_000);
     }
 
@@ -188,7 +269,7 @@ public class Session implements AutoCloseable {
      */
     public QueryOutcome run(String oql, long offset, int pageSize) {
         long start = System.nanoTime();
-        OqlQuery<Object> q = db.oql(oql);
+        OqlQuery<Object> q = oql(oql);
         if (q.isExplain() && !q.isSelect()) {                 // EXPLAIN UPDATE / DELETE: plan only, nothing changes
             return new QueryOutcome(List.of(), List.of(), q.explain(), -1, (System.nanoTime() - start) / 1_000_000);
         }
@@ -237,17 +318,22 @@ public class Session implements AutoCloseable {
     }
 
     public String explain(String oql) {
-        return db.oql(oql).explain();
+        return oql(oql).explain();
     }
 
     // ---------------------------------------------------------------- editing
 
     public DynamicObject newObject(String className) {
-        return db.dynamic(className).newObject();
+        return dynamic(className).newObject();
+    }
+
+    /** An object by class and OID (null when it does not exist), e.g. the target of a reference. */
+    public DynamicObject get(String className, long oid) {
+        return dynamic(className).get(oid);
     }
 
     public DynamicObject reload(DynamicObject o) {
-        return db.dynamic(o.className()).get(o.oid());
+        return dynamic(o.className()).get(o.oid());
     }
 
     /** Checks that every value fits its stored type (throws with the field and value otherwise); nothing is written. */
@@ -258,15 +344,20 @@ public class Session implements AutoCloseable {
     /** Inserts a new object or updates an existing one (optimistic lock on the version). */
     public DynamicObject save(DynamicObject o) {
         if (o.oid() == 0) {
-            db.dynamic(o.className()).insert(o);
+            dynamic(o.className()).insert(o);
         } else {
-            db.dynamic(o.className()).update(o);
+            dynamic(o.className()).update(o);
         }
         return o;
     }
 
-    /** Deletes objects in one atomic batch (version-checked). */
+    /** Deletes objects in one atomic batch (version-checked); inside a transaction they join it. */
     public void delete(List<DynamicObject> objects) {
+        Transaction t = tx();
+        if (t != null) {
+            objects.forEach(t::delete);
+            return;
+        }
         try (WriteBatch b = db.batch()) {
             objects.forEach(b::delete);
             b.commit();
@@ -287,7 +378,7 @@ public class Session implements AutoCloseable {
         List<ClassMeta.FieldMeta> fields = new ArrayList<>();
         metaFields(s, c, c.current().fields(), "", fields);
         return new ClassMeta(c.name(), c.id(), c.parent(), c.collection(), subs, root.idField(), root.versionField(),
-                c.layouts().size(), db.dynamic(c.name()).from().count(), fields);
+                c.layouts().size(), dynamic(c.name()).from().count(), fields);
     }
 
     private static void metaFields(Schema s, ClassDef c, List<FieldDef> defs, String prefix, List<ClassMeta.FieldMeta> out) {
@@ -345,6 +436,7 @@ public class Session implements AutoCloseable {
 
     @Override
     public void close() {
+        rollback();
         db.close();
     }
 }

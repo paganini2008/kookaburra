@@ -2,6 +2,7 @@ package com.github.kookaburra.query;
 
 import com.github.kookaburra.Ref;
 import com.github.kookaburra.WriteBatch;
+import com.github.kookaburra.dynamic.DynField;
 import com.github.kookaburra.dynamic.DynamicObject;
 import com.github.kookaburra.exec.Aggregator;
 import com.github.kookaburra.exec.Cond;
@@ -10,12 +11,21 @@ import com.github.kookaburra.exec.Planner;
 import com.github.kookaburra.exec.QueryHost;
 import com.github.kookaburra.exec.ReadView;
 import com.github.kookaburra.exec.SegmentView;
+import com.github.kookaburra.field.BoolGetter;
+import com.github.kookaburra.field.CollectionGetter;
 import com.github.kookaburra.field.ComparableField;
+import com.github.kookaburra.field.ComparableGetter;
 import com.github.kookaburra.field.DoubleField;
+import com.github.kookaburra.field.DoubleGetter;
 import com.github.kookaburra.field.Field;
+import com.github.kookaburra.field.Getter;
 import com.github.kookaburra.field.IntField;
+import com.github.kookaburra.field.IntGetter;
 import com.github.kookaburra.field.LongField;
+import com.github.kookaburra.field.LongGetter;
 import com.github.kookaburra.field.RefField;
+import com.github.kookaburra.field.RefGetter;
+import com.github.kookaburra.field.StringGetter;
 import com.github.kookaburra.mapping.ClassDef;
 import com.github.kookaburra.mapping.Schema;
 import com.github.kookaburra.mapping.TypeDef;
@@ -62,7 +72,7 @@ public class QueryStream<T> {
      * What a stream queries: a stored class (and its subclasses) and how documents become results.
      * {@code residual} materializes objects for opaque Java predicates.
      */
-    public record Target<T>(String className, String label, Materializer<T> result, Materializer<Object> residual) {
+    public record Target<T>(String className, String label, Materializer<T> result, Materializer<Object> residual, boolean dynamic) {
 
         /** Turns a document into an object. */
         @FunctionalInterface
@@ -73,13 +83,13 @@ public class QueryStream<T> {
         /** Java entities of {@code type}. */
         public static <T> Target<T> typed(Class<T> type) {
             return new Target<>(type.getName(), type.getSimpleName(), (h, v, d) -> type.cast(h.materialize(v, d)),
-                    QueryHost::materialize);
+                    QueryHost::materialize, false);
         }
 
         /** {@link com.github.kookaburra.dynamic.DynamicObject}s of a stored class. */
         public static Target<DynamicObject> dynamic(String className) {
             return new Target<>(className, className.substring(className.lastIndexOf('.') + 1),
-                    QueryHost::materializeDynamic, QueryHost::materializeDynamic);
+                    QueryHost::materializeDynamic, QueryHost::materializeDynamic, true);
         }
     }
 
@@ -128,6 +138,46 @@ public class QueryStream<T> {
     // ---------------------------------------------------------------- pipeline
 
     /** Adds a filter: a {@link Pred} (pushed down) or any Java predicate (evaluated on objects). */
+    // ---------------------------------------------------------------- fluent conditions: .where(A::getX).eq(v)
+
+    public Where<T, Integer> where(IntGetter<T> getter) {
+        return new Where<>(this, Q.where(getter));
+    }
+
+    public Where<T, Long> where(LongGetter<T> getter) {
+        return new Where<>(this, Q.where(getter));
+    }
+
+    public Where<T, Double> where(DoubleGetter<T> getter) {
+        return new Where<>(this, Q.where(getter));
+    }
+
+    public Where<T, Boolean> where(BoolGetter<T> getter) {
+        return new Where<>(this, Q.where(getter));
+    }
+
+    public Where<T, String> where(StringGetter<T> getter) {
+        return new Where<>(this, Q.where(getter));
+    }
+
+    public <V extends Comparable<? super V>> Where<T, V> where(ComparableGetter<T, V> getter) {
+        return new Where<>(this, Q.where(getter));
+    }
+
+    /** Collection fields: {@code .where(A::getTags).contains("x")}. */
+    public <E> Where<T, E> where(CollectionGetter<T, E> getter) {
+        return new Where<>(this, Q.where(getter));
+    }
+
+    /** Reference fields compare by the target's OID: {@code .where(Order::getOwner).eq(ownerOid)}. */
+    public <R> Where<T, Long> where(RefGetter<T, R> getter) {
+        return new Where<>(this, Q.where(getter));
+    }
+
+    public <V> Where<T, V> where(Getter<T, V> getter) {
+        return new Where<>(this, Q.where(getter));
+    }
+
     public QueryStream<T> filter(Predicate<? super T> predicate) {
         require(stage == FILTERING, "filter() must come before sorted() / skip() / limit()");
         List<Predicate<? super T>> f = new ArrayList<>(filters);
@@ -144,6 +194,64 @@ public class QueryStream<T> {
         }
         require(!k.isEmpty(), "sorted() needs at least one order");
         return new QueryStream<>(host, target, fixed, filters, List.copyOf(k), skip, limit, SORTED, fetches);
+    }
+
+    /** Appends a sort key (fluent {@link OrderBy}); allowed before skip / limit, any number of times. */
+    QueryStream<T> thenSorted(Order<? super T> order) {
+        require(stage == FILTERING || stage == SORTED, "orderBy() must come before skip() / limit()");
+        List<Order.Key<?>> k = new ArrayList<>(keys);
+        k.addAll(order.keys());
+        return new QueryStream<>(host, target, fixed, filters, List.copyOf(k), skip, limit, SORTED, fetches);
+    }
+
+    public OrderBy<T> orderBy(IntGetter<T> getter) {
+        return new OrderBy<>(this, Q.where(getter).asc(), Q.where(getter).desc());
+    }
+
+    public OrderBy<T> orderBy(LongGetter<T> getter) {
+        return new OrderBy<>(this, Q.where(getter).asc(), Q.where(getter).desc());
+    }
+
+    public OrderBy<T> orderBy(DoubleGetter<T> getter) {
+        return new OrderBy<>(this, Q.where(getter).asc(), Q.where(getter).desc());
+    }
+
+    public OrderBy<T> orderBy(BoolGetter<T> getter) {
+        return new OrderBy<>(this, Q.where(getter).asc(), Q.where(getter).desc());
+    }
+
+    public OrderBy<T> orderBy(StringGetter<T> getter) {
+        return new OrderBy<>(this, Q.where(getter).asc(), Q.where(getter).desc());
+    }
+
+    public <V extends Comparable<? super V>> OrderBy<T> orderBy(ComparableGetter<T, V> getter) {
+        return new OrderBy<>(this, Q.where(getter).asc(), Q.where(getter).desc());
+    }
+
+    /** A property of the elements of an embedded list ("any element"): {@code .whereAny(S::getItems, Item::getSku).contains("x")}. */
+    public <E, V> Where<T, V> whereAny(CollectionGetter<T, E> list, Getter<E, V> element) {
+        return new Where<>(this, Q.whereAny(list, element));
+    }
+
+    /** Dynamic queries: condition on a stored path, {@code people.query().where("home.city").eq("Perth")}. */
+    @SuppressWarnings("unchecked")
+    public Where<T, Object> where(String path) {
+        return new Where<>(this, (Field<T, ?>) (Field<?, ?>) dynField(path));
+    }
+
+    /** Dynamic queries: sort key on a stored path. */
+    @SuppressWarnings("unchecked")
+    public OrderBy<T> orderBy(String path) {
+        DynField f = dynField(path);
+        return new OrderBy<>(this, (Order<T>) (Order<?>) f.asc(), (Order<T>) (Order<?>) f.desc());
+    }
+
+    private DynField dynField(String path) {
+        require(target.dynamic(), "where(\"" + path + "\") / orderBy(\"" + path + "\") are for dynamic queries; "
+                + "use a method reference such as where(" + target.label() + "::get...)");
+        Schema schema = host.registry().schema();
+        ClassDef def = schema.byName(target.className());
+        return DynField.of(schema, def, path);
     }
 
     public QueryStream<T> skip(long n) {
@@ -233,6 +341,11 @@ public class QueryStream<T> {
     }
 
     // ---------------------------------------------------------------- terminals
+
+    /** Same as {@link #toList()}. */
+    public List<T> list() {
+        return toList();
+    }
 
     public List<T> toList() {
         try (Run r = run()) {

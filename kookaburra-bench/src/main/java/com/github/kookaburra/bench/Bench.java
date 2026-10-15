@@ -4,6 +4,7 @@ import com.github.kookaburra.Config;
 import com.github.kookaburra.Durability;
 import com.github.kookaburra.ObjectDB;
 import com.github.kookaburra.OptimisticLockException;
+import com.github.kookaburra.Transaction;
 import com.github.kookaburra.WriteBatch;
 import com.github.kookaburra.query.Q;
 import com.github.kookaburra.query.QueryStream;
@@ -122,6 +123,8 @@ public class Bench {
             pointReads(db, "MemSegment + segments");
             mixed(db);
             check(db, "after mixed phase");
+            transactions(db);
+            check(db, "after transactions");
             long t = System.nanoTime();
             db.compact();
             record("Maintenance", "compact() all collections", Stats.format(System.nanoTime() - t), "", null);
@@ -135,6 +138,7 @@ public class Bench {
         try {
             check(db, "after reopen");
             heap(db);
+            deleteEverything(db);
         } finally {
             db.close();
         }
@@ -180,7 +184,7 @@ public class Bench {
 
     private ObjectDB timedOpen(String label) {
         long t = System.nanoTime();
-        ObjectDB db = ObjectDB.open(opt.dir, Config.defaults());
+        ObjectDB db = ObjectDB.open(opt.dir, Config.defaults().withTransactions(true));
         record("Recovery", label, Stats.format(System.nanoTime() - t), "", null);
         return db;
     }
@@ -284,6 +288,76 @@ public class Bench {
                 () -> db.oql("SELECT m FROM Member m WHERE m.name = 'member-12345'").list().size());
     }
 
+    /** Transactions (docs/transaction-design.md §18): transfers, a hot counter, queries with own writes. */
+    private void transactions(ObjectDB db) {
+        // engine cost of transactions without fsync: an in-memory database with 1 000 accounts
+        try (ObjectDB mem = ObjectDB.inMemory(Config.defaults().withTransactions(true))) {
+            int accounts = 1_000;
+            long[] oids = new long[accounts];
+            for (int i = 0; i < accounts; i++) {
+                Member m = Member.random(new Random(i), i);
+                m.setScore(1_000);
+                oids[i] = mem.insert(m);
+            }
+            AtomicLong commits = new AtomicLong();
+            AtomicLong runs = new AtomicLong();
+            Stats lat = runThreads(opt.threads, opt.seconds, rnd -> {
+                long from = oids[rnd.nextInt(accounts)];
+                long to = oids[rnd.nextInt(accounts)];
+                mem.inTransaction(tx -> {
+                    runs.incrementAndGet();
+                    Member a = tx.get(Member.class, from);
+                    Member b = tx.get(Member.class, to);
+                    if (from != to && a.getScore() > 0) {
+                        a.setScore(a.getScore() - 1);
+                        b.setScore(b.getScore() + 1);
+                        tx.update(a);
+                        tx.update(b);
+                    }
+                }, 1_000);
+                commits.incrementAndGet();
+            });
+            long total = mem.from(Member.class).sum(Q.where(Member::getScore));
+            if (total != 1_000L * accounts) {
+                problem("transfers changed the total: " + total);
+            }
+            double rate = commits.get() / (double) opt.seconds;
+            record("Transactions", "transfer (read 2, update 2), " + opt.threads + " threads, in memory", rate(rate),
+                    "≥ 50 k/s", rate >= 50_000);
+            record("Transactions", "transfer latency p50 / p99 (incl. retries)", lat.summary(), "", null);
+            record("Transactions", "conflict retries per commit", String.format(Locale.ROOT, "%.3f",
+                    (runs.get() - commits.get()) / (double) Math.max(1, commits.get())), "", null);
+
+            long counter = oids[0];
+            int before = mem.get(Member.class, counter).getAge();
+            AtomicLong incs = new AtomicLong();
+            runThreads(opt.threads, Math.max(1, opt.seconds / 2), rnd -> {
+                mem.increment(Member.class, counter, "age", 1);
+                incs.incrementAndGet();
+            });
+            int after = mem.get(Member.class, counter).getAge();
+            if (after - before != incs.get()) {
+                problem("lost increments: " + incs.get() + " applied, counter moved " + (after - before));
+            }
+            record("Transactions", "hot counter increment, " + opt.threads + " threads (never conflicts)",
+                    rate(incs.get() / (double) Math.max(1, opt.seconds / 2)), "no lost updates", after - before == incs.get());
+        }
+
+        // a query inside a transaction that changed 100 objects, on the full data set
+        String city = Member.CITIES[5];
+        bench("Transactions", "count(city = c) outside a transaction", null, 0,
+                () -> db.query(Member.class).where(Member::getCity).eq(city).count());
+        try (Transaction tx = db.begin()) {
+            for (Member m : db.query(Member.class).where(Member::getCity).eq(city).limit(100).list()) {
+                m.setScore(m.getScore() + 1);
+                tx.update(m);
+            }
+            bench("Transactions", "count(city = c) in a transaction with 100 own updates", null, 0,
+                    () -> tx.query(Member.class).where(Member::getCity).eq(city).count());
+            tx.rollback();
+        }
+    }
+
     private void mixed(ObjectDB db) {
         AtomicLong reads = new AtomicLong();
         AtomicLong writes = new AtomicLong();
@@ -340,7 +414,7 @@ public class Bench {
                     String name = p.getFileName().toString();
                     long size = p.toFile().length();      // 0 if removed concurrently (WAL rotation, compaction)
                     sizes[0] += size;
-                    if (name.endsWith(".seg")) {
+                    if (name.endsWith(".odbf")) {
                         sizes[1]++;
                     } else if (name.endsWith(".log")) {
                         sizes[2] += size;
@@ -349,9 +423,35 @@ public class Bench {
             }
         });
         long count = db.from(Member.class).count();
-        record("Storage", "disk size " + when, mib(sizes[0]) + " (" + Math.round(sizes[0] / (double) Math.max(1, count)) + " B/object)", "", null);
+        record("Storage", "disk size " + when, mib(sizes[0]) + (count == 0 ? " (no objects)" : " (" + Math.round(sizes[0] / (double) count) + " B/object)"), "", null);
+        if (count == 0 && sizes[1] > 0) {
+            problem("storage " + when + ": " + sizes[1] + " segment file(s) left without any object (space not reclaimed)");
+        }
         record("Storage", "segments " + when, Long.toString(sizes[1]), "", null);
         record("Storage", "WAL size " + when, mib(sizes[2]), "", null);
+    }
+
+    /** Cleans up through the API (the delete path under load): OQL DELETE per city, then compaction. */
+    private void deleteEverything(ObjectDB db) {
+        long before = db.query(Member.class).count();
+        long t = System.nanoTime();
+        long deleted = 0;
+        for (String city : Member.CITIES) {
+            deleted += db.oql("DELETE FROM Member m WHERE m.city = :c").param("c", city).execute();
+        }
+        double secs = (System.nanoTime() - t) / 1e9;
+        long left = db.query(Member.class).count();
+        if (deleted != before || left != 0) {
+            problem("delete: " + before + " objects, " + deleted + " deleted, " + left + " left");
+        }
+        record("Delete", "OQL DELETE of all " + String.format(Locale.ROOT, "%,d", before) + " objects, 50 statements (SYNC)",
+                rate(deleted / Math.max(secs, 1e-9)) + " (" + String.format(Locale.ROOT, "%.1f s", secs) + ")", "", null);
+        long c = System.nanoTime();
+        db.compact();
+        record("Delete", "compact() after deleting everything", Stats.format(System.nanoTime() - c), "", null);
+        storage(db, "after deleting everything");
+        expected = 0;
+        check(db, "after deleting everything");
     }
 
     private void heap(ObjectDB db) {
@@ -463,7 +563,7 @@ public class Bench {
     }
 
     private static int order(String section) {
-        return List.of("Write", "Read", "Query", "Mixed", "Maintenance", "Recovery", "Storage", "Memory").indexOf(section);
+        return List.of("Write", "Read", "Query", "Mixed", "Transactions", "Maintenance", "Recovery", "Storage", "Memory", "Delete").indexOf(section);
     }
 
     private static String rate(double perSecond) {

@@ -1,22 +1,15 @@
 package com.github.kookaburra;
 
 /**
- * An update or delete found a different version (or no object) than expected. Reload and retry.
+ * The version of an object does not match: it was changed (or deleted) since it was read.
  *
  * @Author: Fred Feng
  * @Date: 11/10/2026
  * @Version 1.0.0
  */
-public class OptimisticLockException extends KookaburraException {
-
-    private final long oid;
+public class OptimisticLockException extends ConflictException {
 
     public OptimisticLockException(long oid, String message) {
-        super(message);
-        this.oid = oid;
-    }
-
-    public long oid() {
-        return oid;
+        super(oid, message);
     }
 }

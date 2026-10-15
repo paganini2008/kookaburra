@@ -47,6 +47,11 @@ nav .links a:hover { color: var(--fg); text-decoration: none; }
 .btn { display: inline-block; padding: 11px 20px; border-radius: 10px; font-weight: 600; border: 1px solid var(--border); color: var(--fg); background: var(--bg2); }
 .btn:hover { text-decoration: none; border-color: var(--accent); box-shadow: 0 0 18px rgba(0,229,255,.25); }
 .btn.primary { background: var(--accent); color: #001018; border-color: var(--accent); }
+.video { width: 100%; height: auto; display: block; margin-top: 28px; border-radius: 14px; border: 1px solid var(--border); background: #000; box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 40px rgba(0,229,255,.08); }
+.shots { margin-top: 28px; }
+.shots figure { margin: 0; }
+.shots img { width: 100%; height: auto; display: block; border-radius: 10px; border: 1px solid var(--border); }
+.shots figcaption { color: var(--muted); font-size: 14px; margin-top: 8px; }
 .shot { margin-top: 44px; border-radius: 14px; border: 1px solid var(--border); box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 40px rgba(0,229,255,.08); width: 100%; height: auto; display: block; }
 .badges { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
 .badge { font: 600 12px/1 var(--mono); color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 6px 10px; }
@@ -54,6 +59,8 @@ nav .links a:hover { color: var(--fg); text-decoration: none; }
 /* cards */
 .grid { display: grid; gap: 16px; }
 .g4 { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+.g2 { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
+@media (max-width: 520px) { .g2 { grid-template-columns: 1fr; } }
 .g3 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 .card { background: var(--bg1); border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
 .card h3 { margin: 0 0 6px; font-size: 17px; }
@@ -108,6 +115,7 @@ footer .sp { margin-left: auto; }
   <div class="wrap">
     <a class="brand" href="#"><img src="https://paganini2008.github.io/kookaburra/assets/logo_64.png" width="30" height="24" alt="">Kookaburra</a>
     <div class="links">
+      <a href="#tutorial">Video</a>
       <a class="opt" href="#features">Features</a>
       <a class="opt" href="#how">How it works</a>
       <a href="#start">Quick start</a>
@@ -144,6 +152,20 @@ footer .sp { margin-left: auto; }
   </div>
 </header>
 
+<!-- Tutorial video -->
+<section id="tutorial">
+  <div class="wrap">
+    <div class="kicker">Tutorial</div>
+    <h2>Kookaburra in three minutes</h2>
+    <p class="lead">Declare an entity, query it with the chained API and OQL, use transactions and nested objects, then explore the data in Kookaburra Studio. English subtitles.</p>
+    <video class="video" controls preload="metadata" playsinline width="1920" height="1080"
+           poster="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial-poster.jpg">
+      <source src="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4" type="video/mp4">
+      <a href="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4">Download the tutorial (MP4, 2:33)</a>
+    </video>
+  </div>
+</section>
+
 <!-- 2. Why -->
 <section id="why">
   <div class="wrap">
@@ -166,14 +188,17 @@ footer .sp { margin-left: auto; }
     <h2>Everything in one small library</h2>
     <p class="lead">Embedded, durable, indexed and queryable, with a desktop tool to look inside.</p>
     <div class="grid g4">
-      <div class="card"><div class="ico">🧭</div><h3>Type-safe queries</h3><p><code>where(Book::getYear).ge(1960)</code> or the generated <code>Book_</code> metamodel. Refactoring-safe.</p></div>
+      <div class="card"><div class="ico">🧭</div><h3>Type-safe chained queries</h3><p><code>query(Book.class).where(Book::getYear).ge(1960).list()</code> or the generated <code>Book_</code> metamodel. Refactoring-safe.</p></div>
       <div class="card"><div class="ico">⚡</div><h3>Bitmap indexes</h3><p>Roaring postings, sorted dictionaries and value-sorted docs: millisecond filters on 10 M objects.</p></div>
       <div class="card"><div class="ico">🔤</div><h3>OQL</h3><p>JPQL-style SELECT / UPDATE / DELETE with the SQL-92 core: CASE, LIKE, DISTINCT, GROUP BY … HAVING.</p></div>
-      <div class="card"><div class="ico">🧬</div><h3>Rich models</h3><p>Inheritance, embedded objects, lists, maps and references with fetch.</p></div>
-      <div class="card"><div class="ico">🛡</div><h3>Durable & consistent</h3><p>WAL with group commit, crash recovery, MVCC snapshots, atomic batches, optimistic locks.</p></div>
+      <div class="card"><div class="ico">🧬</div><h3>Nested objects</h3><p>Inheritance, embedded objects at any depth, lists and maps of them (<code>whereAny</code>, <code>MEMBER OF</code>), references with fetch.</p></div>
+      <div class="card"><div class="ico">🔁</div><h3>Transactions (opt-in)</h3><p>SNAPSHOT isolation, read-your-writes, first committer wins, atomic <code>increment</code>, retries.</p></div>
+      <div class="card"><div class="ico">📦</div><h3>Large values</h3><p>Long texts and binaries such as images, MiB-sized, through flush, compaction and reopen.</p></div>
+      <div class="card"><div class="ico">🛡</div><h3>Durable & consistent</h3><p>WAL with group commit, crash recovery, MVCC snapshots, atomic batches, optimistic locks; deleted space is reclaimed.</p></div>
       <div class="card"><div class="ico">🧩</div><h3>Dynamic API</h3><p>A self-describing schema with evolution. Open any database without its classes.</p></div>
-      <div class="card"><div class="ico">🗜</div><h3>Compact & fast restart</h3><p>Zero-copy mmap segments, ~150 B / object, 1.6 ms reopen, 6.5 MiB heap for 10 M objects.</p></div>
-      <div class="card"><div class="ico">🖥</div><h3>Kookaburra Studio</h3><p>CRUD, OQL console, schema &amp; segments, JSON / JSONL / CSV export. One jar for every OS.</p></div>
+      <div class="card"><div class="ico">🗜</div><h3>Compact & fast restart</h3><p>Zero-copy mmap segments, ~150 B / object, 2.4 ms reopen, 6.4 MiB heap for 10 M objects.</p></div>
+      <div class="card"><div class="ico">🖥</div><h3>Kookaburra Studio</h3><p>Several databases, CRUD in transactions, nested-object inspector, image preview, OQL console, export. One jar for every OS.</p></div>
+      <div class="card"><div class="ico">💽</div><h3>Tested on disk</h3><p>Every shared suite runs in memory and on disk; ≥ 90% coverage; a 10 M-object stress run.</p></div>
     </div>
   </div>
 </section>
@@ -234,14 +259,13 @@ flowchart TB
       .insert(<span class="k">new</span> Book(<span class="s">"Hyperion"</span>, Genre.SCIFI, <span class="a">1989</span>, <span class="a">14.20</span>))
       .commit();
 
-    List&lt;String&gt; titles = db.from(Book.<span class="k">class</span>)
-            .filter(where(Book::getGenre).eq(Genre.SCIFI))
-            .filter(where(Book::getYear).ge(<span class="a">1960</span>))
-            .sorted(where(Book::getYear).desc())
+    List&lt;Book&gt; books = db.query(Book.<span class="k">class</span>)
+            .where(Book::getGenre).eq(Genre.SCIFI)
+            .where(Book::getYear).ge(<span class="a">1960</span>)
+            .orderBy(Book::getYear).desc()
             .limit(<span class="a">2</span>)
-            .map(where(Book::getTitle))
-            .toList();
-    System.out.println(titles);
+            .list();
+    System.out.println(books.stream().map(Book::getTitle).toList());
 }</pre></div>
     <div class="code out"><div class="label">Output</div><pre>[Hyperion, Neuromancer]</pre></div>
   </div>
@@ -255,7 +279,7 @@ flowchart TB
     <p class="lead">Each example: input → code → output, from a real run on six books.</p>
     <div class="grid g3">
       <div class="card"><h3>Group &amp; aggregate</h3><p>Count and average price per genre.</p>
-<pre>db.from(Book.class)
+<pre>db.query(Book.class)
   .groupBy(where(Book::getGenre))
   .agg(Q.count().as("books"),
        Q.avg(where(Book::getPrice)).as("avgPrice"))
@@ -270,7 +294,7 @@ CRIME   books=1 avg=7.40</div></div>
         <div class="res">J.R.R. Tolkien 1937
 Raymond Chandler 1939</div></div>
       <div class="card"><h3>Generated metamodel</h3><p>Compile-time field constants from the annotation processor.</p>
-<pre>db.from(Book.class)
+<pre>db.query(Book.class)
   .filter(Book_.tags.contains("classic"))
   .filter(Book_.price.lt(10.0))
   .count();</pre>
@@ -278,8 +302,8 @@ Raymond Chandler 1939</div></div>
       <div class="card"><h3>Admin without classes</h3><p>Dynamic access to any stored class.</p>
 <pre>DynamicCollection books = db.dynamic("Book");
 books.from()
-  .filter(books.field("author").startsWith("J"))
-  .toList().get(0).get("title");</pre>
+  .where("author").startsWith("J")
+  .list().get(0).get("title");</pre>
         <div class="res">"The Hobbit"</div></div>
       <div class="card"><h3>Safe concurrent edits</h3><p>Optimistic locking with <code>@Version</code>.</p>
 <pre>dune.setPrice(11.99);
@@ -287,14 +311,49 @@ db.update(dune);
 // OptimisticLockException if changed meanwhile</pre>
         <div class="res">dune=11.99</div></div>
       <div class="card"><h3>See the plan</h3><p>Which index answers each condition.</p>
-<pre>db.from(Book.class)
-  .filter(where(Book::getGenre).eq(SCIFI))
-  .filter(where(Book::getYear).between(1950, 1970))
+<pre>db.query(Book.class)
+  .where(Book::getGenre).eq(SCIFI)
+  .where(Book::getYear).between(1950, 1970)
   .explain();</pre>
         <div class="res">genre = 'SCIFI'  [sorted docs card=3]
 year IN [1950, 1970]  [sorted docs card=6]</div></div>
+      <div class="card"><h3>Transactions</h3><p>Opt-in SNAPSHOT transactions; conflicts are detected at commit.</p>
+<pre>try (Transaction tx = db.begin(Isolation.SNAPSHOT)) {
+  Account a = tx.get(Account.class, from);
+  tx.update(a.balance(a.getBalance() - 30));
+  tx.increment(Account.class, to, "balance", 30);
+  tx.commit();
+}</pre>
+        <div class="res">ConflictException if `a` changed meanwhile</div></div>
+      <div class="card"><h3>Nested objects</h3><p>Paths into embedded objects, lists and maps.</p>
+<pre>db.query(Shipment.class)
+  .whereAny(Shipment::getItems, Item::getSku)
+  .contains("pear").list();
+db.oql("SELECT s FROM Shipment s " +
+       "WHERE 'kiwi' MEMBER OF s.items.sku").list();</pre>
+        <div class="res">[S-1]   [S-2]</div></div>
+      <div class="card"><h3>Texts &amp; images</h3><p>Large values next to their metadata.</p>
+<pre>db.insert(new Document("scan", text,
+    Files.readAllBytes(Path.of("scan.png"))));
+// Base64 in JSON / CSV exports</pre>
+        <div class="res">tested to 16 MiB per value</div></div>
     </div>
     <img class="shot" src="https://paganini2008.github.io/kookaburra/assets/studio-query.png" alt="Kookaburra Studio: OQL console" width="1320" height="820">
+  </div>
+</section>
+
+<!-- Studio -->
+<section id="studio">
+  <div class="wrap">
+    <div class="kicker">Kookaburra Studio</div>
+    <h2>See inside every database</h2>
+    <p class="lead">A standalone desktop tool: several databases side by side, transactions, nested objects and binaries, an OQL console.</p>
+    <div class="grid g2 shots">
+      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-transaction.png" alt="Studio transaction" loading="lazy"><figcaption>Begin / Commit / Rollback per database; the status bar counts pending changes.</figcaption></figure>
+      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-nested.png" alt="Studio nested inspector" loading="lazy"><figcaption>Lists of embedded objects as <code>[ n elements ]</code>; the Key / Value / Type inspector expands every level.</figcaption></figure>
+      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-nested-editor.png" alt="Studio element editor" loading="lazy"><figcaption>Element tables for lists and maps: add, remove, reorder.</figcaption></figure>
+      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-binary.png" alt="Studio binary field" loading="lazy"><figcaption>Binary fields: format, size, image preview, load / save.</figcaption></figure>
+    </div>
   </div>
 </section>
 
@@ -307,24 +366,27 @@ year IN [1950, 1970]  [sorted docs card=6]</div></div>
     <div class="perf">
       <div class="card bars">
         <h3>Query latency (lower is better, log scale)</h3>
-        <div class="row"><span>get(oid)</span><div class="bar"><span style="width:6%"></span></div><span class="v">0.7 µs</span></div>
+        <div class="row"><span>get(oid)</span><div class="bar"><span style="width:6%"></span></div><span class="v">0.75 µs</span></div>
         <div class="row"><span>unique key (OQL)</span><div class="bar"><span style="width:28%"></span></div><span class="v">0.11 ms</span></div>
         <div class="row"><span>eq + range + limit</span><div class="bar"><span style="width:32%"></span></div><span class="v">0.2 ms</span></div>
-        <div class="row"><span>count(city = ?)</span><div class="bar"><span style="width:35%"></span></div><span class="v">0.3 ms</span></div>
-        <div class="row"><span>top-10 of 2.3 M</span><div class="bar"><span style="width:40%"></span></div><span class="v">0.6 ms</span></div>
-        <div class="row"><span>GROUP BY count</span><div class="bar"><span style="width:52%"></span></div><span class="v">3.9 ms</span></div>
-        <div class="row"><span>OQL GROUP BY + AVG</span><div class="bar"><span style="width:80%"></span></div><span class="v">253 ms</span></div>
-        <div class="row"><span>unindexed full scan</span><div class="bar"><span style="width:95%"></span></div><span class="v">0.78 s</span></div>
+        <div class="row"><span>count(city = ?)</span><div class="bar"><span style="width:35%"></span></div><span class="v">0.24 ms</span></div>
+        <div class="row"><span>top-10 of 2.3 M</span><div class="bar"><span style="width:38%"></span></div><span class="v">0.40 ms</span></div>
+        <div class="row"><span>GROUP BY count</span><div class="bar"><span style="width:52%"></span></div><span class="v">4.1 ms</span></div>
+        <div class="row"><span>OQL GROUP BY + AVG</span><div class="bar"><span style="width:80%"></span></div><span class="v">246 ms</span></div>
+        <div class="row"><span>unindexed full scan</span><div class="bar"><span style="width:95%"></span></div><span class="v">0.76 s</span></div>
       </div>
       <div class="card">
         <h3>Writes, storage, recovery</h3>
         <table>
           <tr><th>Metric</th><th>Result</th></tr>
-          <tr><td>bulk insert, batches of 100 (ASYNC)</td><td class="n">485 k/s</td></tr>
-          <tr><td>durable inserts, 16 / 128 threads (SYNC)</td><td class="n">3.1 / 19.7 k/s</td></tr>
-          <tr><td>compact 10 M objects (1.4 GB)</td><td class="n">10.1 s</td></tr>
-          <tr><td>reopen</td><td class="n">1.6 ms</td></tr>
-          <tr><td>heap after reopen</td><td class="n">6.5 MiB</td></tr>
+          <tr><td>bulk insert, batches of 100 (ASYNC)</td><td class="n">632 k/s</td></tr>
+          <tr><td>durable inserts, 16 / 128 threads (SYNC)</td><td class="n">3.7 / 27.8 k/s</td></tr>
+          <tr><td>compact 10 M objects (1.4 GB)</td><td class="n">11.4 s</td></tr>
+          <tr><td>transactions: transfers, 16 threads</td><td class="n">135 k/s</td></tr>
+          <tr><td>atomic increments on one hot counter</td><td class="n">251 k/s</td></tr>
+          <tr><td>OQL DELETE of 10.6 M objects → disk after compact</td><td class="n">1.16 M/s → 0 B</td></tr>
+          <tr><td>reopen</td><td class="n">2.4 ms</td></tr>
+          <tr><td>heap after reopen</td><td class="n">6.4 MiB</td></tr>
           <tr><td>disk footprint</td><td class="n">148 B / obj</td></tr>
         </table>
         <p class="env">Apple M2 Max · 32 GB · SSD (fsync ≈ 4 ms) · JDK 17 · -Xmx8g. Durable single writes scale with concurrency: one fsync per commit group.
@@ -340,11 +402,13 @@ year IN [1950, 1970]  [sorted docs card=6]</div></div>
     <div class="kicker">Documentation</div>
     <h2>Learn more</h2>
     <div class="grid g4" style="margin-top:24px">
+      <a class="card" href="#tutorial"><div class="ico">🎬</div><h3>Video tutorial</h3><p>Three minutes from entity to Studio.</p></a>
       <a class="card" href="#start"><div class="ico">🚀</div><h3>Getting Started</h3><p>Dependency, first entity, first query.</p></a>
       <a class="card" href="https://github.com/paganini2008/kookaburra#examples"><div class="ico">🧪</div><h3>Examples</h3><p>Typed API, OQL, grouping, dynamic access.</p></a>
       <a class="card" href="https://github.com/paganini2008/kookaburra#configuration"><div class="ico">⚙️</div><h3>Configuration</h3><p>One <code>kookaburra.properties</code> for every setting.</p></a>
       <a class="card" href="design.html"><div class="ico">📘</div><h3>API Reference</h3><p>QueryStream, fields, OQL grammar, dynamic API.</p></a>
       <a class="card" href="design.html"><div class="ico">🏗</div><h3>Architecture</h3><p>Segment format, execution, MVCC, recovery.</p></a>
+      <a class="card" href="https://github.com/paganini2008/kookaburra/blob/main/docs/transaction-design.md"><div class="ico">🔁</div><h3>Transactions</h3><p>SNAPSHOT + OCC design, decisions T1–T12.</p></a>
     </div>
   </div>
 </section>

@@ -214,7 +214,7 @@ db/
 ├─ wal/
 │  └─ wal_<firstSeq>.log
 └─ col/<collection>/
-   ├─ seg_<id>.seg               immutable segment (≤ 1.5 GB)
+   ├─ seg_<id>.odbf              immutable segment data file (≤ 1.5 GB; "object database file")
    └─ seg_<id>_<gen>.del         delete bitmap (Roaring), generation <gen>
 ```
 
@@ -227,7 +227,7 @@ db/
 One segment = one file = rows of one collection, **sorted by OID**, docid = `0..N-1` (int). Little-endian. Every section has a CRC32C.
 
 ```
-seg_<id>.seg   (little-endian, sections 8-byte aligned)
+seg_<id>.odbf   (little-endian, sections 8-byte aligned)
 ┌────────────────────────────────────────────────────────────┐
 │ header      magic "KKBSEG01" (8) · format (4) · pad (4)    │
 ├────────────────────────────────────────────────────────────┤
@@ -380,7 +380,7 @@ sequenceDiagram
     S->>S: active MemSegment ≥ memSegmentBytes → frozen (flushSeq = its last seq)
     S->>F: after the group is published: build(job)
     F->>F: rows live at flushSeq, sorted by OID → SegmentWriter
-    F->>D: seg_<id>.seg (tmp → fsync → rename → fsync dir), mmap
+    F->>D: seg_<id>.odbf (tmp → fsync → rename → fsync dir), mmap
     F->>S: install task
     S->>S: carry over deletes on the frozen rows with seq > flushSeq → segment delete log
     S->>S: replace MemSegment by segment → new Version
@@ -517,6 +517,29 @@ Lambdas (`p -> p.getAge()`), bound references and non-persistent getters are rej
 Generated metamodel naming: `Person` → `Person_`; nested `Outer.Inner` → `Outer_Inner_`; embedded `home` → nested class `Home_ extends EmbeddedPath` with instance fields (`Person_.home.city`). Recursive embeddables are a compile error.
 
 ### 9.3 QueryStream
+
+**API style: chained everywhere** (D37). Conditions, sort keys and slices are method calls on the stream:
+
+```java
+List<Person> page = db.query(Person.class)
+    .where(Person::getCity).eq("Sydney")          // indexed
+    .where(Person::getAge).gt(30)
+    .orderBy(Person::getAge).desc()
+    .orderBy(Person::getName).asc()
+    .skip(20).limit(10)
+    .list();
+
+List<DynamicObject> rows = db.dynamic("Person").from()            // dynamic: stored paths
+    .where("home.city").eq("Perth").orderBy("age").desc().list();
+```
+
+| Chained call | Equivalent | Notes |
+|---|---|---|
+| `query(X.class)` | `from(X.class)` | on `ObjectDB`, `Transaction` |
+| `.where(getter)` → `eq / notEq / in / gt / ge / lt / le / between / isNull / isNotNull / isTrue / isFalse / startsWith / contains` | `.filter(Q.where(getter).eq(...))` | conditions AND together; reference fields compare by OID; `.where("path")` for dynamic queries |
+| `.orderBy(getter)` → `asc / desc / ascNullsFirst / descNullsLast` | `.sorted(Q.where(getter).desc(), ...)` | keys apply in call order |
+| `.list()` | `.toList()` | |
+| `.filter(or(a, b))`, `.filter(not(a))` | — | OR / NOT in the same chain |
 
 Pipeline has a **fixed canonical order**; calls out of order throw `IllegalStateException`.
 
@@ -802,6 +825,7 @@ Index execution **must** equal `Pred.test` / `Order.compare` on objects. Enforce
 | Enum order | declaration order (`Enum.compareTo`) |
 | Time zone | **UTC everywhere**: `LocalDateTime` is stored as UTC wall time, `Instant` is UTC; OQL `TIMESTAMP` / `INSTANT` literals are UTC; Studio displays UTC (labelled); the engine never uses `ZoneId.systemDefault()`. `ZonedDateTime` / `OffsetDateTime` / `java.util.Date` are not first-class types (store an `Instant`) |
 | Multi-valued `contains` | any element matches |
+| Path through an embedded list (`items.sku`) | multi-valued, "any element" (`contains`, `MEMBER OF`, `whereAny`); not indexed → scan |
 | Embedded collection paths | element correlation **not** supported (two conditions may match different elements) |
 | Polymorphism | `from(A)` includes all subclasses; subclass-only fields are null for others |
 
@@ -819,10 +843,21 @@ Index execution **must** equal `Pred.test` / `Order.compare` on objects. Enforce
 | `Snapshot`, `Cursor`, `WriteBatch`, `QueryStream` | not thread-safe |
 | Back-pressure | too many segments / frozen memtables → writers throttled |
 
-### 12.1 Transactions (scope of v1)
+### 12.1 Transactions
 
-| Guarantee | Provided by |
+Full design: **[transaction-design.md](transaction-design.md)** (implemented 2026-10-15).
+
+| Aspect | Design |
 |---|---|
+| Switch | `kookaburra.transactions` (default `false` = autocommit only, no overhead) |
+| Isolation | `SNAPSHOT`: reads from the snapshot taken at `begin()` plus own writes; write skew possible (`SERIALIZABLE` on the roadmap) |
+| Concurrency control | optimistic: write set buffered; at commit the sequencer checks a conflict table (OID → last seq) — first committer wins; stale `@Version` entities rejected at the call |
+| Read-your-writes | private overlay `MemSegment` + masked snapshot views → every query / OQL / dynamic read sees the transaction's writes |
+| Atomicity | one WAL record per commit; a failing call has no effect (statement-level) |
+| Hot spots | `increment(Class, oid, field, delta)`: applied on the latest value at commit, never conflicts |
+| API | `db.begin(Isolation.SNAPSHOT)`, `tx.get / query / oql / dynamic / insert / update / delete / increment / commit / rollback`, `db.inTransaction(work, retries)`, `db.inTransactionResult(fn)` |
+
+---|---|
 | Atomic multi-object, multi-collection write | `WriteBatch`: one WAL record, all or nothing |
 | Atomic visibility | global `visibleSeq`: a batch is seen entirely or not at all |
 | Repeatable reads across queries | `Snapshot` (MVCC) |
@@ -830,7 +865,7 @@ Index execution **must** equal `Pred.test` / `Order.compare` on objects. Enforce
 | Durability | WAL + fsync per commit group (`SYNC`) |
 | **Not provided** | interactive `begin … commit / rollback`, read-your-own-uncommitted-writes in queries, serializable isolation |
 
-Decision D33: kept as is for v1. A `db.transaction(tx -> …)` helper (snapshot reads + batch + version check of read objects at commit, retried on conflict) is in the backlog.
+**Next step (draft for review): full PostgreSQL-aligned transactions — see [transaction-design.md](transaction-design.md).** Decision D33: kept as is for v1. A `db.transaction(tx -> …)` helper (snapshot reads + batch + version check of read objects at commit, retried on conflict) is in the backlog.
 
 ---
 
@@ -844,7 +879,9 @@ flowchart LR
     V --> X["input files deleted by cleanup"]
 ```
 
-- `ObjectDB.compact()`: flush, then repeatedly merge all idle adjacent segments up to `segmentMaxBytes`.
+- **Reclaiming deletes** (like Lucene `deletesPctAllowed`, RocksDB deletion-triggered compaction): when no tier run is due, segments without any live row are **dropped** (no rewrite, files deleted by cleanup), otherwise the segment with the most garbage is rewritten on its own once `deleted / rows ≥ compaction-garbage-ratio` (default 0.3). This covers segments that never meet a tier partner (alone in their tier, or above `segmentMaxBytes`).
+- `ObjectDB.compact()`: flush, wait for flushes and merges already running, then repeatedly merge all idle adjacent segments up to `segmentMaxBytes` and rewrite every segment that still has deleted rows; afterwards no segment holds deleted rows.
+- `ObjectDB.flush()` also waits for flushes started earlier by the size threshold (it returns when nothing is left in frozen MemSegments).
 - Merges rebuild columns from the current schema, so newly added indexes cover old data after a merge.
 - Old snapshots may still read input segments: on POSIX the unlinked files stay mapped until the `MappedFile` is garbage-collected (reference counting: backlog).
 - **Back-pressure**: writer threads wait (≤ 30 s) while frozen MemSegments + pending merges exceed `maxSegments / 8 + 2`; the sequencer itself never blocks on it (install tasks run on it).
@@ -914,8 +951,15 @@ Later sources override earlier ones (`Settings.load`, `Config.load` / `Config.fr
 | `kookaburra.mem-segment-bytes` | `64MB` | core | MemSegment size before freeze → flush |
 | `kookaburra.segment-max-bytes` | `512MB` | core | compaction output limit (capped at 1.5 GB) |
 | `kookaburra.compaction-fan-in` | `8` | core | segments merged per tier |
+| `kookaburra.compaction-garbage-ratio` | `0.3` | core | share of deleted rows at which a segment is rewritten on its own (§13) |
 | `kookaburra.max-segments` | `64` | core | per collection; above it writers are throttled |
 | `kookaburra.write-backlog` | `10` | core | frozen MemSegments waiting for flush before back-pressure |
+| `kookaburra.flush-threads` | `2` | core | threads for flushes and compactions |
+| `kookaburra.transactions` | `false` | core | enables multi-statement transactions (off = autocommit, no conflict history) |
+| `kookaburra.tx-timeout` | `60s` | core | open transactions older than this are rolled back |
+| `kookaburra.tx-max-bytes` | `100MB` | core | encoded bytes buffered by one transaction |
+| `kookaburra.tx-retries` | `3` | core | retries of `inTransaction` on `ConflictException` |
+| `kookaburra.tx-conflict-table-max` | `2000000` | core | conflict-table entries before the oldest open transaction is evicted |
 | `kookaburra.bloom-fpp` | `0.01` | core | OID bloom filter false-positive rate per segment |
 | `kookaburra.auto-postings-ratio` | `16` | core | AUTO index writes postings when rows / distinct ≥ ratio |
 | `kookaburra.postings-or-max` | `64` | core | range / IN over at most this many postings ORs bitmaps, else scans ordinals |
@@ -948,20 +992,23 @@ Sizes accept `KB` / `MB` / `GB`.
 
 **Environment**: Apple M2 Max (12 cores), 32 GB, internal SSD (APFS, `force()` = `F_FULLFSYNC` ≈ 4 ms), macOS, JDK 17.0.12, `-Xmx8g`; 10 M objects (`Member`: indexed `name` (unique), `city` (50 values), `age` ORDINAL, `tags` list; plain `score`, `balance`, `active`, `note`), 18 segments after load, 4 after compaction.
 
-| Benchmark (10 M objects) | Target | Before tuning | **Result** |
+| Benchmark (10 M objects, run of 2026-10-15) | Target | Before tuning | **Result** |
 |---|---|---|---|
-| bulk insert, batches of 100, `ASYNC`, 1 thread | ≥ 300 k/s | 468 k/s | **485 k/s** ✅ |
-| single insert, `SYNC`, 16 / 128 threads | ≈ threads ÷ fsync latency | 3.1 k/s | **3.1 k/s / 19.7 k/s** ✅ (fsync 4 ms) |
-| `get(oid)` MemSegment / segment (p50) | ≤ 2 µs / ≤ 10 µs | 0.75 / 0.92 µs | **0.67 / 0.71 µs** ✅ |
-| `count()` with one BITMAP `eq` | ≤ 5 ms | 0.23 ms | **0.30 ms** ✅ |
-| `eq` + `range` + `limit(100)` | ≤ 20 ms | 0.18 ms | **0.20 ms** ✅ |
-| top-10 by an ORDINAL column, 2.3 M matches | ≤ 50 ms / 1 M | 187 ms | **0.6 ms** ✅ |
-| `groupBy(city).agg(count)` | ≤ 100 ms | 902 ms | **3.9 ms** ✅ |
+| bulk insert, batches of 100, `ASYNC`, 1 thread | ≥ 300 k/s | 468 k/s | **632 k/s** ✅ |
+| single insert, `SYNC`, 16 / 128 threads | ≈ threads ÷ fsync latency | 3.1 k/s | **3.7 k/s / 27.8 k/s** ✅ (fsync 4 ms) |
+| `get(oid)` MemSegment / segment (p50) | ≤ 2 µs / ≤ 10 µs | 0.75 / 0.92 µs | **0.63 / 0.75 µs** ✅ |
+| `count()` with one BITMAP `eq` | ≤ 5 ms | 0.23 ms | **0.24 ms** ✅ |
+| `eq` + `range` + `limit(100)` | ≤ 20 ms | 0.18 ms | **0.21 ms** ✅ |
+| top-10 by an ORDINAL column, 2.3 M matches | ≤ 50 ms / 1 M | 187 ms | **0.40 ms** ✅ |
+| `groupBy(city).agg(count)` | ≤ 100 ms | 902 ms | **4.1 ms** ✅ |
 | point lookup on a unique indexed string (OQL) | — | 13 ms | **0.11 ms** |
-| OQL `GROUP BY city, COUNT, AVG(age) WHERE age > 40` | — | 756 ms | **253 ms** |
-| unindexed predicate, full scan of 10 M rows | — | did not finish (full row decode) | **0.78 s** |
-| `compact()` 10 M objects (1.4 GB) | — | 17.7 s | **10.1 s** |
-| reopen (no WAL to replay) / heap after reopen | — | — | **1.6 ms / 6.5 MiB** (mmap) |
+| OQL `GROUP BY city, COUNT, AVG(age) WHERE age > 40` | — | 756 ms | **246 ms** |
+| unindexed predicate, full scan of 10 M rows | — | did not finish (full row decode) | **0.76 s** |
+| `compact()` 10 M objects (1.4 GB) | — | 17.7 s | **11.4 s** |
+| transactions: transfers (read 2, update 2), 16 threads | ≥ 50 k/s | — | **135 k/s** ✅ (0.022 retries / commit) |
+| `increment` of one hot counter, 16 threads | no lost updates | — | **251 k/s** ✅ |
+| OQL `DELETE` of all 10.6 M objects, then `compact()` | space reclaimed | 1.5 GB left (4 segments) | **1.16 M/s, 0 B left** ✅ (D44) |
+| reopen (no WAL to replay) / heap after reopen | — | — | **2.4 ms / 6.4 MiB** (mmap) |
 | disk footprint | — | 136 B / object | **148 B / object** (+ sdoc lists) |
 
 **Problems found and fixed** (M11):
@@ -973,8 +1020,9 @@ Sizes accept `KB` / `MB` / `GB`.
 | top-N 187 ms | key read + 2 allocations + heap push / pop per match | index-order walk with early stop; allocation-free rejects (§10.3) |
 | unique-key lookup 13 ms | AUTO index without postings scanned 10 M ordinals | value-sorted doc lists (D32) |
 | flush / merge memory | a RoaringBitmap per distinct value built even when postings were not written | build postings only when written |
+| deleting all 10 M objects left 1.5 GB on disk | size-tiered merging never picked lone / oversized segments | garbage-driven compaction, `flush()` / `compact()` wait for running work (D44) |
 
-**Known limits** (documented, not bugs): durable single writes are bound by fsync latency × concurrency; sorting / filtering on unindexed fields reads rows (≈ 80 ns / row); a flush / merge buffers the whole segment in heap (streaming writer: backlog); mixed read p99 (149 ms) is dominated by sorts on the unindexed `score`.
+**Known limits** (documented, not bugs): durable single writes are bound by fsync latency × concurrency; sorting / filtering on unindexed fields reads rows (≈ 80 ns / row); a flush / merge buffers the whole segment in heap (streaming writer: backlog); mixed read p99 (~150 ms) is dominated by sorts on the unindexed `score`.
 
 ---
 
@@ -989,12 +1037,12 @@ Independent desktop application: module / jar **`kookaburra-face`** (own launche
 | Icons | Ikonli 12.4.0 (Material Design 2 pack) |
 | Editors | RichTextFX 0.11.7 `CodeArea`: OQL console, JSON object editor, explain / log viewer |
 | Packaging | separate Maven project; dev run `mvn -f kookaburra-face/pom.xml javafx:run`; **distribution** `mvn -f kookaburra-face/pom.xml -P dist package` → `bin/kookaburra-face.jar` (fat jar, JavaFX natives of the build OS) + `studio.sh` / `studio.cmd` + `kookaburra.properties` |
-| Data directory | `--data=<dir>` > `kookaburra.data` (relative to the jar) > `<dir of the jar>/data`; `--demo` = in-memory sample database |
+| Data directory | `--data=<dir>` > `kookaburra.data` (relative to the jar) > `<dir of the jar>/data`; `--demo` = in-memory sample database; both may be combined (two databases in the navigator) |
 | Input safety | editor values are type-checked before the dialog closes (field-qualified message, input kept); the Data filter is a condition only (wrapped in parentheses: no `LIMIT` / `ORDER BY`); `EXPLAIN UPDATE / DELETE` only shows the plan; opening a non-empty directory that is not a database asks first; errors name the directory and the reason |
 | Platforms | one jar for **Windows x64, Linux x64, macOS Apple Silicon** (JavaFX natives of all three; `.dll` / `.so` / `.dylib` do not collide); Intel Mac / Linux ARM: `-Djavafx.mac=mac` / `-Djavafx.linux=linux-aarch64`. Needs a Java 17+ runtime; starts with a double-click (`Launcher`, `StudioApplication`). Verified: macOS aarch64 (double-click), Linux x86_64 (Docker + Xvfb) |
 | Logging | logback, see §15.1 |
 | Start-up | splash (logo, Studio + core version, loading bar) for ≥ 1.2 s while the main window is built, then fades out |
-| UI tests | TestFX 4.0.18 + Monocle 17.0.10, headless (software rendering); screenshots → `target/screenshots`, published copies in `docs/assets/studio-*.png`; boundary suite `StudioEdgeCaseTest`; `-P visible` replays it on the real display with pauses |
+| UI tests | TestFX 4.0.18 + Monocle 17.0.10, headless (software rendering); `StudioNestedTest` / `StudioMultiDbTest` run in memory and on disk; `TutorialRecorder` (not in the regular run) records the tutorial frames; screenshots → `target/screenshots`, published copies in `docs/assets/studio-*.png`; boundary suite `StudioEdgeCaseTest`; `-P visible` replays it on the real display with pauses |
 
 ### 17.1 Layout
 
@@ -1046,13 +1094,14 @@ Independent desktop application: module / jar **`kookaburra-face`** (own launche
 
 | Tab / area | Feature |
 |---|---|
-| Collections tree (sidebar) | collections + class hierarchy, live object counts; selecting a class opens it in Data and Schema |
+| Navigator (sidebar) | **several databases at once**: tree database → classes (hierarchy, live object counts); close button per database; a directory already open is focused, not reopened; same-named databases get unique labels (`demo`, `demo (2)`); selecting a class opens it in Data and Schema |
+| Transactions | toolbar **Begin / Commit / Rollback** per database (no cross-database transactions); create / edit / delete / console DML go into the open transaction; status `TX #id · SNAPSHOT · N pending changes`; `ConflictException` → dialog; Studio opens databases with `kookaburra.transactions=true`, timeout 30 min; closing a database or the window with pending changes asks first |
 | About | product, version (filtered from the POM), GitHub link, author, e-mail, license, core / JavaFX / Java versions |
-| Data | paged grid with `#` row numbers; column header click = server-side sort; quick filter box = OQL `WHERE` fragment; reload button keeps filter / sort / page; **export** of all matches (filter + sort, every page) as JSON / JSONL (one object per line, recommended for large exports) / CSV (RFC 4180, refs as OIDs), fetched in chunks of 5 000; double-click a row = edit |
-| Object editor — Form | widgets per `ValueType` (text, spinner, checkbox, date picker, enum combo, ref picker, list editor, nested embedded form) |
-| Object editor — JSON | RichTextFX JSON with highlighting + validation against schema |
+| Data | paged grid with `#` row numbers; embedded objects flattened into dotted columns, lists of embedded objects / maps summarised as `[ 2 elements ]` / `{ 3 entries }`, long texts cut at 200 characters, binaries as `PNG · 1.1 KiB` (full value in the tooltip); **inspector** on the right: Key / Value / Type tree of the selected object (embedded objects, list elements `[i]`, map keys; lists ≤ 10 elements expanded), double-click a reference = open its target (dangling references reported);  column header click = server-side sort; quick filter box = OQL `WHERE` fragment; reload button keeps filter / sort / page; **export** of all matches (filter + sort, every page) as JSON / JSONL (one object per line, recommended for large exports) / CSV (RFC 4180, refs as OIDs), fetched in chunks of 5 000; double-click a row = edit |
+| Object editor — Form | widgets per `ValueType` (text, checkbox, date picker, enum combo, OID for references); embedded objects = titled nested sections (any depth, dotted paths); **lists of embedded objects and maps = element tables** (one row per element / entry, map key column, nested fields as dotted columns, add / remove / move up / down; duplicate or empty keys and bad values are reported); **binaries**: format + size, image preview (PNG / JPEG / GIF / BMP), Load… / Save… / Clear; **long or multi-line texts** in a text area (⤢ expands short ones); values nested deeper than an element table (a list inside a list element) are kept and edited in the JSON tab |
+| Object editor — JSON | RichTextFX JSON with highlighting + validation against schema; binaries as Base64, those over 64 KiB as a placeholder that keeps the stored bytes (megabytes of Base64 would stall the editor) |
 | CRUD | create / update (optimistic lock: conflict dialog with reload / overwrite) / delete (multi-select = one batch) |
-| Query | OQL console: highlighting from `OqlLexer` tokens, Ctrl+Space completion (classes after FROM / JOIN / UPDATE, `alias.` paths, keywords), Ctrl / ⌘ + Enter runs; results paged (100 / 500 / 1000; statements with their own LIMIT / OFFSET are not re-paged) with `#` row numbers; whole-object results (`SELECT x`) expand to one column per property; `EXPLAIN` view; history |
+| Query | OQL console: highlighting from `OqlLexer` tokens, Ctrl+Space completion (classes after FROM / JOIN / UPDATE, `alias.` paths, keywords), Ctrl / ⌘ + Enter runs; results paged (100 / 500 / 1000; statements with their own LIMIT / OFFSET are not re-paged) with `#` row numbers; whole-object results (`SELECT x`) expand to one column per property; `EXPLAIN` view; history; **export** of the statement's whole result (JSON / JSONL / CSV, read in chunks of 5 000) |
 | Schema | **left**: metadata of the selected class — full name, class id, parent, collection, subclasses, `@Id` / `@Version`, layouts, count; field table (path, type, index, declared in; scrolls as one panel, tooltips for clipped text). **right**: segments of every collection (memory / disk, documents, live, garbage %, size) + layout history |
 
 ### 17.4 Threading
@@ -1078,7 +1127,7 @@ DB calls never run on the FX thread; long queries are cancellable.
 ```
 kookaburra/
 ├─ docs/                         GitHub Pages: index.html (landing page), design.html (renders design.md), design.md,
-│                                 benchmark-10m.md, blogger/ (zh, en, medium), assets/ (logo, screenshots, diagrams), .nojekyll
+│                                 benchmark-10m.md, transaction-design.md (draft), blogger/ (zh, en, medium), assets/ (logo, screenshots, diagrams), .nojekyll
 ├─ README.md                     English overview: features, quick start, examples, configuration, performance
 ├─ kookaburra.properties         the single settings file (bundled into kookaburra-core as defaults)
 ├─ bin/                          Studio distribution (built, not versioned): kookaburra-face.jar, scripts, logs/, data/
@@ -1117,6 +1166,7 @@ kookaburra/
 | M9 | Dynamic access + OQL (SQL-92 core: expressions, functions, CASE, LIKE, DISTINCT, GROUP BY / HAVING, aggregates incl. COUNT DISTINCT, ORDER BY alias/position) | OQL ≡ typed API on the differential suite; SQL-92 semantics tests | ✅ |
 | M10 | Kookaburra Studio (starts after M6) | CRUD, query console, JSON editor, explain on a sample DB | ✅ |
 | M11 | Performance: ordinal fast paths, tuning against §16.1 targets with the stress harness | targets met or gaps documented | ✅ |
+| M12 | Transactions ([transaction-design.md](transaction-design.md)): SNAPSHOT + OCC, read-your-writes, increments; chained query API | anomaly / conflict / differential / concurrency tests, coverage ≥ 90 % | ✅ |
 
 ### 18.3 Backlog
 
@@ -1125,7 +1175,7 @@ kookaburra/
 - [ ] Global ordinal cache for frequent group-by
 - [ ] Column overlay for hot single-field updates
 - [ ] Streaming segment writer (peak heap of flush / merge = segment size today)
-- [ ] `db.transaction(tx -> …)` helper: snapshot reads + batch + version check at commit, retry on conflict (D33)
+- [ ] Transactions roadmap ([transaction-design.md](transaction-design.md) §2): `SERIALIZABLE`, savepoints, unique constraints, thread-bound transaction + Spring adapter, per-transaction durability, Studio console `BEGIN / COMMIT`
 - [ ] Studio `jpackage` installers with a bundled runtime
 - [ ] `@Renamed`, `BigDecimal`, element-correlated embedded collections
 
@@ -1171,11 +1221,27 @@ kookaburra/
 | D34 | Logging: SLF4J API in the library, logback in Studio | Library must not impose a backend; Studio needs files next to the jar |
 | D35 | One Studio jar for Windows, Linux and macOS | User request; native library names differ per OS, so they coexist |
 | D36 | License Apache-2.0 | User decision; matches dependencies (RoaringBitmap, AtlantaFX, Ikonli: Apache-2.0; ANTLR: BSD; JavaFX: GPL+CE) |
+| D37 | One chained API style (`query().where().eq().orderBy().desc().list()`), `from / filter / toList` kept as equivalents | user decision: uniform fluent style across the database APIs |
+| D38 | Transactions: SNAPSHOT + OCC + redo-only, opt-in switch; details T1–T12 in [transaction-design.md](transaction-design.md) | enterprise-mainstream (FoundationDB / RocksDB optimistic / Oracle & PostgreSQL snapshot semantics) and fits the single sequencer |
+| D39 | OIDs allocated at insert by per-class atomic counters (not in the sequencer) | final OIDs inside transactions; gaps after rollbacks like database sequences |
+| D40 | Flush / compaction on a fixed thread pool (`kookaburra.flush-threads`) | several collections flush in parallel |
+| D41 | Segment data files use the `.odbf` extension (`seg_<id>.odbf`); `.seg` files of older databases are renamed on open | user decision: recognisable data files |
+| D42 | Paths through embedded lists are multi-valued with "any element" semantics, unindexed | matches JPQL `MEMBER OF` / MongoDB dotted paths; indexing element paths deferred |
+| D43 | Studio holds several databases; transactions are per database | user decision; cross-database atomicity would need 2PC (non-goal) |
+| D44 | Garbage-driven compaction: drop fully deleted segments, rewrite a segment alone at `compaction-garbage-ratio`; `flush()` / `compact()` wait for work already running | 10 M benchmark: after deleting everything, 4 segments (1.5 GB) stayed on disk because size-tiered merging never picked them |
+| D45 | Nested values in Studio follow document-database tools (MongoDB Compass, Studio 3T): summaries in the grid, Key / Value / Type tree, element tables in the form | user request: mainstream presentation |
+| D46 | Binaries in JSON / CSV are Base64 (Jackson's `byte[]` default, MongoDB Extended JSON `$binary.base64`); the editor shows large ones as a placeholder | lossless exports; a usable editor |
+| D47 | The shared core suites run twice: in memory and on disk (`disk-suite` surefire execution, `TestDbs`) | user requirement: the file-based database is the product, the in-memory one a convenience |
 
 ## 20. Changelog
 
 | Date | Change |
 |---|---|
+| 2026-10-15 | Tutorial video (2:33, English subtitles, original synthesised BGM): `TutorialRecorder` drives Studio and renders frames, `docs/tools/make-tutorial.sh` (ffmpeg: crossfades, libass subtitles, loudnorm) → `docs/assets/kookaburra-tutorial.mp4`, played on the website; 10 M benchmark re-run (§16.1) |
+| 2026-10-15 | Garbage-driven compaction and waiting `flush()` / `compact()` (D44, §13); Studio nested-object UI: grid summaries, inspector, element tables, binary fields with preview, long texts (D45, §17.3); binaries as Base64 in JSON / CSV with an editor placeholder (D46); demo data with nested objects, photos and long notes; LOB tests (texts to 3 M characters, binaries to 16 MiB); core suites also on disk (D47) |
+| 2026-10-15 | Studio: transactions (Begin / Commit / Rollback, conflict dialog), several databases in one window (D43), `--data` + `--demo` together; `.odbf` segment files (D41); nested objects: `Map<String, Embeddable>`, element paths through embedded lists (D42), keywords as OQL path segments; bench Transactions + Delete phases; memory + disk variants of transaction / nested / Studio tests |
+| 2026-10-15 | M12: transactions per [transaction-design.md](transaction-design.md) (opt-in `kookaburra.transactions`), atomic `increment`, OIDs at insert, flush thread pool; chained query API (`query / where / orderBy / list`, dynamic `where("path")`); Studio: export of console results (JSON / JSONL / CSV) |
+| 2026-10-13 | Draft [transaction-design.md](transaction-design.md): PostgreSQL-aligned isolation levels (RC / RR / SERIALIZABLE), read-your-writes overlay, optimistic commit validation, savepoints, error codes — for review, no code yet |
 | 2026-10-11 | Boundary testing of Studio: fixed `EXPLAIN DELETE` executing (core `execute()` now refuses EXPLAIN), `LIMIT 0` returning a row, empty last page after deletes, stale tree counts after console DML, editor closing on type errors, filter accepting `LIMIT`; readable OQL syntax errors (unterminated strings named, long expected-token sets cut); malformed dates reported per field; license Apache-2.0 confirmed (D36) |
 | 2026-10-11 | M11 performance pass from the 10 M benchmark: path-only row decoding, ordinal / postings group-by, index-order top-N, sdoc lists (§5, §10.3, §10.4); SLF4J logging (§15.1); transactions scope (§12.1); Studio: export JSON / JSONL / CSV, Schema tab merges metadata, cross-platform jar, logback, `StudioApplication` |
 | 2026-10-11 | M10 done. Single `kookaburra.properties` (§16); Studio fat jar (`-P dist` → `bin/`), default data dir next to the jar; Schema tab merges class metadata + segments; `#` row numbers; Data reload button |

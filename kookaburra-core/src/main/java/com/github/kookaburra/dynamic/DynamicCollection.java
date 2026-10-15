@@ -55,19 +55,7 @@ public class DynamicCollection {
 
     /** Field by dotted path; the {@code @Id} / {@code @Version} names address the OID / version. */
     public DynField field(String path) {
-        Schema schema = backend.schema();
-        ClassDef root = schema.byName(def.collection());
-        if (path.equals(root.idField())) {
-            return new DynField(path, TypeDef.scalar(ValueType.INT64), DynField.Kind.OID);
-        }
-        if (path.equals(root.versionField())) {
-            return new DynField(path, TypeDef.scalar(ValueType.INT64), DynField.Kind.VERSION);
-        }
-        TypeDef t = new Planner(schema, def.collection(), (a, b) -> null).typeOf(path);
-        if (t == null) {
-            throw new IllegalArgumentException("no stored field '" + path + "' in " + def.simpleName() + " or its subclasses");
-        }
-        return new DynField(path, t, DynField.Kind.VALUE);
+        return DynField.of(backend.schema(), def, path);
     }
 
     /** Query over this class and its subclasses. */

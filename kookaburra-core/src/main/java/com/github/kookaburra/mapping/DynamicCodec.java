@@ -179,6 +179,14 @@ public class DynamicCodec {
                 }
                 return out;
             }
+            case MAP: {
+                if (t.element().kind() != ValueType.EMBEDDED) {
+                    return c;
+                }
+                Map<Object, Object> out = new LinkedHashMap<>();
+                ((Map<?, ?>) c).forEach((k, v) -> out.put(k, toDynamic(t.element(), v)));
+                return out;
+            }
             default:
                 return c;
         }

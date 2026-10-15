@@ -116,6 +116,15 @@ public class Fields {
         return expect(resolve(getter), ObjectField.class);
     }
 
+    /** A property of the elements of a list of embedded objects, as a multi-valued field ("any element"). */
+    public static <T, E, V> ListField<T, V> elementsOf(CollectionGetter<T, E> list, Getter<E, V> element) {
+        AbstractField<T, ?> l = resolve(list);                 // an EMBEDDED_LIST field (not a ListField)
+        if (l.type() != ValueType.EMBEDDED_LIST) {
+            throw new IllegalArgumentException(l + " is not a list of @Embeddable objects");
+        }
+        return listField(l.entity(), l.path() + "." + GetterResolver.resolve(element).property());
+    }
+
     // ---------------------------------------------------------------- internals
 
     @SuppressWarnings("unchecked")
@@ -128,7 +137,9 @@ public class Fields {
     static <F> F expect(AbstractField<?, ?> field, Class<?> kind) {
         if (!kind.isInstance(field)) {
             throw new IllegalArgumentException(field + " is a " + field.type() + " field ("
-                    + field.getClass().getSimpleName() + "), not a " + kind.getSimpleName());
+                    + field.getClass().getSimpleName() + "), not a " + kind.getSimpleName()
+                    + (field.type() == ValueType.EMBEDDED_LIST
+                    ? "; query a property of its elements with Q.whereAny(list getter, element getter)" : ""));
         }
         return (F) field;
     }
@@ -140,6 +151,7 @@ public class Fields {
         String[] parts = path.split("\\.", -1);
         List<Property> chain = new ArrayList<>(parts.length);
         Class<?> owner = entity;
+        boolean viaList = false;
         for (int i = 0; i < parts.length; i++) {
             String name = parts[i];
             Class<?> current = owner;
@@ -147,12 +159,23 @@ public class Fields {
                     "No persistent field '" + name + "' in " + current.getName()));
             chain.add(p);
             if (i < parts.length - 1) {
-                if (p.type() != ValueType.EMBEDDED) {
+                if (p.type() == ValueType.EMBEDDED_LIST) {
+                    viaList = true;                       // into the elements of an embedded list
+                    owner = p.elementType();
+                } else if (p.type() != ValueType.EMBEDDED) {
                     throw new IllegalArgumentException("'" + name + "' in " + current.getName()
                             + " is not @Embeddable; cannot use path " + path);
+                } else {
+                    owner = p.javaType();
                 }
-                owner = p.javaType();
             }
+        }
+        if (viaList) {
+            ValueType leaf = chain.get(chain.size() - 1).type();
+            if (!leaf.isScalar() && leaf != ValueType.MULTI) {
+                throw new IllegalArgumentException(path + ": a path into list elements must end at a scalar field");
+            }
+            return new ListField<>(entity, path, chain);          // multi-valued: one value per element
         }
         return switch (chain.get(chain.size() - 1).type()) {
             case BOOL -> new BoolField<>(entity, path, chain);

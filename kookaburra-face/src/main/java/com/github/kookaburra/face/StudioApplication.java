@@ -40,6 +40,11 @@ public class StudioApplication extends Application {
             stage.setScene(scene);
             stage.setTitle("Kookaburra Studio");
             stage.getIcons().add(new Image(StudioApplication.class.getResourceAsStream("logo_64.png")));
+            stage.setOnCloseRequest(e -> {
+                if (!view.confirmDiscardAll()) {
+                    e.consume();                              // keep the window: uncommitted transactions
+                }
+            });
             stage.setWidth(1320);
             stage.setHeight(820);
             splash.finish(() -> {
@@ -51,20 +56,20 @@ public class StudioApplication extends Application {
     }
 
     /**
-     * {@code --demo} opens the demo database; {@code --data=DIR} (or {@code kookaburra.data} in
-     * {@code kookaburra.properties}) opens that directory; a plain argument opens it as a database directory.
-     * Without arguments the default data directory (next to the jar) is opened if it holds a database.
+     * Opens, side by side: {@code --data=DIR} (or {@code kookaburra.data} in {@code kookaburra.properties}, or the
+     * default data directory next to the jar if it holds a database), every plain argument as a database
+     * directory, and with {@code --demo} the in-memory demo database (current, as the last one opened).
      */
     static void openFromArgs(MainView view, List<String> args) {
         Path data = StudioPaths.dataDir(args);
         view.setDataDir(data);
-        String plain = args.stream().filter(a -> !a.startsWith("--")).findFirst().orElse(null);
+        // several databases may open side by side: the data directory, plain paths, then the demo
+        if (args.stream().anyMatch(a -> a.startsWith(StudioPaths.ARG)) || StudioPaths.isDatabase(data)) {
+            view.open(Session.open(data));
+        }
+        args.stream().filter(a -> !a.startsWith("--")).forEach(p -> view.open(Session.open(Path.of(p))));
         if (args.contains("--demo")) {
             view.open(Session.demo());
-        } else if (plain != null) {
-            view.open(Session.open(Path.of(plain)));
-        } else if (args.stream().anyMatch(a -> a.startsWith(StudioPaths.ARG)) || StudioPaths.isDatabase(data)) {
-            view.open(Session.open(data));
         }
     }
 

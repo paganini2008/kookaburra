@@ -134,7 +134,14 @@ param
     | '?' INTEGER               # positionalParam
     ;
 
-path          : identifier ('.' identifier)* ;
+path          : identifier ('.' segment)* ;
+
+// after a dot every word is a field name, keywords included (e.g. route.from.city, order.by)
+segment
+    : identifier
+    | SELECT | DISTINCT | FROM | WHERE | GROUP | BY | HAVING | ORDER | ASC | DESC | AS | NEW | JOIN | UPDATE | SET
+    | DELETE | AND | OR | NOT | BETWEEN | IN | LIKE | IS | NULL | CASE | WHEN | THEN | ELSE | END | TRUE | FALSE
+    ;
 qualifiedName : identifier ('.' identifier)* ;
 
 identifier

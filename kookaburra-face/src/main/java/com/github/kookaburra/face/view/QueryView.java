@@ -3,6 +3,7 @@ package com.github.kookaburra.face.view;
 import com.github.kookaburra.face.StudioPaths;
 import com.github.kookaburra.face.model.Completion;
 import com.github.kookaburra.face.model.Display;
+import com.github.kookaburra.face.model.Export;
 import com.github.kookaburra.face.model.Highlight;
 import com.github.kookaburra.face.model.QueryOutcome;
 import com.github.kookaburra.face.model.Session;
@@ -17,6 +18,7 @@ import javafx.scene.control.ComboBox;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListView;
+import javafx.scene.control.MenuButton;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.Tab;
@@ -24,6 +26,7 @@ import javafx.scene.control.TabPane;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
+import javafx.scene.control.Tooltip;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyCodeCombination;
 import javafx.scene.input.KeyCombination;
@@ -31,12 +34,15 @@ import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
+import javafx.stage.FileChooser;
 import org.fxmisc.flowless.VirtualizedScrollPane;
 import org.fxmisc.richtext.CodeArea;
 import org.fxmisc.richtext.LineNumberFactory;
 
+import java.io.File;
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -54,6 +60,9 @@ public class QueryView extends BorderPane {
     final CodeArea editor = new CodeArea();
     final Button run = new Button("Run");
     final Button explain = new Button("Explain");
+    final MenuButton export = new MenuButton("Export");
+    /** Picks the target file of a result export; null = cancelled. Replaceable in tests. */
+    Function<Export.Format, File> exportChooser = this::chooseExportFile;
     final Label message = new Label();
     final TableView<List<Object>> results = new TableView<>();
     final TextArea plan = new TextArea();
@@ -105,7 +114,16 @@ public class QueryView extends BorderPane {
         message.getStyleClass().add("k-message");
         Region gap = new Region();
         HBox.setHgrow(gap, Priority.ALWAYS);
-        HBox bar = new HBox(8, run, explain, gap, message);
+        export.setId("console-export");
+        export.setGraphic(Icons.of("mdi2e-export"));
+        export.setTooltip(new Tooltip("Export the whole result of the statement in the editor (all rows, not only this page)"));
+        for (Export.Format f : Export.Format.values()) {
+            MenuItem item = new MenuItem(f == Export.Format.JSONL ? "JSONL — one row per line (large results)" : f.name());
+            item.setId("console-export-" + f.extension());
+            item.setOnAction(e -> exportAs(f));
+            export.getItems().add(item);
+        }
+        HBox bar = new HBox(8, run, explain, export, gap, message);
         bar.setAlignment(Pos.CENTER_LEFT);
         bar.setPadding(new Insets(8));
         bar.getStyleClass().add("k-console-bar");
@@ -239,6 +257,33 @@ public class QueryView extends BorderPane {
         }
         updatePager(r);
         output.getSelectionModel().select(0);
+    }
+
+    /** Writes the full result of the SELECT in the editor to a file chosen by the user. */
+    void exportAs(Export.Format format) {
+        Session s = session.get();
+        String text = editor.getText().strip();
+        if (s == null || text.isEmpty()) {
+            return;
+        }
+        File file = exportChooser.apply(format);
+        if (file == null) {
+            return;
+        }
+        message.getStyleClass().remove("k-error");
+        message.setText("exporting …");
+        tasks.run(() -> Export.writeQuery(s, text, format, file.toPath()), n -> {
+            message.setText("exported " + n + " rows → " + file.getName());
+            status.accept(message.getText());
+        }, this::fail);
+    }
+
+    private File chooseExportFile(Export.Format format) {
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Export query result as " + format.name());
+        chooser.setInitialFileName("result." + format.extension());
+        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(format.name(), "*." + format.extension()));
+        return chooser.showSaveDialog(getScene() == null ? null : getScene().getWindow());
     }
 
     void fail(Throwable t) {

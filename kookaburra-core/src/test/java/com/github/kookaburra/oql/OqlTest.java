@@ -1,5 +1,6 @@
 package com.github.kookaburra.oql;
 
+import com.github.kookaburra.TestDbs;
 import com.github.kookaburra.ObjectDB;
 import com.github.kookaburra.OptimisticLockException;
 import com.github.kookaburra.Ref;
@@ -37,7 +38,7 @@ class OqlTest {
 
     @BeforeEach
     void setUp() {
-        db = ObjectDB.inMemory();
+        db = TestDbs.create();
         Company c1 = new Company();
         c1.setIndustry("AI");
         ai = db.insert(c1);

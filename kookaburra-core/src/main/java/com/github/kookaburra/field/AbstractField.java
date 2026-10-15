@@ -2,7 +2,10 @@ package com.github.kookaburra.field;
 
 import com.github.kookaburra.mapping.ValueType;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Base of all field implementations; instances are interned per (entity, path) by {@link Fields}.
@@ -35,7 +38,17 @@ public abstract class AbstractField<T, V> implements Field<T, V> {
 
     @Override
     public final ValueType type() {
-        return leaf().type();
+        return viaList() ? ValueType.MULTI : leaf().type();
+    }
+
+    /** True if the path runs through a list of embedded objects (values of every element). */
+    final boolean viaList() {
+        for (int i = 0; i < chain.size() - 1; i++) {
+            if (chain.get(i).type() == ValueType.EMBEDDED_LIST) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Declared Java type of the value at the end of the path. */
@@ -55,14 +68,30 @@ public abstract class AbstractField<T, V> implements Field<T, V> {
     @Override
     @SuppressWarnings("unchecked")
     public final V get(T entity) {
-        Object cur = entity;
-        for (Property p : chain) {
+        return (V) ValueType.normalize(read(entity, 0));
+    }
+
+    /** Follows the chain from {@code from}; through an embedded list it collects the values of every element. */
+    private Object read(Object cur, int from) {
+        for (int i = from; i < chain.size(); i++) {
             if (cur == null) {
                 return null;
             }
-            cur = p.read(cur);
+            if (i > 0 && chain.get(i - 1).type() == ValueType.EMBEDDED_LIST && cur instanceof Collection<?> elements) {
+                List<Object> out = new ArrayList<>();
+                for (Object e : elements) {
+                    Object v = read(e, i);
+                    if (v instanceof Collection<?> c) {
+                        c.stream().filter(Objects::nonNull).forEach(out::add);
+                    } else if (v != null) {
+                        out.add(v);
+                    }
+                }
+                return out;
+            }
+            cur = chain.get(i).read(cur);
         }
-        return (V) ValueType.normalize(cur);
+        return cur;
     }
 
     @Override

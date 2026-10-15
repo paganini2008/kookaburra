@@ -301,3 +301,45 @@
     -fx-background-color: #1A2030;
     -fx-background-radius: 3;
 }
+
+/* ---------------------------------------------------------------- navigator: databases, transactions */
+
+.k-nav-db, .k-nav-db-current {
+    -fx-font-weight: bold;
+}
+
+.k-nav-db-current {
+    -fx-text-fill: -color-accent-fg;
+}
+
+.k-nav-tx {
+    -fx-text-fill: #FFC14D;
+}
+
+.k-tx-status {
+    -fx-text-fill: #FFC14D;
+    -fx-font-weight: bold;
+}
+
+/* ---- nested objects: inspector tree, element tables ---------------------------------- */
+.k-inspector {
+    -fx-background-color: -k-bg-1;
+}
+
+.k-inspector .tree-table-view {
+    -fx-font-family: "JetBrains Mono", "Menlo", "Consolas", monospace;
+    -fx-font-size: 12px;
+}
+
+.k-collection {
+    -fx-padding: 6;
+    -fx-border-color: -k-border;
+    -fx-border-radius: 6;
+    -fx-background-color: -k-bg-1;
+    -fx-background-radius: 6;
+}
+
+.k-small {
+    -fx-padding: 2 6 2 6;
+    -fx-font-size: 11px;
+}

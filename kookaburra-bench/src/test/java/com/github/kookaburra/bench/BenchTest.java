@@ -31,7 +31,8 @@ class BenchTest {
         String report = Files.readString(out);
         assertThat(tmp.resolve("db")).doesNotExist();            // test data removed after the run
         assertThat(report).contains("| objects | 20,000 |", "bulk insert", "get(oid)", "GROUP BY city", "Mixed",
-                "compact()", "reopen", "heap used", "**Problems**: none");
+                "compact()", "reopen", "heap used", "Transactions", "transfer", "hot counter",
+                "OQL DELETE of all", "after deleting everything", "**Problems**: none");
 
         Bench again = new Bench(Bench.Options.parse("--n=5000", "--threads=2", "--seconds=1", "--iterations=3",
                 "--dir=" + tmp.resolve("db"), "--out=" + out, "--keep"));

@@ -2,8 +2,10 @@ package com.github.kookaburra.dynamic;
 
 import com.github.kookaburra.mapping.Record;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -54,12 +56,28 @@ public final class DynamicObject {
 
     /** Value at a dotted path through embedded maps; null if absent. */
     public Object get(String path) {
-        Object cur = values;
-        for (String part : path.split("\\.")) {
+        return get(values, path.split("\\."), 0);
+    }
+
+    /** Through a list of embedded objects the values of every element are collected ("any element"). */
+    private static Object get(Object cur, String[] parts, int from) {
+        for (int i = from; i < parts.length; i++) {
+            if (cur instanceof List<?> elements && !elements.isEmpty() && elements.get(0) instanceof Map) {
+                List<Object> out = new ArrayList<>();
+                for (Object e : elements) {
+                    Object v = get(e, parts, i);
+                    if (v instanceof List<?> l) {
+                        l.stream().filter(Objects::nonNull).forEach(out::add);
+                    } else if (v != null) {
+                        out.add(v);
+                    }
+                }
+                return out;
+            }
             if (!(cur instanceof Map<?, ?> m)) {
                 return null;
             }
-            cur = m.get(part);
+            cur = m.get(parts[i]);
         }
         return cur;
     }

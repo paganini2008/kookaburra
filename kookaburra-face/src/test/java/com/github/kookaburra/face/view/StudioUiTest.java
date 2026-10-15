@@ -2,7 +2,6 @@ package com.github.kookaburra.face.view;
 
 import com.github.kookaburra.dynamic.DynamicObject;
 import com.github.kookaburra.face.StudioApplication;
-import com.github.kookaburra.face.model.ClassInfo;
 import com.github.kookaburra.face.model.Export;
 import com.github.kookaburra.face.model.SegmentInfo;
 import com.github.kookaburra.face.model.Session;
@@ -99,20 +98,40 @@ class StudioUiTest {
         settle();
     }
 
+    /** Selects a class of the current database in the navigator. */
     private void selectClass(FxRobot robot, String simpleName) {
         robot.interact(() -> {
-            for (TreeItem<ClassInfo> i : view.tree.getRoot().getChildren()) {
-                if (i.getValue().simpleName().equals(simpleName)) {
-                    view.tree.getSelectionModel().select(i);
-                }
-                for (TreeItem<ClassInfo> c : i.getChildren()) {
-                    if (c.getValue().simpleName().equals(simpleName)) {
-                        view.tree.getSelectionModel().select(c);
-                    }
-                }
+            TreeItem<NavNode> found = findClass(view, simpleName);
+            if (found != null) {
+                view.tree.getSelectionModel().select(found);
             }
         });
         settle();
+    }
+
+    static TreeItem<NavNode> findClass(MainView view, String simpleName) {
+        for (TreeItem<NavNode> db : view.tree.getRoot().getChildren()) {
+            if (db.getValue().session() == view.session()) {
+                TreeItem<NavNode> f = find(db, simpleName);
+                if (f != null) {
+                    return f;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static TreeItem<NavNode> find(TreeItem<NavNode> item, String simpleName) {
+        if (!item.getValue().isDatabase() && item.getValue().cls().simpleName().equals(simpleName)) {
+            return item;
+        }
+        for (TreeItem<NavNode> c : item.getChildren()) {
+            TreeItem<NavNode> f = find(c, simpleName);
+            if (f != null) {
+                return f;
+            }
+        }
+        return null;
     }
 
     @Test
@@ -131,7 +150,19 @@ class StudioUiTest {
         assertThat(view.schema.metadata.fields.getItems()).anyMatch(f -> f.path().equals("title") && f.declaredIn().equals("Product"));
         assertThat(view.schema.metadata.fields.getItems()).anyMatch(f -> f.path().equals("author") && f.declaredIn().equals("Book"));
         selectClass(robot, "Customer");
+        robot.interact(() -> {                                  // a customer with contacts: nested values in the inspector
+            List<DynamicObject> items = view.data.table.getItems();
+            for (int i = 0; i < items.size(); i++) {
+                if (items.get(i).get("contacts") != null && items.get(i).get("address") != null) {
+                    view.data.table.getSelectionModel().select(i);
+                    break;
+                }
+            }
+        });
+        WaitForAsyncUtils.waitForFxEvents();
+        assertThat(view.data.inspector.object()).isNotNull();
         Shots.save(scene, "02-data");
+        robot.interact(() -> view.data.table.getSelectionModel().clearSelection());
         robot.interact(() -> view.tabs.getSelectionModel().select(1));
         robot.interact(() -> view.query.setText("SELECT c.tier, COUNT(*) AS n, AVG(c.age) FROM Customer c GROUP BY c.tier ORDER BY n DESC"));
         robot.clickOn("#run");
@@ -182,7 +213,7 @@ class StudioUiTest {
         settle();
         await(() -> view.status.getText().startsWith("exported"));
         assertThat(view.status.getText()).isEqualTo("exported " + total + " objects → customers.csv");
-        assertThat(Files.readAllLines(exported)).hasSize((int) total + 1);
+        assertThat(csvRecords(Files.readString(exported))).isEqualTo(total + 1);   // RFC 4180: quoted line breaks in notes
         robot.interact(() -> view.data.exportAs(Export.Format.JSON));      // chooser cancelled: nothing happens
 
         robot.interact(() -> {
@@ -425,7 +456,8 @@ class StudioUiTest {
         robot.interact(() -> view.open.fire());
         settle();
         assertThat(view.session().title()).endsWith("db");
-        assertThat(view.tree.getRoot().getChildren()).isEmpty();
+        assertThat(view.tree.getRoot().getChildren()).singleElement()
+                .satisfies(db -> assertThat(db.getChildren()).isEmpty());      // a new, empty database
         robot.interact(() -> view.add.fire());
         robot.interact(() -> view.edit.fire());
         robot.interact(() -> view.delete.fire());
@@ -438,6 +470,12 @@ class StudioUiTest {
         robot.interact(() -> StudioApplicationAccess.open(view, List.of("--demo")));
         settle();
         assertThat(view.session().title()).contains("demo");
+        int before = view.sessions().size();
+        robot.interact(() -> StudioApplicationAccess.open(view, List.of("--data=" + dir.resolve("db3"), "--demo")));
+        settle();
+        assertThat(view.sessions()).hasSize(before + 2);                 // disk and in-memory side by side
+        assertThat(view.sessions().get(before).dir()).isEqualTo(dir.resolve("db3").toAbsolutePath().normalize());
+        assertThat(view.session().dir()).isNull();                        // the demo is current
         StudioApplication app = new StudioApplication();
         Stage[] main = new Stage[1];
         robot.interact(() -> main[0] = StudioApplicationAccess.start(app));
@@ -470,4 +508,19 @@ class StudioUiTest {
         return List.copyOf(byRow.values());
     }
 
+
+    /** Records of a CSV text: line breaks inside quoted values do not end a record. */
+    static long csvRecords(String csv) {
+        long n = 0;
+        boolean quoted = false;
+        for (int i = 0; i < csv.length(); i++) {
+            char c = csv.charAt(i);
+            if (c == '"') {
+                quoted = !quoted;
+            } else if (c == '\n' && !quoted) {
+                n++;
+            }
+        }
+        return n;
+    }
 }

@@ -8,6 +8,7 @@ import com.github.kookaburra.annotation.Version;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Customer of the demo data set.
@@ -27,4 +28,8 @@ public class Customer {
     Address address;
     @Index List<String> tags;
     Double credit;
+    /** Further addresses by label ("work", "billing", …): a map of embedded objects. */
+    Map<String, Address> contacts;
+    /** Free text, sometimes long and multi-line. */
+    String notes;
 }

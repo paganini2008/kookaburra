@@ -103,6 +103,12 @@ public class Planner {
                 if (dot < 0) {
                     return f.type();
                 }
+                if (f.type().kind() == ValueType.EMBEDDED_LIST) {
+                    // a path into the elements of an embedded list is multi-valued ("any element")
+                    TypeDef leaf = typeIn(f.type().element().fields(), path.substring(dot + 1));
+                    return leaf == null || !(leaf.kind().isScalar() || leaf.kind() == ValueType.MULTI) ? null
+                            : TypeDef.multi(leaf.kind() == ValueType.MULTI ? leaf.element() : leaf, false);
+                }
                 return f.type().kind() == ValueType.EMBEDDED ? typeIn(f.type().fields(), path.substring(dot + 1)) : null;
             }
         }

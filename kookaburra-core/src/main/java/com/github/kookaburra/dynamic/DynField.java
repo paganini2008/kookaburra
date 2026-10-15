@@ -1,8 +1,11 @@
 package com.github.kookaburra.dynamic;
 
 import com.github.kookaburra.Ref;
+import com.github.kookaburra.exec.Planner;
 import com.github.kookaburra.field.Field;
+import com.github.kookaburra.mapping.ClassDef;
 import com.github.kookaburra.mapping.DynamicCodec;
+import com.github.kookaburra.mapping.Schema;
 import com.github.kookaburra.mapping.TypeDef;
 import com.github.kookaburra.mapping.ValueType;
 import com.github.kookaburra.query.Order;
@@ -30,6 +33,22 @@ public class DynField implements Field<DynamicObject, Object> {
     private final String path;
     private final TypeDef type;
     private final Kind kind;
+
+    /** Field of a stored class by dotted path; the {@code @Id} / {@code @Version} names address the OID / version. */
+    public static DynField of(Schema schema, ClassDef def, String path) {
+        ClassDef root = schema.byName(def.collection());
+        if (path.equals(root.idField())) {
+            return new DynField(path, TypeDef.scalar(ValueType.INT64), DynField.Kind.OID);
+        }
+        if (path.equals(root.versionField())) {
+            return new DynField(path, TypeDef.scalar(ValueType.INT64), DynField.Kind.VERSION);
+        }
+        TypeDef t = new Planner(schema, def.collection(), (a, b) -> null).typeOf(path);
+        if (t == null) {
+            throw new IllegalArgumentException("no stored field '" + path + "' in " + def.simpleName() + " or its subclasses");
+        }
+        return new DynField(path, t, DynField.Kind.VALUE);
+    }
 
     DynField(String path, TypeDef type, Kind kind) {
         this.path = path;

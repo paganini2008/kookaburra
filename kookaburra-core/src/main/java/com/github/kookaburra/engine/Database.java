@@ -1,10 +1,16 @@
 package com.github.kookaburra.engine;
 
 import com.github.kookaburra.Config;
+import com.github.kookaburra.ConflictException;
+import com.github.kookaburra.Isolation;
 import com.github.kookaburra.Durability;
 import com.github.kookaburra.KookaburraException;
 import com.github.kookaburra.ObjectDB;
 import com.github.kookaburra.Snapshot;
+import com.github.kookaburra.Transaction;
+import com.github.kookaburra.TxFunction;
+import com.github.kookaburra.TxOptions;
+import com.github.kookaburra.TxWork;
 import com.github.kookaburra.WriteBatch;
 import com.github.kookaburra.dynamic.DynamicCollection;
 import com.github.kookaburra.dynamic.DynamicObject;
@@ -45,8 +51,10 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * The database implementation: owns the schema registry, the current {@link Version}, the published
@@ -83,20 +91,23 @@ public class Database implements ObjectDB, OqlHost {
     private Commit commit;
     /** Sequencer-owned: segments currently being merged. */
     private final Set<Segment> compacting = new HashSet<>();
+    /** Frozen MemSegments whose flush has not been installed yet. Sequencer thread only. */
+    private final Set<FlushJob> flushing = new HashSet<>();
+    /** Merges scheduled and not yet installed. Sequencer thread only. */
+    private final Set<CompactJob> merging = new HashSet<>();
     /** Frozen MemSegments not yet installed plus pending merges (for write throttling). */
     private final AtomicInteger backlog = new AtomicInteger();
     /** Ids of segments being built by the flush thread (their files must survive cleanup). */
     private final Set<Integer> building = ConcurrentHashMap.newKeySet();
     private final AtomicInteger segmentIds = new AtomicInteger();
+    /** Next OID sequence per class; allocated at insert time by any thread (rolled-back inserts leave gaps). */
+    private final Map<Integer, AtomicLong> oidCounters = new ConcurrentHashMap<>();
     /** Sequencer-owned: views per collection, newest first (active MemSegment, frozen ones, segments). */
     private final Map<String, List<SegmentView>> writerViews = new HashMap<>();
     /** Sequencer-owned: frozen MemSegments to flush once their rows are published. */
     private final List<FlushJob> pendingFlush = new ArrayList<>();
-    private final ExecutorService flusher = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "kookaburra-flush");
-        t.setDaemon(true);
-        return t;
-    });
+    private final ExecutorService flusher;
+    private final TxRegistry txRegistry = new TxRegistry();
     private volatile Version version = Version.EMPTY;
     private volatile long visibleSeq;
     private volatile boolean closed;
@@ -107,6 +118,12 @@ public class Database implements ObjectDB, OqlHost {
         this.config = config;
         this.storage = storage;
         this.registry = new TypeRegistry(storage.loadSchema(), config.classLoader(), storage::saveSchema);
+        AtomicInteger flushThreads = new AtomicInteger();
+        this.flusher = Executors.newFixedThreadPool(config.flushThreads(), r -> {
+            Thread t = new Thread(r, "kookaburra-flush-" + flushThreads.incrementAndGet());
+            t.setDaemon(true);
+            return t;
+        });
         this.commit = storage.loadCommit();
         this.segmentIds.set(commit.nextSegmentId() - 1);
         this.sequencer = new Sequencer(this, commit.lastSeq());
@@ -125,6 +142,7 @@ public class Database implements ObjectDB, OqlHost {
             LOG.error("cannot open {}", db(dir), e);
             throw e;
         }
+        db.sequencer.oidSeqs().forEach((cid, seq) -> db.oidCounters.put(cid, new AtomicLong(seq)));
         db.sequencer.start(storage.openWal(db.sequencer.lastSeq(), config.durability() == Durability.SYNC));
         if (LOG.isInfoEnabled()) {
             int segments = db.writerViews.values().stream().mapToInt(List::size).sum();
@@ -198,14 +216,14 @@ public class Database implements ObjectDB, OqlHost {
                 throw new IllegalArgumentException("object already has OID " + d.oid() + "; use update()");
             }
             Record r = DynamicCodec.toRecord(storedClass(d.className()), d);
-            return new WriteOp.Insert(null, d, r, RecordCodec.encode(r));
+            return new WriteOp.Insert(null, d, allocateOid(r.classId()), r, RecordCodec.encode(r));
         }
         EntityType<Object> t = type(entity);
         if (t.id(entity) != 0) {
             throw new IllegalArgumentException("object already has OID " + t.id(entity) + "; use update()");
         }
         Record r = t.toRecord(entity);
-        return new WriteOp.Insert(t, entity, r, RecordCodec.encode(r));
+        return new WriteOp.Insert(t, entity, allocateOid(r.classId()), r, RecordCodec.encode(r));
     }
 
     WriteOp updateOp(Object entity) {
@@ -285,11 +303,127 @@ public class Database implements ObjectDB, OqlHost {
         return oid;
     }
 
+    /** A fresh OID of a class; not transactional (like a database sequence). */
+    long allocateOid(int classId) {
+        return Oids.make(classId, oidCounters.computeIfAbsent(classId, c -> new AtomicLong()).incrementAndGet());
+    }
+
+    @Override
+    public void increment(Class<?> type, long oid, String field, Number delta) {
+        checkOpen();
+        if (field == null || delta == null) {
+            throw new IllegalArgumentException("field and delta must not be null");
+        }
+        registry.entity(type);
+        if (!registry.schema().subclassIds(type.getName()).contains(Oids.classId(oid))) {
+            throw new IllegalArgumentException("OID " + oid + " is not a " + type.getName());
+        }
+        write(List.of(new WriteOp.Increment(oid, Map.of(field, delta))));
+    }
+
+    // ---------------------------------------------------------------- transactions (docs/transaction-design.md)
+
+    @Override
+    public Transaction begin() {
+        return begin(TxOptions.defaults());
+    }
+
+    @Override
+    public Transaction begin(Isolation isolation) {
+        return begin(TxOptions.defaults().isolation(isolation));
+    }
+
+    @Override
+    public Transaction begin(TxOptions options) {
+        checkOpen();
+        if (!config.transactions()) {
+            throw new KookaburraException("transactions are not enabled: set kookaburra.transactions=true "
+                    + "(by default every write commits directly)");
+        }
+        return new TransactionImpl(this, options);
+    }
+
+    @Override
+    public void inTransaction(TxWork work) {
+        inTransaction(work, config.txRetries());
+    }
+
+    @Override
+    public void inTransaction(TxWork work, int retries) {
+        inTransactionResult(tx -> {
+            work.run(tx);
+            return null;
+        }, retries);
+    }
+
+    @Override
+    public <R> R inTransactionResult(TxFunction<R> work) {
+        return inTransactionResult(work, config.txRetries());
+    }
+
+    /** Runs, commits and retries on conflicts with jittered exponential back-off (1 ms … 100 ms). */
+    @Override
+    public <R> R inTransactionResult(TxFunction<R> work, int retries) {
+        if (retries < 0) {
+            throw new IllegalArgumentException("negative retries");
+        }
+        for (int attempt = 0; ; attempt++) {
+            try (Transaction tx = begin()) {
+                R result = work.apply(tx);
+                if (tx.state() == Transaction.State.ACTIVE) {
+                    tx.commit();
+                }
+                return result;
+            } catch (ConflictException e) {
+                if (attempt >= retries) {
+                    throw e;
+                }
+                LOG.debug("transaction conflict, retry {} of {}: {}", attempt + 1, retries, e.getMessage());
+                long bound = Math.min(100, 1L << Math.min(attempt + 1, 6));
+                try {
+                    Thread.sleep(ThreadLocalRandom.current().nextLong(1, bound + 1));
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+            }
+        }
+    }
+
+    @Override
+    public int activeTransactions() {
+        return txRegistry.size();
+    }
+
+    TxRegistry txRegistry() {
+        return txRegistry;
+    }
+
+    /** Entries of the sequencer's conflict table (diagnostics). */
+    int conflictEntries() {
+        int[] n = new int[1];
+        join(sequencer.submitTask(() -> n[0] = sequencer.conflictEntries()));
+        return n[0];
+    }
+
+    /** Submits a transaction's writes for validation and commit; results as for {@link #write}. */
+    long[] commitTransaction(List<WriteOp> ops, Sequencer.TxCommit tx) {
+        checkOpen();
+        throttle();
+        return join(sequencer.submitTx(ops, tx));
+    }
+
     /** Submits one atomic batch, waits, and writes back OIDs / versions. */
     long[] write(List<WriteOp> ops) {
         checkOpen();
         throttle();
         long[] res = join(sequencer.submit(ops));
+        writeBack(ops, res);
+        return res;
+    }
+
+    /** Writes OIDs / new versions back into the entities of committed ops. */
+    void writeBack(List<WriteOp> ops, long[] res) {
         for (int i = 0; i < ops.size(); i++) {
             WriteOp op = ops.get(i);
             if (op instanceof WriteOp.Insert ins) {
@@ -301,7 +435,7 @@ public class Database implements ObjectDB, OqlHost {
                     t.setId(ins.entity(), res[i]);
                     t.setVersion(ins.entity(), 1);
                 }
-            } else if (op instanceof WriteOp.Update u) {
+            } else if (op instanceof WriteOp.Update u && u.entity() != null) {
                 if (u.entity() instanceof DynamicObject d) {
                     d.assign(d.oid(), res[i]);
                 } else {
@@ -311,7 +445,6 @@ public class Database implements ObjectDB, OqlHost {
                 }
             }
         }
-        return res;
     }
 
     // ---------------------------------------------------------------- sequencer callbacks
@@ -376,6 +509,7 @@ public class Database implements ObjectDB, OqlHost {
         backlog.incrementAndGet();
         FlushJob job = new FlushJob(collection, m, m.maxSeq(), new CompletableFuture<>());
         pendingFlush.add(job);
+        flushing.add(job);
         return job.done();
     }
 
@@ -418,6 +552,7 @@ public class Database implements ObjectDB, OqlHost {
 
     /** Replaces a flushed MemSegment by its segment, carrying over later deletes. Sequencer thread only. */
     private void install(FlushJob job, Segment seg) {
+        flushing.remove(job);
         deleteState.put(seg.id(), new int[]{0, 0});
         MemSegment m = job.mem();
         for (int i = 0; i < m.deletedCount(); i++) {
@@ -483,16 +618,48 @@ public class Database implements ObjectDB, OqlHost {
             }
         }
         if (run.size() < (all ? 2 : config.compactionFanIn())) {
-            return CompletableFuture.completedFuture(null);
+            run = garbage(segs, all);
+            if (run.isEmpty()) {
+                return CompletableFuture.completedFuture(null);
+            }
         }
         compacting.addAll(run);
         backlog.incrementAndGet();
         CompactJob job = new CompactJob(collection, List.copyOf(run), sequencer.lastSeq(), new CompletableFuture<>());
+        merging.add(job);
         flusher.execute(() -> merge(job));
         return job.done();
     }
 
-    /** Merges the live rows of the inputs into one segment (flush thread). */
+    /**
+     * Segments worth rewriting for their deletes (like Lucene's {@code deletesPctAllowed} / RocksDB's
+     * deletion-triggered compaction): every idle segment without live rows (dropped, no rewrite), else the one
+     * with the most garbage once it reaches {@code compaction-garbage-ratio} — or any garbage when {@code all}.
+     */
+    private List<Segment> garbage(List<Segment> segs, boolean all) {
+        long seq = sequencer.lastSeq();
+        List<Segment> empty = new ArrayList<>();
+        Segment worst = null;
+        double worstRatio = 0;
+        for (Segment s : segs) {
+            if (compacting.contains(s) || s.size() == 0) {
+                continue;
+            }
+            int dead = s.deletes().deleted(seq).getCardinality();
+            if (dead >= s.size()) {
+                empty.add(s);
+            } else {
+                double ratio = (double) dead / s.size();
+                if (dead > 0 && ratio > worstRatio && (all || ratio >= config.compactionGarbageRatio())) {
+                    worst = s;
+                    worstRatio = ratio;
+                }
+            }
+        }
+        return !empty.isEmpty() ? empty : worst == null ? List.of() : List.of(worst);
+    }
+
+    /** Merges the live rows of the inputs into one segment (flush thread); no live rows = the inputs are dropped. */
     private void merge(CompactJob job) {
         long start = System.nanoTime();
         try {
@@ -500,6 +667,15 @@ public class Database implements ObjectDB, OqlHost {
             for (Segment s : job.inputs()) {
                 s.live(job.seq()).forEach((int d) ->
                         entries.add(new SegmentWriter.Entry(s.oid(d), s.version(d), s.record(d), s.row(d))));
+            }
+            if (entries.isEmpty()) {
+                LOG.info("dropped {} fully deleted segment(s) of {}", job.inputs().size(), job.collection());
+                sequencer.submitTask(() -> installMerge(job, null)).whenComplete((r, t) -> {
+                    if (t != null) {
+                        job.done().completeExceptionally(t);
+                    }
+                });
+                return;
             }
             entries.sort(Comparator.comparingLong(SegmentWriter.Entry::oid));
             byte[] bytes = SegmentWriter.write(entries, registry.schema().columns(job.collection()).values(), config.bloomFpp(),
@@ -524,26 +700,29 @@ public class Database implements ObjectDB, OqlHost {
 
     /** Swaps the inputs for the merged segment, remapping deletes that arrived during the merge. */
     private void installMerge(CompactJob job, Segment merged) {
-        List<long[]> late = new ArrayList<>();
-        for (Segment s : job.inputs()) {
-            for (long[] e : s.deletes().entries(Long.MAX_VALUE)) {
-                if (e[0] > job.seq()) {
-                    late.add(new long[]{e[0], merged.docOf(s.oid((int) e[1]))});
+        merging.remove(job);
+        if (merged != null) {
+            List<long[]> late = new ArrayList<>();
+            for (Segment s : job.inputs()) {
+                for (long[] e : s.deletes().entries(Long.MAX_VALUE)) {
+                    if (e[0] > job.seq()) {
+                        late.add(new long[]{e[0], merged.docOf(s.oid((int) e[1]))});
+                    }
                 }
             }
+            late.sort(Comparator.comparingLong(e -> e[0]));
+            for (long[] e : late) {
+                merged.deletes().add(e[0], (int) e[1]);
+            }
+            deleteState.put(merged.id(), new int[]{0, 0});
         }
-        late.sort(Comparator.comparingLong(e -> e[0]));
-        for (long[] e : late) {
-            merged.deletes().add(e[0], (int) e[1]);
-        }
-        deleteState.put(merged.id(), new int[]{0, 0});
         List<SegmentView> list = writerViews.get(job.collection());
         int at = Integer.MAX_VALUE;
         for (Segment s : job.inputs()) {
             at = Math.min(at, list.indexOf(s));
         }
         list.removeAll(job.inputs());
-        SegmentView replacement = merged.size() == 0 ? null : merged;
+        SegmentView replacement = merged == null || merged.size() == 0 ? null : merged;
         if (replacement != null) {
             list.add(at, merged);
         }
@@ -553,7 +732,9 @@ public class Database implements ObjectDB, OqlHost {
             compacting.remove(s);
         }
         writeCommit();
-        building.remove(merged.id());
+        if (merged != null) {
+            building.remove(merged.id());
+        }
         backlog.decrementAndGet();
         job.done().complete(null);
         maybeCompact(job.collection(), false);
@@ -565,6 +746,9 @@ public class Database implements ObjectDB, OqlHost {
         while (true) {
             List<CompletableFuture<Void>> jobs = Collections.synchronizedList(new ArrayList<>());
             join(sequencer.submitTask(() -> {
+                for (CompactJob running : merging) {
+                    jobs.add(running.done());   // merges started in the background are waited for, then looked at again
+                }
                 for (String c : writerViews.keySet()) {
                     CompletableFuture<Void> f = maybeCompact(c, true);
                     if (!f.isDone()) {
@@ -580,7 +764,7 @@ public class Database implements ObjectDB, OqlHost {
     }
 
     /** Callers wait while flushes / merges lag behind (back-pressure, design §12). */
-    private void throttle() {
+    void throttle() {
         if (backlog.get() <= config.writeBacklog()) {
             return;
         }
@@ -648,6 +832,9 @@ public class Database implements ObjectDB, OqlHost {
                 if (!e.getValue().isEmpty() && e.getValue().get(0) instanceof MemSegment m && !m.frozen && m.size() > 0) {
                     jobs.add(freeze(e.getKey(), m));
                 }
+            }
+            for (FlushJob job : flushing) {
+                jobs.add(job.done());          // flushes started earlier (size threshold) are waited for too
             }
         }));
         join(CompletableFuture.allOf(jobs.toArray(new CompletableFuture[0])));
