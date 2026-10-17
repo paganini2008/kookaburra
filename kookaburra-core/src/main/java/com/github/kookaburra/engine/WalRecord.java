@@ -8,7 +8,7 @@ import java.util.List;
 
 /**
  * A decoded WAL record: one batch with its sequence number and the already-validated outcomes, so
- * replay re-applies it without validation (design §15).
+ * replay re-applies it without validation (storage-design §12).
  *
  * @Author: Fred Feng
  * @Date: 11/10/2026

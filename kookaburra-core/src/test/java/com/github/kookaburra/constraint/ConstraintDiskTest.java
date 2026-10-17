@@ -11,6 +11,7 @@ import com.github.kookaburra.mapping.SchemaException;
 import com.github.kookaburra.mapping.SchemaIO;
 import com.github.kookaburra.mapping.TypeDef;
 import com.github.kookaburra.mapping.ValueType;
+import com.github.kookaburra.model.Listing;
 import com.github.kookaburra.model.Member;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -88,5 +89,34 @@ class ConstraintDiskTest extends ConstraintTest {
         db = ObjectDB.open(at, config());                                // schema format 2 persisted the constraints
         assertThat(db.schema().constraints()).hasSize(4);
         assertThatThrownBy(() -> db.insert(new Member("dup", "a@x.io"))).isInstanceOf(ConstraintViolationException.class);
+    }
+
+    @Test
+    void addingCompositeUniqueToDuplicatesFails() throws IOException {
+        db.close();
+        Path at = dir.resolve("legacy-listing");
+        String name = Listing.class.getName();
+        Layout old = new Layout(0, List.of(new FieldDef("tenant", TypeDef.scalar(ValueType.STRING), null),
+                new FieldDef("code", TypeDef.scalar(ValueType.STRING), null)));
+        Files.createDirectories(at.resolve("schema"));
+        Files.write(at.resolve("schema").resolve("schema_1"),
+                SchemaIO.write(new Schema(1, List.of(new ClassDef(1, name, null, name, "oid", "version", List.of(old))))));
+        db = ObjectDB.open(at, config());
+        for (String code : List.of("A", "B", "A")) {
+            DynamicObject o = db.dynamic("Listing").newObject();
+            o.set("tenant", "acme");
+            o.set("code", code);
+            db.dynamic("Listing").insert(o);
+        }
+        assertThatThrownBy(() -> db.insert(new Listing("acme", "C"))).isInstanceOf(SchemaException.class)
+                .hasMessageContaining("cannot add @Unique Listing(tenant, code)").hasMessageContaining("[acme, A]");
+        assertThat(db.schema().compositeUniques()).isEmpty();
+        db.dynamic("Listing").delete(db.dynamic("Listing").from().where("code").eq("A").list().get(1));
+        db.insert(new Listing("acme", "C"));
+        assertThat(db.schema().compositeUniques()).hasSize(4);
+        db.close();
+        db = ObjectDB.open(at, config());                             // schema format 3 keeps them
+        assertThat(db.schema().compositeUniques()).hasSize(4);
+        assertThatThrownBy(() -> db.insert(new Listing("acme", "B"))).isInstanceOf(ConstraintViolationException.class);
     }
 }

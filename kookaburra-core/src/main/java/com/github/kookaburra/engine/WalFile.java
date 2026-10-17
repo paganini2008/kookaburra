@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.zip.CRC32C;
 
 /**
- * One WAL file: records {@code len(4) · crc32c(4) · seq(8) · payload} (design §15). Appends are buffered
+ * One WAL file: records {@code len(4) · crc32c(4) · seq(8) · payload} (storage-design §12). Appends are buffered
  * per write group and written with one {@code write}; {@link #sync()} forces them to disk.
  *
  * @Author: Fred Feng

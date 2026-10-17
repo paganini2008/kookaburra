@@ -1,0 +1,21 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head><body><div class="canvas" data-size="1500x300">
+<h1>How it fits <small>a library inside your application, no server</small></h1>
+<div class="row">
+  <div class="group" style="width:430px"><div class="label">your Java application</div>
+    <div class="col">
+      <div class="box" style="text-align:left"><b>@Entity classes</b><span>plain objects: nested values, references, decimals, images</span></div>
+      <div class="box" style="text-align:left;border-color:var(--cyan)"><b class="cyan">ObjectDB API</b><span>typed queries · OQL · transactions · constraints · backup</span></div>
+    </div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="box" style="width:250px"><b>kookaburra-core</b><span>one Maven dependency,<br>runs in your process</span></div>
+  <div class="arrow">→</div>
+  <div class="box" style="width:230px;border-color:var(--ok)"><b class="ok">data directory</b><span>files on your disk,<br>survives crashes and restarts</span></div>
+  <div class="arrow">←</div>
+  <div class="col" style="width:290px">
+    <div class="box"><b>Kookaburra Studio</b><span>open the directory: browse, edit, query</span></div>
+    <div class="box"><b>db.backup(dir)</b><span>a consistent copy while running</span></div>
+  </div>
+</div>
+<p style="color:var(--muted);margin:16px 0 0;font-size:13px">Or keep everything in memory: ObjectDB.inMemory() for tests and caches.</p>
+</div></body></html>

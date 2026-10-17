@@ -1,7 +1,7 @@
 package com.github.kookaburra.annotation;
 
 /**
- * Column index kinds, see design §5.3.
+ * Column index kinds, see storage-design §4.3.
  *
  * @Author: Fred Feng
  * @Date: 11/10/2026

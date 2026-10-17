@@ -16,7 +16,7 @@ import java.util.function.IntPredicate;
 
 /**
  * One column of a segment: sorted dictionary, ordinals (bit-packed, 0 = null) or multi-value lists,
- * optional postings and a null bitmap (design §5.1). Answers equality, range and prefix lookups.
+ * optional postings and a null bitmap (storage-design §4.1). Answers equality, range and prefix lookups.
  *
  * @Author: Fred Feng
  * @Date: 11/10/2026

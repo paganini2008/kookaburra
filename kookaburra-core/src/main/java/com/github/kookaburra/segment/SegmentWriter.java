@@ -25,7 +25,7 @@ import java.util.TreeSet;
 import java.util.zip.CRC32C;
 
 /**
- * Builds an immutable segment (design §5.1) from rows sorted by OID.
+ * Builds an immutable segment (storage-design §4.1) from rows sorted by OID.
  *
  * <pre>
  * header(16) · oids · versions · classIds · rowOffsets · rows · bloom · $type postings · columns · footer · trailer(20)

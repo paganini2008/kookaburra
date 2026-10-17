@@ -1,0 +1,13 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head><body><div class="canvas" data-size="1500x205">
+<h1>Online backup <small>db.backup(Path): consistent, while the application keeps writing</small></h1>
+<div class="row">
+  <div class="box" style="width:260px;border-color:var(--ok)"><b class="ok">your application</b><span>keeps reading and writing,<br>nothing is paused</span></div>
+  <div class="arrow">→</div>
+  <div class="box" style="width:260px"><b>db.backup(dir)</b><span>copies the data as of<br>one moment</span></div>
+  <div class="arrow">→</div>
+  <div class="box" style="width:260px"><b>backup directory</b><span>a complete, compact database:<br>schema, constraints, data</span></div>
+  <div class="arrow">→</div>
+  <div class="box" style="width:240px;border-color:var(--cyan)"><b class="cyan">restore = open it</b><span>ObjectDB.open(dir)<br>or Studio → Open</span></div>
+</div>
+<p style="color:var(--muted);margin:16px 0 0;font-size:13px">Studio: the Backup button does the same. In-memory databases back up to disk the same way.</p>
+</div></body></html>

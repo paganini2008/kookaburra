@@ -410,7 +410,7 @@ Every statement calls `statement()`: if the committed state moved, the base `Rea
 | Conflict table | sequencer | `kookaburra.tx-conflict-table-max` |
 | Abandoned (unclosed) transactions | registry | expire after the timeout; evicted on conflict-table overflow |
 
-Storage side (related, same delivery): flush and compaction run on a fixed pool (`kookaburra.flush-threads`, default 2) instead of one thread; memtables keep their columns and postings; segment deletes keep the sequence-numbered delete log (design.md §6.3).
+Storage side (related, same delivery): flush and compaction run on a fixed pool (`kookaburra.flush-threads`, default 2) instead of one thread; memtables keep their columns and postings; segment deletes keep the sequence-numbered delete log (storage-design.md §6.3).
 
 ---
 

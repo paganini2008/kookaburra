@@ -24,7 +24,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
- * The single write thread (design §6.1): validates batches against the latest state, assigns OIDs,
+ * The single write thread (storage-design §6.1): validates batches against the latest state, assigns OIDs,
  * versions and one sequence number per batch, logs them, applies them to MemSegments and publishes
  * the new {@code visibleSeq}. Group commit: one WAL sync per drained group.
  *

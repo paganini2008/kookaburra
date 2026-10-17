@@ -80,12 +80,14 @@ public class TypeRegistry {
         String idField = systemField(cls, Id.class, true);
         String versionField = systemField(cls, Version.class, false);
         List<FieldDef> fields = JavaTypes.fieldDefs(cls);
+        List<UniqueDef> uniques = JavaTypes.uniques(cls, fields);
+        fields = JavaTypes.indexFor(fields, uniques);
 
         Schema s = schema;
         ClassDef def = s.byName(cls.getName());
         if (def == null) {
             def = new ClassDef(s.nextClassId(), cls.getName(), parent == null ? null : parent.getName(), collection,
-                    idField, versionField, List.of(new Layout(0, fields)));
+                    idField, versionField, List.of(new Layout(0, fields)), uniques);
         } else {
             if (!Objects.equals(def.parent(), parent == null ? null : parent.getName())) {
                 throw new SchemaException(cls.getName() + ": entity superclass changed from " + def.parent());
@@ -95,7 +97,11 @@ public class TypeRegistry {
                 def = def.withLayout(fields);
             }
             if (!Objects.equals(def.idField(), idField) || !Objects.equals(def.versionField(), versionField)) {
-                def = new ClassDef(def.id(), def.name(), def.parent(), def.collection(), idField, versionField, def.layouts());
+                def = new ClassDef(def.id(), def.name(), def.parent(), def.collection(), idField, versionField, def.layouts(),
+                        def.uniques());
+            }
+            if (!def.uniques().equals(uniques)) {
+                def = def.withUniques(uniques);
             }
         }
         if (def != s.byName(cls.getName())) {

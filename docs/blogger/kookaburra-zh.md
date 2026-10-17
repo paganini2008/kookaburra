@@ -1,16 +1,16 @@
-# Kookaburra：用 Stream 风格查询 Java 对象，RoaringBitmap 加速
+# Kookaburra：面向 Java 的嵌入式对象数据库，类型安全的链式查询
 
 ![Kookaburra](https://paganini2008.github.io/kookaburra/assets/logo_256.png)
 
 ## 1. 概述
 
-**Kookaburra**：*像数据库一样查询 Java 对象，底层是位图，上层是 Stream。*
+**Kookaburra**：*像数据库一样查询 Java 对象，就在你的应用里。*
 
-面向 **Java 17+ 的嵌入式对象数据库**。存入的是普通的注解类，查询用类型安全的链式 API 或类 JPQL 的 **OQL**，执行在内存映射文件上的 **RoaringBitmap** 索引里。支持三种隔离级别的事务、唯一约束和外键、精确小数、在线备份，并配有桌面工具 **Kookaburra Studio**。
+面向 **Java 17+ 的嵌入式对象数据库**。存入的是普通的注解类，查询用类型安全的链式 API 或类 JPQL 的 **OQL**，由索引直接回答，毫秒级返回。支持三种隔离级别的事务、唯一约束和外键、精确小数、在线备份，并配有桌面工具 **Kookaburra Studio**。
 
 ![Kookaburra Studio](https://paganini2008.github.io/kookaburra/assets/studio-data.png)
 
-**教学视频（2:33，英文字幕）**：
+**教学视频（2:57，英文字幕）**：
 
 <video controls preload="metadata" playsinline width="100%" poster="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial-poster.jpg">
   <source src="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4" type="video/mp4">
@@ -25,9 +25,9 @@
 | 痛点 | Kookaburra |
 |---|---|
 | ORM / SQL 映射太重 | 注解对象直接存 |
-| `stream().filter()` 全量扫描 | 位图和序号索引：千万对象毫秒级 |
+| `stream().filter()` 全量扫描 | 索引：千万对象毫秒级 |
 | 字段名写在字符串里 | `where(Book::getYear)` 或生成的 `Book_` |
-| 重复数据、悬空引用 | `@Unique`、`@ForeignKey`（RESTRICT / CASCADE / SET_NULL） |
+| 重复数据、悬空引用 | `@Unique`（单字段或字段组合）、`@ForeignKey`（RESTRICT / CASCADE / SET_NULL） |
 | 多个对象要一起修改 | 事务：READ COMMITTED、SNAPSHOT、SERIALIZABLE |
 | 金额舍入误差 | 精确的 `BigDecimal` |
 | 运行中的库怎么备份 | 写入不停，`db.backup(dir)` |
@@ -80,18 +80,14 @@ try (ObjectDB db = ObjectDB.open(Path.of("data"))) {
 
 ## 5. 工作原理
 
-![架构](https://paganini2008.github.io/kookaburra/assets/architecture.png)
+![Kookaburra 在应用中的位置](https://paganini2008.github.io/kookaburra/assets/how-it-fits.png)
 
-所有写入都经过同一个写线程（sequencer），写 WAL 之前依次检查冲突和约束：
-
-![写入流程](https://paganini2008.github.io/kookaburra/assets/write-path.png)
-
-| 层 | 作用 |
+| 你要做的 | Kookaburra 负责的 |
 |---|---|
-| 查询 API | 类型安全字段、OQL、动态访问，编译成同一套谓词计划 |
-| 执行器 | 条件下推到 Roaring 倒排和有序序号；按索引顺序取 Top-N |
-| 写入路径 | 回调 → 冲突检查 → 约束检查 → WAL（每组一次 fsync）→ MemSegment → 发布 |
-| 存储 | 不可变的 mmap 段文件、删除日志、分层合并 |
+| 给普通类加注解 | 存进数据目录（或内存），不需要服务器，也不用写建表脚本 |
+| 用方法引用或 OQL 查询 | 由索引回答；`explain()` 能看到用了哪个索引 |
+| 写入对象、批次或事务 | 原子、持久地提交，并检查约束 |
+| 用 Studio 打开数据目录，或调用 `db.backup(dir)` | 可视化浏览和编辑；运行中做一致性备份 |
 
 ## 6. 代码示例
 
@@ -181,7 +177,7 @@ BackupInfo info = db.backup(Path.of("backups/2026-10-17"));   // 写入不停
 try (ObjectDB copy = ObjectDB.open(info.path())) { … }        // 恢复 = 打开目录
 ```
 
-![在线备份](https://paganini2008.github.io/kookaburra/assets/backup.png)
+![在线备份](https://paganini2008.github.io/kookaburra/assets/backup-overview.png)
 
 **示例 6：嵌套对象与大字段**
 
@@ -203,26 +199,24 @@ db.insert(new Document("scan", text, Files.readAllBytes(Path.of("scan.png")))); 
 
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
-| `kookaburra.mem-segment-bytes` | `64MB` | 内存段达到该大小后刷盘 |
-| `kookaburra.segment-max-bytes` | `512MB` | 合并输出段的上限 |
-| `kookaburra.durability` | `SYNC` | `SYNC` 每个提交组 fsync，`ASYNC` 走页缓存 |
-| `kookaburra.group-commit-micros` | `200` | 等待更多提交合并为一次 fsync |
-| `kookaburra.compaction-garbage-ratio` | `0.3` | 删除行占比达到该值时单独重写该段 |
+| `kookaburra.durability` | `SYNC` | `SYNC`：写入落盘后才返回；`ASYNC`：更快，断电时可能丢失最后片刻的写入 |
 | `kookaburra.transactions` | `false` | 开启事务；关闭时每次写入直接提交 |
 | `kookaburra.tx-isolation` | `SNAPSHOT` | 默认隔离级别：`READ_COMMITTED`、`SNAPSHOT`、`SERIALIZABLE` |
 | `kookaburra.tx-timeout` / `tx-retries` | `60s` / `3` | 事务超时；`inTransaction` 冲突重试次数 |
 | `kookaburra.data` | jar 同级 `data/` | Studio 默认数据目录 |
 
+内存、文件大小、后台任务等调优项在配置文件里有注释说明，默认值适合大多数应用。
+
 ## 8. 性能与对比
 
-**环境**：Apple M2 Max（12 核）、32 GB、内置 SSD（fsync ≈ 4 ms）、JDK 17、`-Xmx8g`；**1000 万对象**；压测工具 `kookaburra-bench`（预热、p50 / p99、每个阶段后做一致性校验）。
+**环境**：Apple M2 Max（12 核）、32 GB、内置 SSD、JDK 17、`-Xmx8g`；**1000 万对象**；压测工具 `kookaburra-bench`（预热、p50 / p99、每个阶段后做一致性校验）。
 
 | 操作（1000 万对象） | p50 |
 |---|---|
 | 批量插入，每批 100（`ASYNC`） | 69.6 万对象/秒 |
 | 持久化单条插入（`SYNC`），16 / 128 线程 | 3.2 k/s / 21.2 k/s |
 | `get(oid)` | 0.6 到 1.1 µs |
-| 位图等值计数 | 0.24 ms |
+| 带索引条件的计数 | 0.24 ms |
 | 等值 + 范围 + limit 100 | 0.21 ms |
 | 230 万命中中按索引列取 Top-10 | 0.39 ms |
 | `GROUP BY city COUNT(*)` | 4.0 ms |
@@ -232,20 +226,19 @@ db.insert(new Document("scan", text, Files.readAllBytes(Path.of("scan.png")))); 
 | 单个热点计数器原子 `increment`，16 线程 | 26.5 万/秒，无丢失更新 |
 | 有 / 无 `@Unique` 的插入（内存库） | 23.5 / 25.8 万/秒 |
 | 1050 万对象在线备份 | 25.4 秒，写入不阻塞 |
-| OQL `DELETE` 全部对象，`compact()` 后磁盘占用 | 132 万对象/秒，剩余 0 B |
+| OQL `DELETE` 全部对象，之后的磁盘占用 | 132 万对象/秒，剩余 0 B |
 | 重新打开 / 打开后堆占用 | 2.0 ms / 6.5 MiB |
 
 ## 9. 局限与取舍
 
-- 持久化单条写入受 fsync 限制；批量导入请用批次或 `ASYNC`。
+- 每次持久化单条写入都要等待磁盘；批量导入请用批次或 `ASYNC`。
 - 只支持单集合查询，不支持 join（用引用加 `fetch`，或半连接 `in(...)`）。
 - 事务是乐观的：冲突在提交时暴露并重试，不会阻塞。
-- 约束只支持单字段（暂不支持复合唯一键）。
 - 不适合：多个进程同时写同一个目录、依赖 SQL / JDBC / BI 生态、TB 级数据。
 
 ## 10. 总结
 
-1. Stream 风格的代码，数据库风格的执行，跑在位图和有序字典上。
+1. Stream 风格的代码，靠索引获得数据库级别的速度。
 2. 方法引用或生成的元模型，字段类型安全。
 3. OQL 覆盖单表 SQL-92 核心。
 4. 三种隔离级别；SERIALIZABLE 无锁消除写偏斜。

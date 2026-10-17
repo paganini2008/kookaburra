@@ -23,6 +23,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiPredicate;
 
 /**
  * Constraint checks of one batch on the sequencer thread (design §6.5): {@code @Unique} values and
@@ -69,7 +70,7 @@ class Integrity {
      */
     static Result check(Database db, long seq, List<WriteOp> ops, long[] out, long[] vanished) {
         Schema schema = db.registry().schema();
-        if (schema.constraints().isEmpty()) {
+        if (schema.constraints().isEmpty() && schema.compositeUniques().isEmpty()) {
             return new Result(ops, out);
         }
         Integrity i = new Integrity(db, schema, seq, ops, out);
@@ -82,6 +83,7 @@ class Integrity {
         i.deletes();
         i.references();
         i.unique();
+        i.compositeUnique();
         return new Result(i.ops, i.out.stream().mapToLong(Long::longValue).toArray());
     }
 
@@ -301,6 +303,57 @@ class Integrity {
         }
     }
 
+    /** Class-level unique constraints: per combination of non-null values, like {@link #unique()}. */
+    private void compositeUnique() {
+        for (Schema.CompositeUnique c : schema.compositeUniques()) {
+            Set<Integer> types = schema.subclassIds(c.owner());
+            String lookup = c.lookupPath(schema.columns(c.collection()));
+            Map<List<Object>, Long> seen = new HashMap<>();
+            for (Map.Entry<Long, Object> e : finals.entrySet()) {
+                if (!(e.getValue() instanceof Record r) || !types.contains(r.classId())) {
+                    continue;
+                }
+                List<Object> key = new ArrayList<>(c.def().paths().size());
+                for (String p : c.def().paths()) {
+                    key.add(r.get(p));
+                }
+                if (key.contains(null)) {
+                    continue;                          // a null in any field: not compared (SQL)
+                }
+                long oid = e.getKey();
+                Long other = seen.putIfAbsent(key, oid);
+                if (other != null) {
+                    throw duplicate(c, key, other);
+                }
+                Object probe = key.get(c.def().paths().indexOf(lookup));
+                Cond.Leaf cond = new Cond.Eq(lookup, c.types().get(c.def().paths().indexOf(lookup)).scalarType(), probe);
+                for (long holder : find(c.collection(), types, cond, probe, (v, d) -> key.equals(values(v, d, c.def().paths())))) {
+                    if (holder != oid && !finals.containsKey(holder)) {
+                        throw duplicate(c, key, holder);
+                    }
+                }
+            }
+        }
+    }
+
+    private static List<Object> values(SegmentView v, int doc, List<String> paths) {
+        List<Object> out = new ArrayList<>(paths.size());
+        for (String p : paths) {
+            out.add(v.value(doc, p));
+        }
+        return out;
+    }
+
+    private static ConstraintViolationException duplicate(Schema.CompositeUnique c, List<Object> key, long holder) {
+        StringBuilder values = new StringBuilder("(");
+        for (int i = 0; i < key.size(); i++) {
+            Object v = key.get(i);
+            values.append(i == 0 ? "" : ", ").append(v instanceof String ? "'" + v + "'" : v);
+        }
+        return new ConstraintViolationException(ConstraintViolationException.Kind.UNIQUE, c.owner(), String.join(", ", c.def().paths()),
+                holder, "duplicate value " + values.append(')') + " for unique " + c + " (already used by object " + holder + ")");
+    }
+
     private static ConstraintViolationException duplicate(Schema.Constraint c, Object v, long holder) {
         return new ConstraintViolationException(ConstraintViolationException.Kind.UNIQUE, c.owner(), c.path(), holder,
                 "duplicate value " + (v instanceof String ? "'" + v + "'" : v) + " for unique " + c + " (already used by object "
@@ -315,6 +368,11 @@ class Integrity {
      * cost follows the matches, not the collection size. Views without a column for the path are scanned.
      */
     private List<Long> find(String collection, Set<Integer> types, Cond.Leaf cond, Object key) {
+        return find(collection, types, cond, key, (v, d) -> true);
+    }
+
+    /** As {@link #find(String, Set, Cond.Leaf, Object)}, keeping documents that also pass {@code also}. */
+    private List<Long> find(String collection, Set<Integer> types, Cond.Leaf cond, Object key, BiPredicate<SegmentView, Integer> also) {
         List<Long> oids = new ArrayList<>();
         for (SegmentView v : db.currentVersion().views(collection)) {
             ColumnIndex idx = v.index(cond.path());
@@ -322,14 +380,16 @@ class Integrity {
             if (docs == null) {
                 ReadView one = new ReadViewImpl(new Version(Map.of(collection, List.of(v))), seq);
                 new Executor(one, collection, types, cond, null).forEach(h -> {
-                    oids.add(h.view().oid(h.doc()));
+                    if (also.test(h.view(), h.doc())) {
+                        oids.add(h.view().oid(h.doc()));
+                    }
                     return true;
                 });
                 continue;
             }
             docs.forEach((int d) -> {
                 long oid = v.oid(d);
-                if (types.contains(v.classId(d)) && v.find(oid, seq) == d && cond.test(v.value(d, cond.path()))) {
+                if (types.contains(v.classId(d)) && v.find(oid, seq) == d && cond.test(v.value(d, cond.path())) && also.test(v, d)) {
                     oids.add(oid);
                 }
             });

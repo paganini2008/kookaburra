@@ -1,20 +1,24 @@
+package com.github.kookaburra.face.view;
+
 import java.io.DataOutputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.Random;
 
 /**
  * Synthesises the background music of the tutorial video: an original, relaxed "office" lo-fi loop
  * (electric piano chords Fmaj7 – Em7 – Dm7 – Cmaj7, soft pad, bass, brushed drums, a sparse bell melody) at 84 BPM.
- * Nothing is sampled, so the track carries no third-party rights.
- * <p>
- * Usage: {@code java OfficeBgm.java <seconds> <out.wav>}
+ * Nothing is sampled, so the track carries no third-party rights. Used by {@link TutorialVideo}.
  *
  * @Author: Fred Feng
  * @Date: 15/10/2026
  * @Version 1.0.0
  */
-public class OfficeBgm {
+class OfficeBgm {
+
+    private OfficeBgm() {
+    }
 
     static final int RATE = 44_100;
     static final double BPM = 84;
@@ -35,8 +39,8 @@ public class OfficeBgm {
         return 440 * Math.pow(2, (midi - 69) / 12);
     }
 
-    public static void main(String[] args) throws IOException {
-        double seconds = Double.parseDouble(args[0]);
+    /** Writes {@code seconds} of music as 16-bit stereo WAV to {@code out}. */
+    static void render(double seconds, Path out) throws IOException {
         int n = (int) (seconds * RATE);
         double[] l = new double[n];
         double[] r = new double[n];
@@ -99,7 +103,7 @@ public class OfficeBgm {
             r[i] = Math.tanh(r[i] * 1.2) * g;
             peak = Math.max(peak, Math.max(Math.abs(l[i]), Math.abs(r[i])));
         }
-        writeWav(args[1], l, r, 0.89 / peak);
+        writeWav(out.toString(), l, r, 0.89 / peak);
     }
 
     /**

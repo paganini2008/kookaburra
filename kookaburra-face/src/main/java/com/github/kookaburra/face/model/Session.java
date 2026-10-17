@@ -39,6 +39,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /**
@@ -548,8 +549,37 @@ public class Session implements AutoCloseable {
         }
         List<ClassMeta.FieldMeta> fields = new ArrayList<>();
         metaFields(s, c, c.current().fields(), "", fields);
+        fields = withCompositeUniques(s, c, fields);
         return new ClassMeta(c.name(), c.id(), c.parent(), c.collection(), subs, root.idField(), root.versionField(),
                 c.layouts().size(), dynamic(c.name()).from().count(), fields);
+    }
+
+    /** Adds {@code UNIQUE (a, b)} to the fields of class-level unique constraints of the class or its superclasses. */
+    private static List<ClassMeta.FieldMeta> withCompositeUniques(Schema s, ClassDef c, List<ClassMeta.FieldMeta> fields) {
+        Set<Integer> self = Set.of(c.id());
+        List<Schema.CompositeUnique> applying = new ArrayList<>();
+        for (Schema.CompositeUnique u : s.compositeUniques()) {
+            if (s.subclassIds(u.owner()).containsAll(self)) {
+                applying.add(u);
+            }
+        }
+        if (applying.isEmpty()) {
+            return fields;
+        }
+        List<ClassMeta.FieldMeta> out = new ArrayList<>();
+        for (ClassMeta.FieldMeta f : fields) {
+            List<String> parts = new ArrayList<>();
+            if (!f.constraint().isEmpty()) {
+                parts.add(f.constraint());
+            }
+            for (Schema.CompositeUnique u : applying) {
+                if (u.def().paths().contains(f.path())) {
+                    parts.add((u.def().name().isEmpty() ? "" : u.def().name() + " ") + "UNIQUE (" + String.join(", ", u.def().paths()) + ")");
+                }
+            }
+            out.add(new ClassMeta.FieldMeta(f.path(), f.type(), f.index(), f.declaredIn(), String.join(", ", parts)));
+        }
+        return out;
     }
 
     private static void metaFields(Schema s, ClassDef c, List<FieldDef> defs, String prefix, List<ClassMeta.FieldMeta> out) {

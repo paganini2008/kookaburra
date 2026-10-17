@@ -5,7 +5,7 @@ import com.github.kookaburra.io.MappedFile;
 
 /**
  * Bit-packed non-negative ints: value {@code i} at bit {@code i * bits}; 8 bytes of padding so every
- * read is a single 8-byte load (design §5.2).
+ * read is a single 8-byte load (storage-design §4.2).
  *
  * @Author: Fred Feng
  * @Date: 11/10/2026

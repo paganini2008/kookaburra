@@ -232,6 +232,43 @@ class ModelTest {
         }
     }
 
+    /** Composite unique constraints in the metadata panel and on save, in memory and on disk. */
+    @ParameterizedTest(name = "on disk = {0}")
+    @ValueSource(booleans = {false, true})
+    void compositeUniqueConstraints(boolean onDisk, @TempDir Path dir) {
+        Session s = onDisk ? Session.open(dir.resolve("db")) : Session.demo();
+        try {
+            s.db().insert(new Seat("A", "1", 7, "t-1"));
+            String seat = Seat.class.getName();
+            ClassMeta meta = s.meta(seat);
+            assertThat(meta.fields()).filteredOn(f -> f.path().equals("hall")).singleElement()
+                    .extracting(ClassMeta.FieldMeta::constraint).isEqualTo("seat UNIQUE (hall, row, number)");
+            assertThat(meta.fields()).filteredOn(f -> f.path().equals("ticket")).singleElement()
+                    .extracting(ClassMeta.FieldMeta::constraint).isEqualTo("UNIQUE");
+            DynamicObject dup = s.newObject(seat);
+            dup.set("hall", "A");
+            dup.set("row", "1");
+            dup.set("number", 7);
+            assertThatThrownBy(() -> s.save(dup)).isInstanceOf(ConstraintViolationException.class)
+                    .hasMessageContaining("for unique seat: Seat(hall, row, number)");
+            dup.set("number", 8);
+            s.save(dup);
+            assertThat(s.run("SELECT COUNT(*) FROM Seat x").rows().get(0).get(0)).isEqualTo(2L);
+            assertThat(s.schemaText()).contains("seat UNIQUE (hall, row, number)");
+        } finally {
+            s.close();
+        }
+        if (onDisk) {
+            Session again = Session.open(dir.resolve("db"));
+            try {
+                assertThat(again.meta(Seat.class.getName()).fields()).extracting(ClassMeta.FieldMeta::constraint)
+                        .contains("seat UNIQUE (hall, row, number)");
+            } finally {
+                again.close();
+            }
+        }
+    }
+
     @Test
     void editing(@TempDir Path dir) {
         try (Session s = Session.open(dir.resolve("db"))) {

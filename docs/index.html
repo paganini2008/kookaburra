@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kookaburra</title>
-<meta name="description" content="Kookaburra: an embedded object database for Java 17+ with type-safe Stream-like queries and OQL on RoaringBitmap indexes, plus the Kookaburra Studio admin tool.">
+<meta name="description" content="Kookaburra: an embedded object database for Java 17+ with type-safe Stream-like queries, OQL, transactions, constraints and online backup, plus the Kookaburra Studio admin tool.">
 <link rel="icon" href="https://paganini2008.github.io/kookaburra/assets/logo_64.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -133,19 +133,19 @@ footer .sp { margin-left: auto; }
       <img class="logo" src="https://paganini2008.github.io/kookaburra/assets/logo_256.png" alt="Kookaburra logo">
       <div>
         <h1>Kookaburra</h1>
-        <p class="slogan">Query Java objects like a database: bitmaps underneath, streams on top.</p>
+        <p class="slogan">Query Java objects like a database, right inside your application.</p>
       </div>
     </div>
     <p class="pos">An <b>embedded object database for Java 17+</b>. Store plain annotated objects and query them with a type-safe,
-      Stream-like API or JPQL-style <b>OQL</b>. Filters, sorts and aggregates run on <b>RoaringBitmap</b> indexes over memory-mapped segments,
-      with transactions at three isolation levels, unique and foreign-key constraints, exact decimals and online backup.</p>
+      Stream-like API or JPQL-style <b>OQL</b>, answered from indexes in milliseconds. Data is crash-safe on disk, with transactions at three
+      isolation levels, unique and foreign-key constraints, exact decimals and online backup.</p>
     <div class="btns">
       <a class="btn primary" href="#start">Get Started</a>
       <a class="btn" href="https://github.com/paganini2008/kookaburra">GitHub</a>
       <a class="btn" href="design.html">Documentation</a>
     </div>
     <div class="badges">
-      <span class="badge">Java 17+</span><span class="badge">Apache-2.0</span><span class="badge">RoaringBitmap 1.6</span>
+      <span class="badge">Java 17+</span><span class="badge">Apache-2.0</span><span class="badge">Embedded, no server</span>
       <span class="badge">ANTLR 4 OQL</span><span class="badge">coverage ≥ 90%</span><span class="badge">Windows · Linux · macOS</span>
     </div>
     <img class="shot" src="https://paganini2008.github.io/kookaburra/assets/studio-data.png" alt="Kookaburra Studio: data grid" width="1320" height="820">
@@ -157,11 +157,11 @@ footer .sp { margin-left: auto; }
   <div class="wrap">
     <div class="kicker">Tutorial</div>
     <h2>Kookaburra in three minutes</h2>
-    <p class="lead">Declare an entity, query it with the chained API and OQL, use transactions and nested objects, then explore the data in Kookaburra Studio. English subtitles.</p>
+    <p class="lead">First Studio, operated with the mouse: browse, filter, inspect, export, follow references, edit (form and JSON), constraints, delete with cascade, transactions with commit and rollback, OQL with EXPLAIN, and backup. Then the same features as Java code. English subtitles.</p>
     <video class="video" controls preload="metadata" playsinline width="1920" height="1080"
            poster="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial-poster.jpg">
       <source src="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4" type="video/mp4">
-      <a href="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4">Download the tutorial (MP4, 2:33)</a>
+      <a href="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4">Download the tutorial (MP4, 2:57)</a>
     </video>
   </div>
 </section>
@@ -193,19 +193,19 @@ footer .sp { margin-left: auto; }
     <p class="lead">Embedded, durable, indexed and queryable, with a desktop tool to look inside.</p>
     <div class="grid g4">
       <div class="card"><div class="ico">🧭</div><h3>Type-safe chained queries</h3><p><code>query(Book.class).where(Book::getYear).ge(1960).list()</code> or the generated <code>Book_</code> metamodel. Refactoring-safe.</p></div>
-      <div class="card"><div class="ico">⚡</div><h3>Bitmap indexes</h3><p>Roaring postings, sorted dictionaries and value-sorted docs: millisecond filters on 10 M objects.</p></div>
+      <div class="card"><div class="ico">⚡</div><h3>Indexes</h3><p>Index the fields you filter, sort and group by: milliseconds on 10 M objects.</p></div>
       <div class="card"><div class="ico">🔤</div><h3>OQL</h3><p>JPQL-style SELECT / UPDATE / DELETE with the SQL-92 core: CASE, LIKE, DISTINCT, GROUP BY … HAVING.</p></div>
       <div class="card"><div class="ico">🧬</div><h3>Nested objects</h3><p>Inheritance, embedded objects at any depth, lists and maps of them (<code>whereAny</code>, <code>MEMBER OF</code>), references with fetch.</p></div>
       <div class="card"><div class="ico">🔁</div><h3>Transactions</h3><p>READ COMMITTED, SNAPSHOT, SERIALIZABLE; optimistic, never blocking; retries built in.</p></div>
-      <div class="card"><div class="ico">🔑</div><h3>Unique constraints</h3><p><code>@Unique</code> on any scalar field; checked atomically at commit.</p></div>
+      <div class="card"><div class="ico">🔑</div><h3>Unique constraints</h3><p><code>@Unique</code> on a field or a combination of fields; checked atomically at commit.</p></div>
       <div class="card"><div class="ico">🔗</div><h3>Foreign keys</h3><p><code>@ForeignKey</code> with RESTRICT, CASCADE or SET_NULL; backlinks with <code>referrers</code>.</p></div>
       <div class="card"><div class="ico">💰</div><h3>Exact decimals</h3><p><code>BigDecimal</code> fields, indexed and compared by value; exact SUM and arithmetic.</p></div>
       <div class="card"><div class="ico">🪝</div><h3>Lifecycle callbacks</h3><p><code>@PrePersist</code>, <code>@PostLoad</code> and friends, plus entity listeners.</p></div>
       <div class="card"><div class="ico">💾</div><h3>Online backup</h3><p>A consistent snapshot while writers keep going; restore = open.</p></div>
-      <div class="card"><div class="ico">📦</div><h3>Large values</h3><p>Long texts and binaries such as images, MiB-sized, through flush, compaction and reopen.</p></div>
-      <div class="card"><div class="ico">🛡</div><h3>Durable & consistent</h3><p>WAL with group commit, crash recovery, MVCC snapshots, atomic batches, optimistic locks; deleted space is reclaimed.</p></div>
+      <div class="card"><div class="ico">📦</div><h3>Large values</h3><p>Long texts and binaries such as images, several MiB per value.</p></div>
+      <div class="card"><div class="ico">🛡</div><h3>Durable & consistent</h3><p>Committed data survives crashes; readers see consistent snapshots; deleted space is reclaimed.</p></div>
       <div class="card"><div class="ico">🧩</div><h3>Dynamic API</h3><p>A self-describing schema with evolution. Open any database without its classes.</p></div>
-      <div class="card"><div class="ico">🗜</div><h3>Compact & fast restart</h3><p>Zero-copy mmap segments, ~150 B / object, 2.0 ms reopen, 6.5 MiB heap for 10 M objects.</p></div>
+      <div class="card"><div class="ico">🗜</div><h3>Compact & fast restart</h3><p>About 150 B per object on disk; opens in milliseconds with a tiny heap.</p></div>
       <div class="card"><div class="ico">🖥</div><h3>Kookaburra Studio</h3><p>Several databases, transactions at any level, backlinks, constraints, image preview, OQL console, backup. One jar for every OS.</p></div>
       <div class="card"><div class="ico">💽</div><h3>Tested on disk</h3><p>Every shared suite runs in memory and on disk; ≥ 90% coverage; a 10 M-object stress run.</p></div>
     </div>
@@ -216,25 +216,18 @@ footer .sp { margin-left: auto; }
 <section id="how">
   <div class="wrap">
     <div class="kicker">How it works</div>
-    <h2>An LSM store with bitmap-indexed segments</h2>
+    <h2>A library inside your application</h2>
     <div class="how" style="grid-template-columns:1fr">
       <div class="diagram">
-        <img class="shot" src="https://paganini2008.github.io/kookaburra/assets/architecture.png" alt="Architecture: query APIs, planner, executor, MVCC snapshot, segments, sequencer, WAL" loading="lazy">
+        <img class="shot" src="https://paganini2008.github.io/kookaburra/assets/how-it-fits.png" alt="Your application uses the ObjectDB API; data lives in a directory that Studio and backups use" loading="lazy">
       </div>
       <ul>
-        <li>All three APIs compile to the same <b>predicate plan</b>. The planner pushes conditions down to postings and ordinals and orders them by cost.</li>
-        <li>Writes are encoded on the caller's thread. A <b>single sequencer</b> logs each group to the WAL with one fsync, applies it to lock-free MemSegments and publishes a new snapshot.</li>
-        <li>Before the WAL, the sequencer checks <b>conflicts</b> (and SERIALIZABLE reads) and <b>constraints</b>; cascades join the same commit.</li>
-        <li>MemSegments flush to <b>immutable, memory-mapped segment files</b>, and tiered compaction merges them in the background.</li>
+        <li><b>Annotate plain classes</b>: Kookaburra stores them in a data directory, or in memory. No server, no schema scripts.</li>
+        <li><b>Query</b> with method references or OQL; indexes answer, and <code>explain()</code> shows which one.</li>
+        <li><b>Write</b> objects, batches or transactions: commits are atomic and durable, constraints are checked at commit.</li>
+        <li><b>Look inside</b> with Studio, or call <code>db.backup(dir)</code> for a consistent copy while the application runs.</li>
       </ul>
     </div>
-  </div>
-</section>
-
-<!-- write path -->
-<section id="write-path" style="padding-top:0">
-  <div class="wrap">
-    <img class="shot" src="https://paganini2008.github.io/kookaburra/assets/write-path.png" alt="Write path: callbacks, conflicts, read validation, version check, integrity, WAL, publish" loading="lazy">
   </div>
 </section>
 
@@ -368,12 +361,12 @@ one doctor stays on call</div></div>
 try (ObjectDB copy = ObjectDB.open(info.path())) {
   …
 }</pre>
-        <div class="res">consistent snapshot, compacted segments</div></div>
+        <div class="res">a complete copy as of one moment</div></div>
     </div>
     <div class="grid shots" style="grid-template-columns:1fr">
       <figure><img src="https://paganini2008.github.io/kookaburra/assets/isolation.png" alt="Isolation levels" loading="lazy"><figcaption>Three isolation levels and the anomalies each one prevents.</figcaption></figure>
       <figure><img src="https://paganini2008.github.io/kookaburra/assets/foreign-keys.png" alt="Constraints" loading="lazy"><figcaption>@Unique and @ForeignKey with ON DELETE actions.</figcaption></figure>
-      <figure><img src="https://paganini2008.github.io/kookaburra/assets/backup.png" alt="Online backup" loading="lazy"><figcaption>Online backup from one MVCC snapshot.</figcaption></figure>
+      <figure><img src="https://paganini2008.github.io/kookaburra/assets/backup-overview.png" alt="Online backup" loading="lazy"><figcaption>Online backup while the application keeps writing.</figcaption></figure>
       <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-query.png" alt="Studio OQL console" loading="lazy"><figcaption>OQL console with completion and transaction scripts.</figcaption></figure>
     </div>
   </div>
@@ -430,7 +423,7 @@ try (ObjectDB copy = ObjectDB.open(info.path())) {
           <tr><td>heap after reopen</td><td class="n">6.5 MiB</td></tr>
           <tr><td>disk footprint</td><td class="n">148 B / obj</td></tr>
         </table>
-        <p class="env">Apple M2 Max · 32 GB · SSD (fsync ≈ 4 ms) · JDK 17 · -Xmx8g. Durable single writes scale with concurrency: one fsync per commit group.
+        <p class="env">Apple M2 Max · 32 GB · SSD · JDK 17 · -Xmx8g. Durable single writes scale with concurrent writers, which share disk flushes.
           <a href="benchmark-10m.md">Full report →</a></p>
       </div>
     </div>
@@ -448,7 +441,7 @@ try (ObjectDB copy = ObjectDB.open(info.path())) {
       <a class="card" href="https://github.com/paganini2008/kookaburra#examples"><div class="ico">🧪</div><h3>Examples</h3><p>Typed API, OQL, constraints, isolation, backup.</p></a>
       <a class="card" href="https://github.com/paganini2008/kookaburra#configuration"><div class="ico">⚙️</div><h3>Configuration</h3><p>One <code>kookaburra.properties</code> for every setting.</p></a>
       <a class="card" href="design.html"><div class="ico">📘</div><h3>API Reference</h3><p>QueryStream, fields, OQL grammar, dynamic API.</p></a>
-      <a class="card" href="design.html"><div class="ico">🏗</div><h3>Architecture</h3><p>Segment format, execution, MVCC, recovery.</p></a>
+      <a class="card" href="design.html"><div class="ico">🏗</div><h3>Design notes</h3><p>How it works inside, for contributors.</p></a>
       <a class="card" href="https://github.com/paganini2008/kookaburra/blob/main/docs/transaction-design.md"><div class="ico">🔁</div><h3>Transactions</h3><p>Three isolation levels with OCC, decisions T1 to T17.</p></a>
     </div>
   </div>

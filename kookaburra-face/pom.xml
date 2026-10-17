@@ -239,6 +239,28 @@
                 </plugins>
             </build>
         </profile>
+        <!-- Tutorial video: mvn -f kookaburra-face/pom.xml test -P tutorial
+             records Studio + slides (TutorialRecorder) and renders docs/assets/kookaburra-tutorial.mp4 and its poster;
+             needs ffmpeg with libx264 and libass (FFMPEG, Homebrew or PATH) -->
+        <profile>
+            <id>tutorial</id>
+            <properties>
+                <jacoco.skip>true</jacoco.skip>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <test>TutorialRecorder</test>
+                            <failIfNoSpecifiedTests>false</failIfNoSpecifiedTests>
+                            <trimStackTrace>false</trimStackTrace>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
         <!-- Fat jar + launch scripts in <repo>/bin; one jar for Windows, Linux and macOS -->
         <profile>
             <id>dist</id>

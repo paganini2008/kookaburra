@@ -12,7 +12,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
 /**
- * Read-only random access to an immutable file (design §14). Little-endian. Files are at most
+ * Read-only random access to an immutable file (storage-design §11). Little-endian. Files are at most
  * 1.5 GB, so one buffer covers a whole file on JDK 17.
  *
  * @Author: Fred Feng

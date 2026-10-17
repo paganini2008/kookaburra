@@ -22,7 +22,7 @@
 <div class="row" style="margin-top:22px;gap:14px;align-items:stretch">
   <div class="box" style="width:270px;text-align:left"><b>SET_NULL</b><span>Ref becomes null; the element is removed from a List / Set of refs. A new version of the referrer is written.</span></div>
   <div class="box" style="width:270px;text-align:left"><b>Existence check</b><span>Every written reference must point at a live object of the target class (same batch included).</span></div>
-  <div class="box" style="width:270px;text-align:left"><b>Backlinks</b><span>db.referrers(oid): every object pointing at an OID, from the index (FK fields are indexed).</span></div>
+  <div class="box" style="width:270px;text-align:left"><b>Backlinks</b><span>db.referrers(oid): every object that points at an object; Studio shows them as "referenced by".</span></div>
   <div class="box" style="width:270px;text-align:left"><b>Adding a constraint</b><span>Existing duplicates or dangling refs make the class registration fail, like ALTER TABLE ADD CONSTRAINT.</span></div>
 </div>
 </div></body></html>

@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Row encoding (design §5.4):
+ * Row encoding (storage-design §4.4):
  * {@code varint classId · varint layoutId · nullBits · value*}; embedded values nest the same way.
  *
  * @Author: Fred Feng

@@ -12,7 +12,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * In-memory segment (memtable, design §6.2): append-only rows with sequence numbers, a version chain per
+ * In-memory segment (memtable, storage-design §6.2): append-only rows with sequence numbers, a version chain per
  * OID, and postings for BITMAP / AUTO columns. One writer (the sequencer); readers are lock-free and see
  * rows with {@code seq <= snapshot} that were not deleted at or before the snapshot.
  *
