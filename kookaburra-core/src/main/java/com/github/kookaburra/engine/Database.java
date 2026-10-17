@@ -3,6 +3,7 @@ package com.github.kookaburra.engine;
 import com.github.kookaburra.BackupInfo;
 import com.github.kookaburra.Config;
 import com.github.kookaburra.ConflictException;
+import com.github.kookaburra.DatabaseStats;
 import com.github.kookaburra.Isolation;
 import com.github.kookaburra.Durability;
 import com.github.kookaburra.EntityListener;
@@ -42,6 +43,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -52,6 +54,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -117,6 +120,8 @@ public class Database implements ObjectDB, OqlHost {
     private final TxRegistry txRegistry = new TxRegistry();
     /** Registered lifecycle listeners (type, listener), in registration order. */
     private final List<Map.Entry<Class<?>, EntityListener<?>>> listeners = new CopyOnWriteArrayList<>();
+    final Metrics metrics = new Metrics();
+    private final Instant openedAt = Instant.now();
     private volatile Version version = Version.EMPTY;
     private volatile long visibleSeq;
     private volatile boolean closed;
@@ -524,6 +529,7 @@ public class Database implements ObjectDB, OqlHost {
                     throw e;
                 }
                 LOG.debug("transaction conflict, retry {} of {}: {}", attempt + 1, retries, e.getMessage());
+                metrics.retries.increment();
                 long bound = Math.min(100, 1L << Math.min(attempt + 1, 6));
                 try {
                     Thread.sleep(ThreadLocalRandom.current().nextLong(1, bound + 1));
@@ -682,8 +688,13 @@ public class Database implements ObjectDB, OqlHost {
             building.add(id);
             Segment seg = new Segment(id, storage.writeSegment(job.collection(), id, bytes), registry::schema,
                     new SegmentDeletes(new RoaringBitmap()), config.postingsOrMax());
+            long took = System.nanoTime() - start;
             LOG.debug("flushed {} rows of {} into seg#{} ({} bytes) in {} ms", entries.size(), job.collection(), id,
-                    bytes.length, (System.nanoTime() - start) / 1_000_000);
+                    bytes.length, took / 1_000_000);
+            metrics.flushes.increment();
+            metrics.flushedRows.add(entries.size());
+            metrics.flushedBytes.add(bytes.length);
+            metrics.flushNanos.add(took);
             sequencer.submitTask(() -> install(job, seg)).whenComplete((r, t) -> {
                 if (t != null) {
                     job.done().completeExceptionally(t);
@@ -816,6 +827,7 @@ public class Database implements ObjectDB, OqlHost {
             }
             if (entries.isEmpty()) {
                 LOG.info("dropped {} fully deleted segment(s) of {}", job.inputs().size(), job.collection());
+                countCompaction(job, 0, start);
                 sequencer.submitTask(() -> installMerge(job, null)).whenComplete((r, t) -> {
                     if (t != null) {
                         job.done().completeExceptionally(t);
@@ -832,6 +844,7 @@ public class Database implements ObjectDB, OqlHost {
                     new SegmentDeletes(new RoaringBitmap()), config.postingsOrMax());
             LOG.info("compacted {} segments of {} into seg#{}: {} live rows, {} bytes, {} ms", job.inputs().size(),
                     job.collection(), id, entries.size(), bytes.length, (System.nanoTime() - start) / 1_000_000);
+            countCompaction(job, bytes.length, start);
             sequencer.submitTask(() -> installMerge(job, merged)).whenComplete((r, t) -> {
                 if (t != null) {
                     job.done().completeExceptionally(t);
@@ -842,6 +855,13 @@ public class Database implements ObjectDB, OqlHost {
             sequencer.fail(t);
             job.done().completeExceptionally(t);
         }
+    }
+
+    private void countCompaction(CompactJob job, long bytes, long start) {
+        metrics.compactions.increment();
+        metrics.compactedSegments.add(job.inputs().size());
+        metrics.compactedBytes.add(bytes);
+        metrics.compactionNanos.add(System.nanoTime() - start);
     }
 
     /** Swaps the inputs for the merged segment, remapping deletes that arrived during the merge. */
@@ -925,6 +945,8 @@ public class Database implements ObjectDB, OqlHost {
             }
         }
         long waited = (System.nanoTime() - start) / 1_000_000;
+        metrics.backPressureWaits.increment();
+        metrics.backPressureMillis.add(waited);
         if (waited >= 1000) {
             LOG.warn("write back-pressure: waited {} ms for flush / compaction (backlog {}, limit {})", waited,
                     backlog.get(), config.writeBacklog());
@@ -972,7 +994,43 @@ public class Database implements ObjectDB, OqlHost {
     @Override
     public BackupInfo backup(Path target) {
         checkOpen();
-        return Backup.run(this, target);
+        BackupInfo info = Backup.run(this, target);
+        metrics.backups.increment();
+        return info;
+    }
+
+    @Override
+    public DatabaseStats stats() {
+        checkOpen();
+        Version v;
+        long seq;
+        do {
+            v = version;
+            seq = visibleSeq;
+        } while (version != v);
+        ReadView rv = new ReadViewImpl(v, seq);
+        List<DatabaseStats.CollectionStats> cols = new ArrayList<>();
+        for (Map.Entry<String, List<SegmentView>> e : new TreeMap<>(v.all()).entrySet()) {
+            int segments = 0;
+            long segmentBytes = 0;
+            long deleted = 0;
+            long memRows = 0;
+            long memBytes = 0;
+            for (SegmentView view : e.getValue()) {
+                if (view instanceof Segment s) {
+                    segments++;
+                    segmentBytes += s.fileSize();
+                    deleted += s.deletes().deleted(seq).getLongCardinality();
+                } else if (view instanceof MemSegment m) {
+                    memRows += m.size();
+                    memBytes += m.bytes();
+                }
+            }
+            long objects = new Executor(rv, e.getKey(), null, new Cond.Const(true), null).count();
+            cols.add(new DatabaseStats.CollectionStats(e.getKey(), objects, segments, segmentBytes, deleted, memRows, memBytes));
+        }
+        return new DatabaseStats(openedAt, Instant.now(), seq, List.copyOf(cols), metrics.writes(replayed),
+                metrics.transactions(txRegistry.size()), metrics.constraints(), metrics.maintenance(backlog.get()));
     }
 
     /** Highest OID sequence handed out per class (a backup's commit continues from these). */

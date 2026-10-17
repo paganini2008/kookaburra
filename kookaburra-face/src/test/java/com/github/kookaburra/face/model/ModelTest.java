@@ -1,6 +1,7 @@
 package com.github.kookaburra.face.model;
 
 import com.github.kookaburra.ConstraintViolationException;
+import com.github.kookaburra.DatabaseStats;
 import com.github.kookaburra.OptimisticLockException;
 import com.github.kookaburra.Ref;
 import com.github.kookaburra.dynamic.DynamicObject;
@@ -24,6 +25,7 @@ import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -32,6 +34,7 @@ import java.util.Base64;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -549,5 +552,26 @@ class ModelTest {
         holder.set("contacts", nested);
         Map<String, byte[]> k2 = new LinkedHashMap<>();
         assertThat(ObjectJson.toEditorJson(holder, customer, k2)).contains("<contacts.list[0].b: binary");
+    }
+
+    @Test
+    void stats() {
+        Session s = Session.demo();
+        try {
+            DatabaseStats st = s.stats();
+            assertThat(StatsRows.collections(st)).extracting(StatsRows.Collection::name).containsExactly("Customer", "Product", "Purchase");
+            List<StatsRows.Metric> rows = StatsRows.metrics(st);
+            assertThat(rows).extracting(StatsRows.Metric::section).contains("Database", "Writes", "Transactions", "Constraints", "Maintenance");
+            assertThat(rows).filteredOn(m -> m.name().equals("objects")).extracting(StatsRows.Metric::value)
+                    .containsExactly(String.format(Locale.ROOT, "%,d", st.objects()));
+            assertThat(rows).extracting(StatsRows.Metric::name).contains("READ COMMITTED", "SNAPSHOT", "SERIALIZABLE");
+            assertThat(rows).filteredOn(m -> m.name().equals("opened")).extracting(StatsRows.Metric::value)
+                    .allMatch(v -> v.endsWith(" UTC"));
+        } finally {
+            s.close();
+        }
+        assertThat(StatsRows.uptime(Duration.ofSeconds(42))).isEqualTo("42 s");
+        assertThat(StatsRows.uptime(Duration.ofSeconds(125))).isEqualTo("2 min 5 s");
+        assertThat(StatsRows.uptime(Duration.ofMinutes(185))).isEqualTo("3 h 5 min");
     }
 }

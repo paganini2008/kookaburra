@@ -776,6 +776,29 @@ Moved to [storage-design.md §13](storage-design.md#13-online-backup).
 
 - `db.backup(target)`: one snapshot exported into fresh segments, writers not blocked, returns `BackupInfo`.
 
+### 15.3 Statistics (`db.stats()`)
+
+```mermaid
+flowchart LR
+    W["write / tx / flush / merge paths"] -- "LongAdder ++" --> M["engine.Metrics"]
+    V["Version + visibleSeq<br/>(one snapshot)"] --> S
+    M --> S["db.stats() → DatabaseStats"]
+    S --> A["application: Micrometer, Dropwizard, JMX, logs"]
+    S --> ST["Studio: Stats tab"]
+```
+
+| Group | Content |
+|---|---|
+| `collections` | per collection: live objects (snapshot count), segments, segment bytes, deleted rows awaiting compaction, unflushed rows / bytes |
+| `writes` | batches committed / rejected, inserts / updates / deletes (cascades and SET_NULL included), group commits (`batchesPerGroup`), WAL records replayed at open, back-pressure waits / ms |
+| `transactions` | active, retries of `inTransaction`, per isolation level: committed / rolled back / conflicts / timeouts |
+| `constraints` | unique and foreign-key violations, cascade deletes, SET_NULL updates |
+| `maintenance` | flushes (rows, bytes, ms), compactions (input segments, bytes, ms), pending, backups |
+
+- Pull model, no dependency (D56): the application polls and exports; core never depends on a metrics library.
+- Counters are cumulative since open (not persisted); object counts and sizes come from one snapshot.
+- Cost: one `LongAdder` increment per event on the write paths; `stats()` counts live objects per collection (bitmap cardinalities) and reads segment metadata.
+
 ---
 
 ## 16. Configuration
@@ -950,6 +973,7 @@ Independent desktop application: module / jar **`kookaburra-face`** (own launche
 | Object editor: JSON | RichTextFX JSON with highlighting + validation against schema; binaries as Base64, those over 64 KiB as a placeholder that keeps the stored bytes (megabytes of Base64 would stall the editor) |
 | CRUD | create / update (optimistic lock: conflict dialog with reload / overwrite) / delete (multi-select = one batch); constraint violations (`@Unique`, `ON DELETE RESTRICT`, missing FK target) → "Constraint violated" dialog, nothing stored; cascades show in the refreshed counts; decimals edited as exact text (`BigDecimal`) |
 | Query | OQL console: highlighting from `OqlLexer` tokens, Ctrl+Space completion (classes after FROM / JOIN / UPDATE, `alias.` paths, keywords), Ctrl / ⌘ + Enter runs; results paged (100 / 500 / 1000; statements with their own LIMIT / OFFSET are not re-paged) with `#` row numbers; whole-object results (`SELECT x`) expand to one column per property; `EXPLAIN` view; history; **scripts**: statements separated by `;` (outside strings and comments) run in order, stop at the first error (`statement 2 of 3: …`), the last one's result is shown and paged; **transaction commands** `BEGIN [TRANSACTION \| WORK] [ISOLATION LEVEL READ COMMITTED \| REPEATABLE READ \| SNAPSHOT \| SERIALIZABLE]` (REPEATABLE READ = SNAPSHOT, as in PostgreSQL), `START TRANSACTION`, `COMMIT`, `ROLLBACK` (highlighted and completed as keywords); **export** of the statement's whole result (JSON / JSONL / CSV, read in chunks of 5 000) |
+| Stats | `db.stats()` of the current database: per collection objects, segments, size, deleted rows, unflushed rows / size; counters since open (writes, transactions per isolation level, constraints, flushes, compactions, backups); refreshed when the tab is selected and on every refresh |
 | Schema | **left**: metadata of the selected class: full name, class id, parent, collection, subclasses, `@Id` / `@Version`, layouts, count; field table (path, type, index, declared in, **constraint**: `UNIQUE`, `FK → Customer · CASCADE`; scrolls as one panel, tooltips for clipped text). **right**: segments of every collection (memory / disk, documents, live, garbage %, size) + layout history |
 
 ### 17.4 Threading
@@ -1088,11 +1112,13 @@ kookaburra/
 | D53 | Lifecycle callbacks with JPA semantics: PRE at the call, POST after the durable commit, skipped for bulk OQL / by-OID / dynamic writes | familiar to JPA users; no callback runs for a write that never commits |
 | D54 | Online backup = export of one snapshot into fresh compacted segments (not a file copy) | consistent without pausing writers, works for in-memory databases, the copy is compact and immediately openable |
 | D55 | Composite unique constraints as repeatable class-level `@Unique(fields = …)`; nulls exempt | JPA `@Table(uniqueConstraints = …)` shape, SQL null semantics; one annotation for both forms |
+| D56 | Monitoring as a pull API `db.stats()` (immutable `DatabaseStats`), no metrics library in core | embedded libraries stay dependency-free (Caffeine `stats()`, RocksDB `Statistics`); Micrometer / Dropwizard binding is the application's choice |
 
 ## 20. Changelog
 
 | Date | Change |
 |---|---|
+| 2026-10-17 | Statistics API `db.stats()` / `DatabaseStats` (§15.3, D56); Studio Stats tab |
 | 2026-10-17 | Storage design split into [storage-design.md](storage-design.md) (§4, §5, §6.1 to §6.4, §7, §8, §13, §14, §15, §15.2 now link there); [developer-guide.md](developer-guide.md) added |
 | 2026-10-17 | Tutorial video as one run: `mvn -f kookaburra-face/pom.xml test -P tutorial` records and renders (`TutorialRecorder` + `TutorialVideo`, ffmpeg); visible mouse cursor with click rings; Studio first, then the API; covers constraints, isolation levels, backlinks and backup; `docs/tools/make-tutorial.sh` removed |
 | 2026-10-17 | Composite unique constraints: class-level repeatable `@Unique(fields = …, name = …)` (§3.6, D55), schema format 3, Studio constraint column |

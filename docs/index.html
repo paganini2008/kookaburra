@@ -137,7 +137,7 @@ footer .sp { margin-left: auto; }
       </div>
     </div>
     <p class="pos">An <b>embedded object database for Java 17+</b>. Store plain annotated objects and query them with a type-safe,
-      Stream-like API or JPQL-style <b>OQL</b>, answered from indexes in milliseconds. Data is crash-safe on disk, with transactions at three
+      Stream-like API or SQL-style <b>OQL</b>, answered from indexes in milliseconds. Data is crash-safe on disk, with transactions at three
       isolation levels, unique and foreign-key constraints, exact decimals and online backup.</p>
     <div class="btns">
       <a class="btn primary" href="#start">Get Started</a>
@@ -194,7 +194,7 @@ footer .sp { margin-left: auto; }
     <div class="grid g4">
       <div class="card"><div class="ico">🧭</div><h3>Type-safe chained queries</h3><p><code>query(Book.class).where(Book::getYear).ge(1960).list()</code> or the generated <code>Book_</code> metamodel. Refactoring-safe.</p></div>
       <div class="card"><div class="ico">⚡</div><h3>Indexes</h3><p>Index the fields you filter, sort and group by: milliseconds on 10 M objects.</p></div>
-      <div class="card"><div class="ico">🔤</div><h3>OQL</h3><p>JPQL-style SELECT / UPDATE / DELETE with the SQL-92 core: CASE, LIKE, DISTINCT, GROUP BY … HAVING.</p></div>
+      <div class="card"><div class="ico">🔤</div><h3>OQL</h3><p>SELECT / UPDATE / DELETE with the SQL-92 core: CASE, LIKE, DISTINCT, GROUP BY … HAVING.</p></div>
       <div class="card"><div class="ico">🧬</div><h3>Nested objects</h3><p>Inheritance, embedded objects at any depth, lists and maps of them (<code>whereAny</code>, <code>MEMBER OF</code>), references with fetch.</p></div>
       <div class="card"><div class="ico">🔁</div><h3>Transactions</h3><p>READ COMMITTED, SNAPSHOT, SERIALIZABLE; optimistic, never blocking; retries built in.</p></div>
       <div class="card"><div class="ico">🔑</div><h3>Unique constraints</h3><p><code>@Unique</code> on a field or a combination of fields; checked atomically at commit.</p></div>
@@ -287,7 +287,7 @@ footer .sp { margin-left: auto; }
         <div class="res">SCIFI   books=4 avg=11.36
 FANTASY books=1 avg=10.00
 CRIME   books=1 avg=7.40</div></div>
-      <div class="card"><h3>OQL for tools &amp; scripts</h3><p>JPQL-style text queries with parameters.</p>
+      <div class="card"><h3>OQL for tools &amp; scripts</h3><p>Text queries with parameters.</p>
 <pre>db.oql("SELECT b.author, b.year FROM Book b " +
        "WHERE b.year &lt; :y ORDER BY b.year")
   .param("y", 1950).rows();</pre>
@@ -441,8 +441,9 @@ try (ObjectDB copy = ObjectDB.open(info.path())) {
       <a class="card" href="https://github.com/paganini2008/kookaburra#examples"><div class="ico">🧪</div><h3>Examples</h3><p>Typed API, OQL, constraints, isolation, backup.</p></a>
       <a class="card" href="https://github.com/paganini2008/kookaburra#configuration"><div class="ico">⚙️</div><h3>Configuration</h3><p>One <code>kookaburra.properties</code> for every setting.</p></a>
       <a class="card" href="design.html"><div class="ico">📘</div><h3>API Reference</h3><p>QueryStream, fields, OQL grammar, dynamic API.</p></a>
-      <a class="card" href="design.html"><div class="ico">🏗</div><h3>Design notes</h3><p>How it works inside, for contributors.</p></a>
+      <a class="card" href="design.html"><div class="ico">🏗</div><h3>Design notes</h3><p>Overall and storage design, for contributors.</p></a>
       <a class="card" href="https://github.com/paganini2008/kookaburra/blob/main/docs/transaction-design.md"><div class="ico">🔁</div><h3>Transactions</h3><p>Three isolation levels with OCC, decisions T1 to T17.</p></a>
+      <a class="card" href="https://github.com/paganini2008/kookaburra/blob/main/docs/developer-guide.md"><div class="ico">🛠</div><h3>Developer guide</h3><p>Build, test, conventions and docs tooling.</p></a>
     </div>
   </div>
 </section>

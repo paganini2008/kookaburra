@@ -707,6 +707,7 @@ class TransactionTest {
             ObjectDB inside = ((TransactionImpl) tx).database();
             assertThat(inside.get(Account.class, ann)).isNotNull();
             assertThat(inside.get(ann)).isNotNull();
+            assertThat(inside.stats().objects()).isEqualTo(1);
             assertThat(inside.getAll(Account.class, List.of(ann))).hasSize(1);
             long b = inside.insert(new Account("b", 1));
             Account bob = inside.get(Account.class, b);

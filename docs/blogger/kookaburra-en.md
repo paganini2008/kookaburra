@@ -6,7 +6,7 @@
 
 **Kookaburra**: *query Java objects like a database, right inside your application.*
 
-An **embedded object database for Java 17+**. Annotated classes in, type-safe chained queries or JPQL-style **OQL** out, answered from indexes in milliseconds. Transactions at three isolation levels, unique and foreign-key constraints, exact decimals, online backup, and a desktop tool, **Kookaburra Studio**.
+An **embedded object database for Java 17+**. Annotated classes in, type-safe chained queries or SQL-style **OQL** out, answered from indexes in milliseconds. Transactions at three isolation levels, unique and foreign-key constraints, exact decimals, online backup, and a desktop tool, **Kookaburra Studio**.
 
 ![Kookaburra Studio](https://paganini2008.github.io/kookaburra/assets/studio-data.png)
 

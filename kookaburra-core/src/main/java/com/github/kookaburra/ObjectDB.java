@@ -152,6 +152,13 @@ public interface ObjectDB extends AutoCloseable {
      */
     BackupInfo backup(Path target);
 
+    /**
+     * Statistics for monitoring: object counts and storage per collection (as of the latest snapshot) and
+     * cumulative counters of writes, transactions, constraints and background work since the database was opened.
+     * Cheap enough to poll every few seconds; export it with the metrics library of the application.
+     */
+    DatabaseStats stats();
+
     /** Turns all in-memory segments into immutable segments and waits until they are installed. */
     void flush();
 

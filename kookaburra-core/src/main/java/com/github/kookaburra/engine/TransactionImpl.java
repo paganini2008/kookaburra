@@ -2,6 +2,7 @@ package com.github.kookaburra.engine;
 
 import com.github.kookaburra.BackupInfo;
 import com.github.kookaburra.ConflictException;
+import com.github.kookaburra.DatabaseStats;
 import com.github.kookaburra.EntityListener;
 import com.github.kookaburra.Isolation;
 import com.github.kookaburra.KookaburraException;
@@ -172,6 +173,7 @@ class TransactionImpl implements Transaction {
         if (reg.timedOut || reg.expired(System.nanoTime())) {
             long age = reg.ageMillis();
             finish(State.ROLLED_BACK);
+            count(Metrics.TIMEOUT);
             throw new TransactionTimeoutException("transaction " + reg.id + " was open " + age
                     + " ms, longer than its timeout, and has been rolled back");
         }
@@ -536,6 +538,7 @@ class TransactionImpl implements Transaction {
             String reason = reg.abortReason;
             boolean timedOut = reg.timedOut;
             finish(State.ROLLED_BACK);
+            count(timedOut ? Metrics.TIMEOUT : Metrics.CONFLICT);
             throw timedOut ? new TransactionTimeoutException(reason) : new ConflictException(reason);
         }
         List<WriteOp> ops = new ArrayList<>();
@@ -576,8 +579,17 @@ class TransactionImpl implements Transaction {
             db.firePost(ops, res);
         } catch (RuntimeException e) {
             finish(State.ROLLED_BACK);
+            if (e instanceof TransactionTimeoutException) {
+                count(Metrics.TIMEOUT);
+            } else if (e instanceof ConflictException) {
+                count(Metrics.CONFLICT);
+            }
             throw e;
         }
+    }
+
+    private void count(int outcome) {
+        db.metrics.tx(options.isolation(), outcome);
     }
 
     private static long[] longs(List<Long> list) {
@@ -598,6 +610,7 @@ class TransactionImpl implements Transaction {
 
     private void finish(State end) {
         state = end;
+        count(end == State.COMMITTED ? Metrics.COMMITTED : Metrics.ROLLED_BACK);
         db.txRegistry().deregister(reg);
         base.close();
         writes.clear();
@@ -910,6 +923,11 @@ class TransactionImpl implements Transaction {
         @Override
         public BackupInfo backup(Path target) {
             return db.backup(target);
+        }
+
+        @Override
+        public DatabaseStats stats() {
+            return db.stats();
         }
 
         @Override
