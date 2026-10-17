@@ -29,7 +29,7 @@ public final class TxOptions {
         this.timeout = timeout;
     }
 
-    /** SNAPSHOT, read-write, timeout from {@code kookaburra.tx-timeout}. */
+    /** SNAPSHOT, read-write, timeout from {@code kookaburra.tx-timeout} ({@code db.begin()} uses {@code kookaburra.tx-isolation}). */
     public static TxOptions defaults() {
         return DEFAULTS;
     }

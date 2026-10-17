@@ -1,9 +1,11 @@
 package com.github.kookaburra.engine;
 
+import com.github.kookaburra.Isolation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -33,10 +35,12 @@ class TxRegistry {
         volatile String abortReason;
         volatile boolean timedOut;
         volatile int writes;
+        final Isolation isolation;
         private boolean warned;
 
-        Entry(long id, long timeoutNanos) {
+        Entry(long id, long timeoutNanos, Isolation isolation) {
             this.id = id;
+            this.isolation = isolation;
             this.startNanos = System.nanoTime();
             this.timeoutNanos = timeoutNanos;
             this.thread = Thread.currentThread().getName();
@@ -53,15 +57,54 @@ class TxRegistry {
 
     private final ConcurrentHashMap<Long, Entry> active = new ConcurrentHashMap<>();
     private final AtomicLong ids = new AtomicLong();
+    private final AtomicInteger serializable = new AtomicInteger();
 
-    Entry register(long timeoutNanos) {
-        Entry e = new Entry(ids.incrementAndGet(), timeoutNanos);
+    Entry register(long timeoutNanos, Isolation isolation) {
+        Entry e = new Entry(ids.incrementAndGet(), timeoutNanos, isolation);
+        if (isolation == Isolation.SERIALIZABLE) {
+            serializable.incrementAndGet();          // before the snapshot is taken: the sequencer starts logging
+        }
         active.put(e.id, e);
         return e;
     }
 
     void deregister(Entry e) {
-        active.remove(e.id);
+        if (active.remove(e.id) != null && e.isolation == Isolation.SERIALIZABLE) {
+            serializable.decrementAndGet();
+        }
+    }
+
+    /** Open SERIALIZABLE transactions. */
+    int serializable() {
+        return serializable.get();
+    }
+
+    /** Oldest snapshot of a live SERIALIZABLE transaction ({@code fallback} when none): older changes are not needed. */
+    long serializableHorizon(long fallback) {
+        long min = fallback;
+        for (Entry e : active.values()) {
+            if (e.isolation == Isolation.SERIALIZABLE && e.abortReason == null) {
+                min = Math.min(min, e.snapshot == PENDING ? 0 : e.snapshot);
+            }
+        }
+        return min;
+    }
+
+    /** Aborts the live SERIALIZABLE transaction with the oldest snapshot (change-log overflow); false if none. */
+    boolean evictOldestSerializable(String reason) {
+        Entry oldest = null;
+        for (Entry e : active.values()) {
+            if (e.isolation == Isolation.SERIALIZABLE && e.abortReason == null && e.snapshot != PENDING
+                    && (oldest == null || e.snapshot < oldest.snapshot)) {
+                oldest = e;
+            }
+        }
+        if (oldest == null) {
+            return false;
+        }
+        oldest.abortReason = "transaction " + oldest.id + " evicted: " + reason;
+        LOG.warn("transaction {} ({}) evicted: {}", oldest.id, oldest.thread, reason);
+        return true;
     }
 
     int size() {

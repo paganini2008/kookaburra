@@ -9,6 +9,7 @@ import org.fxmisc.richtext.model.StyleSpansBuilder;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -24,6 +25,9 @@ public class Highlight {
     private static final Pattern JSON = Pattern.compile(
             "(?<key>\"(?:[^\"\\\\]|\\\\.)*\"(?=\\s*:))|(?<str>\"(?:[^\"\\\\]|\\\\.)*\")|(?<num>-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)"
                     + "|(?<lit>\\b(?:true|false|null)\\b)|(?<punct>[{}\\[\\],:])");
+
+    /** Console transaction commands (not OQL tokens, see {@code Session.txCommand}). */
+    private static final Set<String> TX_COMMANDS = Set.of("BEGIN", "COMMIT", "ROLLBACK");
 
     private Highlight() {
     }
@@ -66,7 +70,7 @@ public class Highlight {
             if (start > last) {
                 b.add(Collections.emptyList(), start - last);
             }
-            String style = oqlStyle(t.getType());
+            String style = t.getType() == OqlLexer.IDENT && TX_COMMANDS.contains(t.getText().toUpperCase()) ? "kw" : oqlStyle(t.getType());
             b.add(style == null ? Collections.emptyList() : List.of(style), end - start);
             last = end;
         }

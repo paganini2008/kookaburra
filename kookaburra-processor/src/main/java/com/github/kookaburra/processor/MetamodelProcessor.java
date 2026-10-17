@@ -191,7 +191,7 @@ public class MetamodelProcessor extends AbstractProcessor {
             case "java.lang.Long": return new Kind("LongField", "longField", null);
             case "java.lang.Double": case "java.lang.Float": return new Kind("DoubleField", "doubleField", null);
             case "java.lang.String": return new Kind("StringField", "stringField", null);
-            case "java.time.LocalDate": case "java.time.LocalDateTime": case "java.time.Instant":
+            case "java.time.LocalDate": case "java.time.LocalDateTime": case "java.time.Instant": case "java.math.BigDecimal":
                 return new Kind("ComparableField", "comparableField", n);
             case REF: return new Kind("RefField", "refField", typeArg(t, 0));
             default: break;

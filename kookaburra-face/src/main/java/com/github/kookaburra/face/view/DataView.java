@@ -89,7 +89,7 @@ public class DataView extends BorderPane {
         export.setGraphic(Icons.of("mdi2e-export"));
         export.setTooltip(new Tooltip("Export every object matching the filter, in the current sort order"));
         for (Export.Format f : Export.Format.values()) {
-            MenuItem item = new MenuItem(f == Export.Format.JSONL ? "JSONL — one object per line (large exports)" : f.name());
+            MenuItem item = new MenuItem(f == Export.Format.JSONL ? "JSONL: one object per line (large exports)" : f.name());
             item.setId("export-" + f.extension());
             item.setOnAction(e -> exportAs(f));
             export.getItems().add(item);
@@ -125,7 +125,12 @@ public class DataView extends BorderPane {
             }
             return true;
         });
-        inspector = new ObjectInspector(c -> session.get().classDef(c), onOpenRef);
+        inspector = new ObjectInspector(c -> session.get().classDef(c), onOpenRef, (oid, done) -> {
+            Session s = session.get();
+            if (s != null) {
+                tasks.run(() -> s.referrers(oid), done, error);
+            }
+        });
         table.getSelectionModel().selectedItemProperty().addListener((o, a, b) -> inspector.show(b));
         split = new SplitPane(table, inspector);
         split.setDividerPositions(0.68);

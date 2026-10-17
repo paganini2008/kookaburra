@@ -1,0 +1,26 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head><body><div class="canvas" data-size="1500x370">
+<h1>Online backup <small>db.backup(Path): consistent, non-blocking</small></h1>
+<div class="row">
+  <div class="group"><div class="label">live database</div>
+    <div class="col">
+      <div class="box"><b>MemSegments</b><span>recent rows</span></div>
+      <div class="box"><b>Segments (.odbf)</b><span>older rows, deletes</span></div>
+      <div class="box" style="border-color:var(--ok)"><b class="ok">writers keep going</b><span>no lock, no pause</span></div>
+    </div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="box" style="width:180px"><b>MVCC snapshot</b><span>sequence N:<br>every commit ≤ N, none after</span></div>
+  <div class="arrow">→</div>
+  <div class="box" style="width:200px"><b>k-way merge by OID</b><span>live objects only<br>(old versions and deletes dropped)</span></div>
+  <div class="arrow">→</div>
+  <div class="group"><div class="label">backup directory</div>
+    <div class="col">
+      <div class="box"><b>compacted segments</b><span>indexes rebuilt</span></div>
+      <div class="box"><b>schema + commit</b><span>constraints, OID counters</span></div>
+    </div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="box" style="width:170px;border-color:var(--cyan)"><b class="cyan">restore = open it</b><span>ObjectDB.open(dir)<br>or Studio → Open</span></div>
+</div>
+<p style="color:var(--muted);margin:16px 0 0;font-size:13px">In-memory databases back up to disk the same way. 10 M objects: see the benchmark.</p>
+</div></body></html>

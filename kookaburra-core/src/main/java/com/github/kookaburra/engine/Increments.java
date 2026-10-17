@@ -5,6 +5,7 @@ import com.github.kookaburra.mapping.Record;
 import com.github.kookaburra.mapping.TypeDef;
 import com.github.kookaburra.mapping.ValueType;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
@@ -57,11 +58,19 @@ class Increments {
             case INT32 -> Math.addExact(values[i] == null ? 0 : (Integer) values[i], Math.toIntExact(integral(path, delta)));
             case INT64 -> Math.addExact(values[i] == null ? 0L : (Long) values[i], integral(path, delta));
             case FLOAT64 -> (values[i] == null ? 0.0 : (Double) values[i]) + delta.doubleValue();
+            case DECIMAL -> ValueType.decimal((values[i] == null ? BigDecimal.ZERO : (BigDecimal) values[i]).add(decimal(delta)));
             default -> throw new IllegalArgumentException("'" + path + "' is not numeric (" + t + ")");
         };
     }
 
     private static long integral(String path, Number delta) {
+        if (delta instanceof BigDecimal d) {
+            try {
+                return d.longValueExact();
+            } catch (ArithmeticException e) {
+                throw new IllegalArgumentException("'" + path + "' is an integer field; delta " + delta + " is not");
+            }
+        }
         if (delta instanceof Double || delta instanceof Float) {
             double d = delta.doubleValue();
             if (d != Math.rint(d) || Double.isInfinite(d)) {
@@ -81,8 +90,18 @@ class Increments {
         return -1;
     }
 
+    private static BigDecimal decimal(Number n) {
+        if (n instanceof BigDecimal d) {
+            return d;
+        }
+        return n instanceof Double || n instanceof Float ? BigDecimal.valueOf(n.doubleValue()) : BigDecimal.valueOf(n.longValue());
+    }
+
     /** Sums deltas of the same path (for repeated increments in one transaction). */
     static Number plus(Number a, Number b) {
+        if (a instanceof BigDecimal || b instanceof BigDecimal) {
+            return decimal(a).add(decimal(b));
+        }
         if (a instanceof Double || a instanceof Float || b instanceof Double || b instanceof Float) {
             return a.doubleValue() + b.doubleValue();
         }

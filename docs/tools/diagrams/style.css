@@ -1,0 +1,25 @@
+/* Shared look of the docs diagrams (dark, like architecture.png). Rendered by make-diagrams.sh. */
+:root { --bg: #0b0f17; --box: #1e2128; --line: #8a92a6; --fg: #e6e9ef; --muted: #9aa3b5; --accent: #d63aa8;
+        --ok: #3fb950; --bad: #f85149; --warn: #d29922; --cyan: #00e5ff; }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--fg);
+       font: 15px/1.35 -apple-system, "Helvetica Neue", Arial, sans-serif; }
+.canvas { padding: 28px 32px; display: inline-block; }
+h1 { font-size: 20px; margin: 0 0 18px; font-weight: 600; }
+h1 small { color: var(--muted); font-weight: 400; font-size: 14px; margin-left: 10px; }
+.box { background: var(--box); border: 1px solid #4a5060; border-radius: 4px; padding: 10px 14px; text-align: center; }
+.box b { display: block; font-weight: 600; }
+.box span { color: var(--muted); font-size: 13px; }
+.group { border: 1.5px solid var(--accent); border-radius: 6px; padding: 14px; position: relative; }
+.group > .label { position: absolute; top: -11px; left: 14px; background: var(--bg); padding: 0 6px; color: var(--fg); font-size: 13px; }
+.row { display: flex; align-items: center; gap: 0; }
+.col { display: flex; flex-direction: column; gap: 10px; }
+.arrow { color: var(--line); font-size: 22px; padding: 0 10px; }
+.down { color: var(--line); font-size: 20px; text-align: center; line-height: 1; }
+.tag { display: inline-block; border-radius: 3px; padding: 1px 7px; font-size: 12px; font-weight: 600; }
+.ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); } .cyan { color: var(--cyan); }
+table { border-collapse: collapse; }
+th, td { border: 1px solid #3a4050; padding: 9px 14px; text-align: center; }
+td.ok, td.bad { white-space: nowrap; }
+th { background: #161a22; font-weight: 600; }
+td.l, th.l { text-align: left; }

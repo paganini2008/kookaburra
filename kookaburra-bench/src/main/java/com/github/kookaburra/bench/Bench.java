@@ -1,10 +1,14 @@
 package com.github.kookaburra.bench;
 
+import com.github.kookaburra.BackupInfo;
 import com.github.kookaburra.Config;
+import com.github.kookaburra.ConstraintViolationException;
 import com.github.kookaburra.Durability;
+import com.github.kookaburra.Isolation;
 import com.github.kookaburra.ObjectDB;
 import com.github.kookaburra.OptimisticLockException;
 import com.github.kookaburra.Transaction;
+import com.github.kookaburra.TxOptions;
 import com.github.kookaburra.WriteBatch;
 import com.github.kookaburra.query.Q;
 import com.github.kookaburra.query.QueryStream;
@@ -26,6 +30,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.IntFunction;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
@@ -131,6 +136,8 @@ public class Bench {
             storage(db, "after compaction");
             queries(db, "after compaction");
             check(db, "after compaction");
+            backup(db);
+            integrity();
         } finally {
             db.close();
         }
@@ -291,7 +298,7 @@ public class Bench {
     /** Transactions (docs/transaction-design.md §18): transfers, a hot counter, queries with own writes. */
     private void transactions(ObjectDB db) {
         // engine cost of transactions without fsync: an in-memory database with 1 000 accounts
-        try (ObjectDB mem = ObjectDB.inMemory(Config.defaults().withTransactions(true))) {
+        try (ObjectDB mem = ObjectDB.inMemory(Config.defaults().withTransactions(true).withTxRetries(1_000))) {
             int accounts = 1_000;
             long[] oids = new long[accounts];
             for (int i = 0; i < accounts; i++) {
@@ -299,34 +306,9 @@ public class Bench {
                 m.setScore(1_000);
                 oids[i] = mem.insert(m);
             }
-            AtomicLong commits = new AtomicLong();
-            AtomicLong runs = new AtomicLong();
-            Stats lat = runThreads(opt.threads, opt.seconds, rnd -> {
-                long from = oids[rnd.nextInt(accounts)];
-                long to = oids[rnd.nextInt(accounts)];
-                mem.inTransaction(tx -> {
-                    runs.incrementAndGet();
-                    Member a = tx.get(Member.class, from);
-                    Member b = tx.get(Member.class, to);
-                    if (from != to && a.getScore() > 0) {
-                        a.setScore(a.getScore() - 1);
-                        b.setScore(b.getScore() + 1);
-                        tx.update(a);
-                        tx.update(b);
-                    }
-                }, 1_000);
-                commits.incrementAndGet();
-            });
-            long total = mem.from(Member.class).sum(Q.where(Member::getScore));
-            if (total != 1_000L * accounts) {
-                problem("transfers changed the total: " + total);
+            for (Isolation level : List.of(Isolation.SNAPSHOT, Isolation.READ_COMMITTED, Isolation.SERIALIZABLE)) {
+                transfers(mem, oids, level);
             }
-            double rate = commits.get() / (double) opt.seconds;
-            record("Transactions", "transfer (read 2, update 2), " + opt.threads + " threads, in memory", rate(rate),
-                    "≥ 50 k/s", rate >= 50_000);
-            record("Transactions", "transfer latency p50 / p99 (incl. retries)", lat.summary(), "", null);
-            record("Transactions", "conflict retries per commit", String.format(Locale.ROOT, "%.3f",
-                    (runs.get() - commits.get()) / (double) Math.max(1, commits.get())), "", null);
 
             long counter = oids[0];
             int before = mem.get(Member.class, counter).getAge();
@@ -356,6 +338,91 @@ public class Bench {
                     () -> tx.query(Member.class).where(Member::getCity).eq(city).count());
             tx.rollback();
         }
+    }
+
+    /** Money transfers between random accounts at one isolation level; the total must not change. */
+    private void transfers(ObjectDB mem, long[] oids, Isolation level) {
+        int accounts = oids.length;
+        TxOptions options = TxOptions.defaults().isolation(level);
+        AtomicLong commits = new AtomicLong();
+        AtomicLong runs = new AtomicLong();
+        Stats lat = runThreads(opt.threads, opt.seconds, rnd -> {
+            long from = oids[rnd.nextInt(accounts)];
+            long to = oids[rnd.nextInt(accounts)];
+            mem.inTransaction(options, tx -> {
+                runs.incrementAndGet();
+                Member a = tx.get(Member.class, from);
+                Member b = tx.get(Member.class, to);
+                if (from != to && a.getScore() > 0) {
+                    a.setScore(a.getScore() - 1);
+                    b.setScore(b.getScore() + 1);
+                    tx.update(a);
+                    tx.update(b);
+                }
+            });
+            commits.incrementAndGet();
+        });
+        long total = mem.from(Member.class).sum(Q.where(Member::getScore));
+        if (total != 1_000L * accounts) {
+            problem(level + " transfers changed the total: " + total);
+        }
+        double rate = commits.get() / (double) opt.seconds;
+        String name = level.name().replace('_', ' ');
+        record("Transactions", "transfer (read 2, update 2), " + name + ", " + opt.threads + " threads, in memory", rate(rate),
+                "≥ 50 k/s", rate >= 50_000);
+        record("Transactions", "transfer latency p50 / p99 (incl. retries), " + name, lat.summary(), "", null);
+        record("Transactions", "conflict retries per commit, " + name, String.format(Locale.ROOT, "%.3f",
+                (runs.get() - commits.get()) / (double) Math.max(1, commits.get())), "", null);
+    }
+
+    /** Cost of @Unique and @ForeignKey checks: the same inserts with and without constraints, and cascading deletes. */
+    private void integrity() {
+        int n = 200_000;
+        try (ObjectDB mem = ObjectDB.inMemory(Config.defaults())) {
+            double plain = batchInsert(mem, n, i -> new Shop.Plain("user" + i + "@example.com"));
+            double unique = batchInsert(mem, n, i -> new Shop.Customer("user" + i + "@example.com"));
+            record("Integrity", "insert with @Unique e-mail vs none, batches of 100, in memory", rate(unique) + " vs " + rate(plain),
+                    "≥ 50% of plain", unique >= plain / 2);
+            List<Long> customers = mem.query(Shop.Customer.class).limit(n).list().stream().map(Shop.Customer::getOid).toList();
+            double fk = batchInsert(mem, n, i -> new Shop.Order(customers.get(i % customers.size()), i));
+            record("Integrity", "insert with a checked @ForeignKey, batches of 100, in memory", rate(fk), "", null);
+            long before = mem.query(Shop.Order.class).count();
+            long t = System.nanoTime();
+            int deleted = 20_000;
+            for (int i = 0; i < deleted; ) {
+                try (WriteBatch b = mem.batch()) {
+                    for (int k = 0; k < 100 && i < deleted; k++, i++) {
+                        b.delete(Shop.Customer.class, customers.get(i));
+                    }
+                    b.commit();
+                }
+            }
+            double secs = (System.nanoTime() - t) / 1e9;
+            long cascaded = before - mem.query(Shop.Order.class).count();
+            if (cascaded != deleted) {
+                problem("cascade deleted " + cascaded + " orders for " + deleted + " customers");
+            }
+            record("Integrity", "delete with ON DELETE CASCADE (1 order each), batches of 100, in memory", rate(deleted / secs), "", null);
+            try {
+                mem.insert(new Shop.Customer("user" + (n - 1) + "@example.com"));
+                problem("a duplicate e-mail was accepted");
+            } catch (ConstraintViolationException expected) {
+                // the constraint holds
+            }
+        }
+    }
+
+    private static double batchInsert(ObjectDB db, int n, IntFunction<Object> make) {
+        long t = System.nanoTime();
+        for (int i = 0; i < n; ) {
+            try (WriteBatch b = db.batch()) {
+                for (int k = 0; k < 100 && i < n; k++, i++) {
+                    b.insert(make.apply(i));
+                }
+                b.commit();
+            }
+        }
+        return n / ((System.nanoTime() - t) / 1e9);
     }
 
     private void mixed(ObjectDB db) {
@@ -432,6 +499,23 @@ public class Bench {
     }
 
     /** Cleans up through the API (the delete path under load): OQL DELETE per city, then compaction. */
+    /** Online backup of the whole database, then the copy is opened and counted. */
+    private void backup(ObjectDB db) {
+        Path target = opt.dir.resolveSibling(opt.dir.getFileName() + "-backup");
+        delete(target);
+        BackupInfo info = db.backup(target);
+        double secs = info.millis() / 1000.0;
+        record("Maintenance", "online backup of " + String.format(Locale.ROOT, "%,d", info.objects()) + " objects ("
+                + mib(info.bytes()) + ")", String.format(Locale.ROOT, "%.1f s, %s", secs, rate(info.objects() / Math.max(secs, 1e-3))), "", null);
+        try (ObjectDB copy = ObjectDB.open(target)) {
+            long n = copy.query(Member.class).count();
+            if (n != db.query(Member.class).count()) {
+                problem("backup holds " + n + " objects, the database " + db.query(Member.class).count());
+            }
+        }
+        delete(target);
+    }
+
     private void deleteEverything(ObjectDB db) {
         long before = db.query(Member.class).count();
         long t = System.nanoTime();
@@ -563,7 +647,7 @@ public class Bench {
     }
 
     private static int order(String section) {
-        return List.of("Write", "Read", "Query", "Mixed", "Transactions", "Maintenance", "Recovery", "Storage", "Memory", "Delete").indexOf(section);
+        return List.of("Write", "Read", "Query", "Mixed", "Transactions", "Integrity", "Maintenance", "Recovery", "Storage", "Memory", "Delete").indexOf(section);
     }
 
     private static String rate(double perSecond) {

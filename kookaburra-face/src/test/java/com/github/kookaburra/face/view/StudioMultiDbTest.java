@@ -264,6 +264,60 @@ class StudioMultiDbTest {
 
     @ParameterizedTest(name = "on disk = {0}")
     @ValueSource(booleans = {false, true})
+    void consoleTransactionsAndFlush(boolean onDisk, FxRobot robot, @TempDir Path tmp) {
+        openData(robot, onDisk, tmp.resolve("db"));
+        Session s = view.session();
+        assertThat(view.flush.isDisabled()).isFalse();
+        robot.interact(() -> view.tabs.getSelectionModel().select(1));
+        robot.interact(() -> view.query.setText("BEGIN;\nUPDATE Customer c SET c.age = 166 WHERE c.age < 25;\n"
+                + "SELECT COUNT(*) FROM Customer c WHERE c.age = 166"));
+        robot.interact(() -> view.query.run.fire());
+        settle();
+        assertThat(view.query.message.getText()).startsWith("3 statements · last: rows 1–1");
+        assertThat(view.txStatus.isVisible()).isTrue();             // the toolbar shows the console's transaction
+        assertThat(view.txCommit.isDisabled()).isFalse();
+        long changed = (Long) view.query.results.getItems().get(0).get(0);
+        assertThat(changed).isPositive();
+        assertThat(view.txStatus.getText()).contains(changed + " pending change");
+        assertThat(outside(s, "SELECT COUNT(*) FROM Customer c WHERE c.age = 166")).isZero();
+
+        robot.interact(() -> view.flush.fire());                    // the open transaction is not flushed
+        settle();
+        assertThat(view.status.getText()).startsWith("flushed").contains("open transaction not included");
+        assertThat(outside(s, "SELECT COUNT(*) FROM Customer c WHERE c.age = 166")).isZero();
+
+        robot.interact(() -> view.query.setText("COMMIT"));
+        robot.interact(() -> view.query.run.fire());
+        settle();
+        assertThat(view.query.message.getText()).startsWith("transaction committed");
+        assertThat(view.txStatus.isVisible()).isFalse();
+        assertThat(view.txBegin.isDisabled()).isFalse();
+        assertThat(outside(s, "SELECT COUNT(*) FROM Customer c WHERE c.age = 166")).isEqualTo(changed);
+
+        // toolbar Begin, console ROLLBACK; a failing script names the statement
+        robot.interact(() -> view.txBegin.fire());
+        settle();
+        robot.interact(() -> view.query.setText("DELETE FROM Customer c; ROLLBACK; SELEC"));
+        robot.interact(() -> view.query.run.fire());
+        settle();
+        assertThat(view.query.message.getText()).startsWith("statement 3 of 3:");
+        assertThat(view.txStatus.isVisible()).isFalse();
+        assertThat(outside(s, "SELECT COUNT(*) FROM Customer c")).isEqualTo(250);
+        robot.interact(() -> view.query.setText(" ; "));
+        robot.interact(() -> view.query.run.fire());                // nothing to run
+        settle();
+
+        robot.interact(() -> view.flush.fire());
+        settle();
+        assertThat(view.status.getText()).startsWith("flushed").doesNotContain("transaction")
+                .contains(onDisk ? "segment" : "(in memory)");
+        if (onDisk) {
+            assertThat(s.segments()).allMatch(x -> x.kind().equals("DISK"));
+        }
+    }
+
+    @ParameterizedTest(name = "on disk = {0}")
+    @ValueSource(booleans = {false, true})
     void conflictsAndConfirmations(boolean onDisk, FxRobot robot, @TempDir Path tmp) {
         openData(robot, onDisk, tmp.resolve("db"));
         Session s = view.session();

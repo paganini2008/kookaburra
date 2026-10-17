@@ -30,6 +30,7 @@ import com.github.kookaburra.mapping.ClassDef;
 import com.github.kookaburra.mapping.Schema;
 import com.github.kookaburra.mapping.TypeDef;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -438,9 +439,16 @@ public class QueryStream<T> {
         return v == null ? 0 : ((Number) v).doubleValue();
     }
 
+    /** Exact sum of non-null decimal values; {@link BigDecimal#ZERO} when there are none. */
+    public BigDecimal sum(ComparableField<? super T, BigDecimal> field) {
+        Object v = aggregate(Q.sum(field)).get(0);
+        return v == null ? BigDecimal.ZERO : (BigDecimal) v;
+    }
+
+    /** Average as a double (like JPA's {@code AVG}); OQL and {@link Q#avg} in groups keep decimals exact. */
     public OptionalDouble avg(Field<? super T, ? extends Number> field) {
         Object v = aggregate(Q.avg(field)).get(0);
-        return v == null ? OptionalDouble.empty() : OptionalDouble.of((Double) v);
+        return v == null ? OptionalDouble.empty() : OptionalDouble.of(((Number) v).doubleValue());
     }
 
     @SuppressWarnings("unchecked")

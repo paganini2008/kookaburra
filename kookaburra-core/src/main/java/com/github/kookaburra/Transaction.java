@@ -1,10 +1,12 @@
 package com.github.kookaburra;
 
 import com.github.kookaburra.dynamic.DynamicCollection;
+import com.github.kookaburra.dynamic.DynamicObject;
 import com.github.kookaburra.oql.OqlQuery;
 import com.github.kookaburra.query.QueryStream;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -55,6 +57,11 @@ public interface Transaction extends AutoCloseable {
     <T> OqlQuery<T> oql(String text, Class<T> resultType);
 
     DynamicCollection dynamic(String className);
+
+    /** {@link ObjectDB#referrers(long)} as seen by this transaction (its own writes included). */
+    List<DynamicObject> referrers(long oid);
+
+    <T> List<T> referrers(Class<T> type, long oid);
 
     // ---------------------------------------------------------------- writes (buffered)
 

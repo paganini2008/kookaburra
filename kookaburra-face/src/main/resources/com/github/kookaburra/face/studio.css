@@ -343,3 +343,20 @@
     -fx-padding: 2 6 2 6;
     -fx-font-size: 11px;
 }
+
+/* transaction buttons on the transparent toolbar: coloured text instead of a filled background */
+.k-tool.success, .k-tool.success:hover {
+    -fx-text-fill: -k-ok;
+}
+
+.k-tool.success .k-icon {
+    -fx-icon-color: -k-ok;
+}
+
+.k-tool.danger, .k-tool.danger:hover {
+    -fx-text-fill: -k-err;
+}
+
+.k-tool.danger .k-icon {
+    -fx-icon-color: -k-err;
+}

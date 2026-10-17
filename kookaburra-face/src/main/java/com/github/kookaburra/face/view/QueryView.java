@@ -47,7 +47,8 @@ import java.util.function.Supplier;
 
 /**
  * OQL console: highlighted editor (RichTextFX), Ctrl+Enter to run, Ctrl+Space to complete, results grid,
- * explain view and history.
+ * explain view and history. Statements separated by {@code ;} run as a script; {@code BEGIN} / {@code COMMIT} /
+ * {@code ROLLBACK} control the database's transaction (the same one as the toolbar buttons).
  *
  * @Author: Fred Feng
  * @Date: 11/10/2026
@@ -118,7 +119,7 @@ public class QueryView extends BorderPane {
         export.setGraphic(Icons.of("mdi2e-export"));
         export.setTooltip(new Tooltip("Export the whole result of the statement in the editor (all rows, not only this page)"));
         for (Export.Format f : Export.Format.values()) {
-            MenuItem item = new MenuItem(f == Export.Format.JSONL ? "JSONL — one row per line (large results)" : f.name());
+            MenuItem item = new MenuItem(f == Export.Format.JSONL ? "JSONL: one row per line (large results)" : f.name());
             item.setId("console-export-" + f.extension());
             item.setOnAction(e -> exportAs(f));
             export.getItems().add(item);
@@ -192,8 +193,25 @@ public class QueryView extends BorderPane {
         if (!history.getItems().contains(text)) {
             history.getItems().add(0, text);
         }
-        current = text;
-        page(0);
+        List<String> statements = Session.statements(text);
+        if (statements.isEmpty()) {
+            return;
+        }
+        current = statements.get(statements.size() - 1);    // paging re-runs only the last statement
+        if (statements.size() == 1) {
+            page(0);
+            return;
+        }
+        int size = pageSize.getValue();
+        message.getStyleClass().remove("k-error");
+        tasks.run(() -> s.script(statements, size), r -> {
+            changed.run();                                   // earlier statements may have changed data or the transaction
+            show(r);
+            message.setText(statements.size() + " statements · last: " + r.summary());
+        }, t -> {
+            changed.run();
+            fail(t);
+        });
     }
 
     /** Runs the current statement for the page starting at {@code from}. */
@@ -231,8 +249,8 @@ public class QueryView extends BorderPane {
     }
 
     void show(QueryOutcome r) {
-        if (r.affected() > 0) {
-            changed.run();                                   // UPDATE / DELETE: counts and the data grid change
+        if (r.affected() > 0 || r.note() != null) {
+            changed.run();                                   // UPDATE / DELETE / COMMIT …: counts, grid and transaction state change
         }
         message.setText(r.summary());
         status.accept(r.summary());

@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head><body><div class="canvas" data-size="1340x330">
+<h1>Constraints <small>@Unique and @ForeignKey(onDelete = …), checked at commit</small></h1>
+<div class="row" style="align-items:center">
+  <div class="col" style="width:230px">
+    <div class="box" style="text-align:left"><b>Customer</b><span>name<br><span class="cyan">email @Unique</span></span></div>
+  </div>
+  <div style="width:250px;text-align:center;color:var(--muted);font-size:13px">
+    <div class="arrow" style="font-size:26px">◀────────</div>
+    <span class="tag" style="background:#3a1f2c;color:#ff8bc4">ON DELETE CASCADE</span><br>delete a customer: its purchases go too
+  </div>
+  <div class="col" style="width:250px">
+    <div class="box" style="text-align:left"><b>Purchase</b><span><span class="cyan">customer @ForeignKey(CASCADE)</span><br><span class="cyan">product @ForeignKey</span><br>quantity · lines</span></div>
+  </div>
+  <div style="width:250px;text-align:center;color:var(--muted);font-size:13px">
+    <div class="arrow" style="font-size:26px">────────▶</div>
+    <span class="tag" style="background:#3a2a12;color:#f0b44c">ON DELETE RESTRICT</span><br>a purchased product cannot be deleted
+  </div>
+  <div class="col" style="width:230px">
+    <div class="box" style="text-align:left"><b>Product</b><span>title · price (DECIMAL)<br><span class="cyan">sku @Unique</span></span></div>
+  </div>
+</div>
+<div class="row" style="margin-top:22px;gap:14px;align-items:stretch">
+  <div class="box" style="width:270px;text-align:left"><b>SET_NULL</b><span>Ref becomes null; the element is removed from a List / Set of refs. A new version of the referrer is written.</span></div>
+  <div class="box" style="width:270px;text-align:left"><b>Existence check</b><span>Every written reference must point at a live object of the target class (same batch included).</span></div>
+  <div class="box" style="width:270px;text-align:left"><b>Backlinks</b><span>db.referrers(oid): every object pointing at an OID, from the index (FK fields are indexed).</span></div>
+  <div class="box" style="width:270px;text-align:left"><b>Adding a constraint</b><span>Existing duplicates or dangling refs make the class registration fail, like ALTER TABLE ADD CONSTRAINT.</span></div>
+</div>
+</div></body></html>

@@ -1,6 +1,8 @@
 package com.github.kookaburra.face.model;
 
+import com.github.kookaburra.BackupInfo;
 import com.github.kookaburra.Config;
+import com.github.kookaburra.Isolation;
 import com.github.kookaburra.ObjectDB;
 import com.github.kookaburra.Snapshot;
 import com.github.kookaburra.Transaction;
@@ -17,15 +19,22 @@ import com.github.kookaburra.mapping.DynamicCodec;
 import com.github.kookaburra.mapping.FieldDef;
 import com.github.kookaburra.mapping.Schema;
 import com.github.kookaburra.mapping.ValueType;
+import com.github.kookaburra.oql.OqlException;
 import com.github.kookaburra.oql.OqlQuery;
+import com.github.kookaburra.oql.grammar.OqlLexer;
 import com.github.kookaburra.query.Row;
 import com.github.kookaburra.segment.Segment;
+import org.antlr.v4.runtime.CharStreams;
+import org.antlr.v4.runtime.Token;
 
 import java.io.IOException;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -47,6 +56,7 @@ public class Session implements AutoCloseable {
 
     /** Studio transactions are interactive: long enough for manual edits, short enough not to pin history forever. */
     static final Duration TX_TIMEOUT = Duration.ofMinutes(30);
+    private static final DateTimeFormatter BACKUP_STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
 
     private Transaction tx;
     private final Path dir;
@@ -106,12 +116,22 @@ public class Session implements AutoCloseable {
 
     // ---------------------------------------------------------------- transaction (docs/transaction-design.md)
 
-    /** Starts a SNAPSHOT transaction: until commit / rollback every read sees and every write joins it. */
-    public synchronized Transaction begin() {
+    /** Starts a transaction at the configured isolation ({@code kookaburra.tx-isolation}): until commit / rollback every read sees and every write joins it. */
+    public Transaction begin() {
+        return begin(defaultIsolation());
+    }
+
+    /** Isolation of {@link #begin()} and of a console {@code BEGIN} without a level. */
+    public static Isolation defaultIsolation() {
+        return config().txIsolation();
+    }
+
+    /** Starts a transaction with the given isolation level. */
+    public synchronized Transaction begin(Isolation isolation) {
         if (tx() != null) {
             throw new IllegalStateException("a transaction is already open");
         }
-        tx = db.begin(TxOptions.defaults().timeout(TX_TIMEOUT));
+        tx = db.begin(TxOptions.defaults().isolation(isolation).timeout(TX_TIMEOUT));
         return tx;
     }
 
@@ -145,7 +165,7 @@ public class Session implements AutoCloseable {
     /** Status text of the open transaction, or null. */
     public synchronized String txLabel() {
         Transaction t = tx();
-        return t == null ? null : "TX #" + t.id() + " · " + t.isolation() + " · " + t.pendingWrites() + " pending change"
+        return t == null ? null : "TX #" + t.id() + " · " + t.isolation().name().replace('_', ' ') + " · " + t.pendingWrites() + " pending change"
                 + (t.pendingWrites() == 1 ? "" : "s");
     }
 
@@ -174,6 +194,15 @@ public class Session implements AutoCloseable {
 
     public Schema schema() {
         return db.schema();
+    }
+
+    /**
+     * Writes the memtables to segments now (segment files on disk) instead of waiting for the size threshold;
+     * returns the number of segments afterwards. Uncommitted transaction changes are not part of it.
+     */
+    public int flush() {
+        db.flush();
+        return segments().size();
     }
 
     /** Snapshot sequence number of the latest committed write. */
@@ -269,6 +298,10 @@ public class Session implements AutoCloseable {
      */
     public QueryOutcome run(String oql, long offset, int pageSize) {
         long start = System.nanoTime();
+        String done = txCommand(oql);
+        if (done != null) {
+            return QueryOutcome.note(done, (System.nanoTime() - start) / 1_000_000);
+        }
         OqlQuery<Object> q = oql(oql);
         if (q.isExplain() && !q.isSelect()) {                 // EXPLAIN UPDATE / DELETE: plan only, nothing changes
             return new QueryOutcome(List.of(), List.of(), q.explain(), -1, (System.nanoTime() - start) / 1_000_000);
@@ -315,6 +348,144 @@ public class Session implements AutoCloseable {
         }
         return new QueryOutcome(cols, data, null, -1, (System.nanoTime() - start) / 1_000_000,
                 paged ? offset : 0, paged ? pageSize : -1);
+    }
+
+    /**
+     * Runs a script: statements separated by {@code ;} (see {@link #statements}), stopping at the first error,
+     * which names the statement. Returns the outcome of the last statement, a SELECT paged like {@link #run}.
+     */
+    public QueryOutcome script(List<String> statements, int pageSize) {
+        int last = statements.size() - 1;
+        for (int i = 0; i < last; i++) {
+            try {
+                run(statements.get(i));
+            } catch (RuntimeException e) {
+                throw new IllegalStateException("statement " + (i + 1) + " of " + statements.size() + ": " + e.getMessage(), e);
+            }
+        }
+        try {
+            return run(statements.get(last), 0, pageSize);
+        } catch (RuntimeException e) {
+            throw last == 0 ? e : new IllegalStateException("statement " + (last + 1) + " of " + statements.size() + ": "
+                    + e.getMessage(), e);
+        }
+    }
+
+    /** Splits console text at top-level {@code ;} (not inside strings or comments); blank statements are dropped. */
+    public static List<String> statements(String text) {
+        OqlLexer lexer = new OqlLexer(CharStreams.fromString(text));
+        lexer.removeErrorListeners();
+        List<String> out = new ArrayList<>();
+        int from = 0;
+        for (Token t : lexer.getAllTokens()) {
+            if (";".equals(t.getText())) {
+                add(out, text.substring(from, t.getStartIndex()));
+                from = t.getStopIndex() + 1;
+            }
+        }
+        add(out, text.substring(from));
+        return out;
+    }
+
+    private static void add(List<String> out, String statement) {
+        if (!words(statement).isEmpty()) {
+            out.add(statement.strip());
+        }
+    }
+
+    /** Upper-case words of a statement without whitespace, comments and a trailing {@code ;}. */
+    private static List<String> words(String statement) {
+        OqlLexer lexer = new OqlLexer(CharStreams.fromString(statement));
+        lexer.removeErrorListeners();
+        List<String> out = new ArrayList<>();
+        for (Token t : lexer.getAllTokens()) {
+            int type = t.getType();
+            if (type != OqlLexer.WS && type != OqlLexer.LINE_COMMENT && type != OqlLexer.BLOCK_COMMENT && !";".equals(t.getText())) {
+                out.add(t.getText().toUpperCase());
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Console transaction control (not OQL): {@code BEGIN [TRANSACTION | WORK] [ISOLATION LEVEL level]},
+     * {@code START TRANSACTION [ISOLATION LEVEL level]}, {@code COMMIT [TRANSACTION | WORK]} and
+     * {@code ROLLBACK [TRANSACTION | WORK]}; level = {@code READ COMMITTED}, {@code REPEATABLE READ} (= SNAPSHOT,
+     * as in PostgreSQL), {@code SNAPSHOT} or {@code SERIALIZABLE}. Returns what was done, or null when the text is not
+     * such a command.
+     */
+    String txCommand(String text) {
+        List<String> w = words(text);
+        if (w.isEmpty() || !List.of("BEGIN", "START", "COMMIT", "ROLLBACK").contains(w.get(0))) {
+            return null;
+        }
+        String head = w.get(0);
+        int i = 1;
+        if (head.equals("START")) {
+            if (w.size() < 2 || !w.get(1).equals("TRANSACTION")) {
+                throw new OqlException("syntax: START TRANSACTION [ISOLATION LEVEL level]");
+            }
+            i = 2;
+        } else if (w.size() > 1 && (w.get(1).equals("TRANSACTION") || w.get(1).equals("WORK"))) {
+            i = 2;
+        }
+        if (head.equals("COMMIT") || head.equals("ROLLBACK")) {
+            if (i != w.size()) {
+                throw new OqlException("syntax: " + head + " [TRANSACTION | WORK]");
+            }
+            if (head.equals("ROLLBACK")) {
+                if (tx() == null) {
+                    throw new IllegalStateException("no open transaction");
+                }
+                rollback();
+                return "transaction rolled back";
+            }
+            commit();
+            return "transaction committed";
+        }
+        Isolation isolation = defaultIsolation();
+        if (i < w.size()) {
+            if (w.size() < i + 3 || !w.get(i).equals("ISOLATION") || !w.get(i + 1).equals("LEVEL")) {
+                throw new OqlException("syntax: BEGIN [TRANSACTION] [ISOLATION LEVEL level]");
+            }
+            String level = String.join(" ", w.subList(i + 2, w.size()));
+            isolation = switch (level) {
+                case "READ COMMITTED" -> Isolation.READ_COMMITTED;
+                case "REPEATABLE READ", "SNAPSHOT" -> Isolation.SNAPSHOT;
+                case "SERIALIZABLE" -> Isolation.SERIALIZABLE;
+                default -> throw new OqlException("unsupported isolation level " + level
+                        + " (supported: READ COMMITTED, REPEATABLE READ, SNAPSHOT, SERIALIZABLE)");
+            };
+        }
+        begin(isolation);
+        return "transaction started (" + isolation.name().replace('_', ' ') + "): changes stay private until COMMIT";
+    }
+
+    /** Objects referencing {@code oid} (backlinks), as the open transaction sees them. */
+    public synchronized List<DynamicObject> referrers(long oid) {
+        Transaction t = tx();
+        return t == null ? db.referrers(oid) : t.referrers(oid);
+    }
+
+    /**
+     * Online backup of this database. {@code chosen} is used when it is new or empty; otherwise a sub-directory
+     * {@code <name>-backup-<yyyyMMdd-HHmmss UTC>} is created in it.
+     */
+    public BackupInfo backup(Path chosen) {
+        Path target = chosen;
+        if (Files.isDirectory(chosen) && !isEmpty(chosen)) {
+            String base = dir == null ? "demo" : dir.getFileName() == null ? "db" : dir.getFileName().toString();
+            target = chosen.resolve(base + "-backup-" + BACKUP_STAMP.format(LocalDateTime.now(ZoneOffset.UTC)));
+        }
+        return db.backup(target);
+    }
+
+    private static boolean isEmpty(Path d) {
+        try (Stream<Path> files = Files.list(d)) {
+            return files.findAny().isEmpty();
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     public String explain(String oql) {
@@ -384,13 +555,26 @@ public class Session implements AutoCloseable {
     private static void metaFields(Schema s, ClassDef c, List<FieldDef> defs, String prefix, List<ClassMeta.FieldMeta> out) {
         for (FieldDef f : defs) {
             if (f.type().kind() == ValueType.EMBEDDED) {
-                out.add(new ClassMeta.FieldMeta(prefix + f.name(), f.type().toString(), "", declaring(s, c, prefix, f.name())));
+                out.add(new ClassMeta.FieldMeta(prefix + f.name(), f.type().toString(), "", declaring(s, c, prefix, f.name()), ""));
                 metaFields(s, c, f.type().fields(), prefix + f.name() + ".", out);
             } else {
                 out.add(new ClassMeta.FieldMeta(prefix + f.name(), f.type().toString(), f.index() == null ? "" : f.index().name(),
-                        declaring(s, c, prefix, f.name())));
+                        declaring(s, c, prefix, f.name()), constraint(f)));
             }
         }
+    }
+
+    /** {@code UNIQUE} and / or {@code FK → Target · CASCADE} (the ON DELETE action), or empty. */
+    static String constraint(FieldDef f) {
+        List<String> parts = new ArrayList<>();
+        if (f.unique()) {
+            parts.add("UNIQUE");
+        }
+        if (f.onDelete() != null) {
+            String target = f.type().scalarType().name();
+            parts.add("FK → " + target.substring(target.lastIndexOf('.') + 1) + " · " + f.onDelete().name().replace('_', ' '));
+        }
+        return String.join(", ", parts);
     }
 
     /** Topmost entity class whose current layout has the (top-level) field. */

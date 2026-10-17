@@ -1,10 +1,13 @@
 package com.github.kookaburra.engine;
 
+import com.github.kookaburra.BackupInfo;
 import com.github.kookaburra.Config;
 import com.github.kookaburra.ConflictException;
 import com.github.kookaburra.Isolation;
 import com.github.kookaburra.Durability;
+import com.github.kookaburra.EntityListener;
 import com.github.kookaburra.KookaburraException;
+import com.github.kookaburra.LifecycleEvent;
 import com.github.kookaburra.ObjectDB;
 import com.github.kookaburra.Snapshot;
 import com.github.kookaburra.Transaction;
@@ -14,6 +17,8 @@ import com.github.kookaburra.TxWork;
 import com.github.kookaburra.WriteBatch;
 import com.github.kookaburra.dynamic.DynamicCollection;
 import com.github.kookaburra.dynamic.DynamicObject;
+import com.github.kookaburra.exec.Cond;
+import com.github.kookaburra.exec.Executor;
 import com.github.kookaburra.exec.QueryHost;
 import com.github.kookaburra.exec.ReadView;
 import com.github.kookaburra.exec.SegmentView;
@@ -24,6 +29,7 @@ import com.github.kookaburra.mapping.Record;
 import com.github.kookaburra.mapping.RecordCodec;
 import com.github.kookaburra.mapping.Schema;
 import com.github.kookaburra.mapping.SchemaException;
+import com.github.kookaburra.mapping.TypeDef;
 import com.github.kookaburra.mapping.TypeRegistry;
 import com.github.kookaburra.oql.OqlHost;
 import com.github.kookaburra.oql.OqlQuery;
@@ -49,6 +55,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadLocalRandom;
@@ -108,6 +115,8 @@ public class Database implements ObjectDB, OqlHost {
     private final List<FlushJob> pendingFlush = new ArrayList<>();
     private final ExecutorService flusher;
     private final TxRegistry txRegistry = new TxRegistry();
+    /** Registered lifecycle listeners (type, listener), in registration order. */
+    private final List<Map.Entry<Class<?>, EntityListener<?>>> listeners = new CopyOnWriteArrayList<>();
     private volatile Version version = Version.EMPTY;
     private volatile long visibleSeq;
     private volatile boolean closed;
@@ -117,7 +126,7 @@ public class Database implements ObjectDB, OqlHost {
         this.dir = dir;
         this.config = config;
         this.storage = storage;
-        this.registry = new TypeRegistry(storage.loadSchema(), config.classLoader(), storage::saveSchema);
+        this.registry = new TypeRegistry(storage.loadSchema(), config.classLoader(), this::schemaChanged);
         AtomicInteger flushThreads = new AtomicInteger();
         this.flusher = Executors.newFixedThreadPool(config.flushThreads(), r -> {
             Thread t = new Thread(r, "kookaburra-flush-" + flushThreads.incrementAndGet());
@@ -181,6 +190,52 @@ public class Database implements ObjectDB, OqlHost {
         visibleSeq = sequencer.lastSeq();
     }
 
+    /**
+     * Before a new schema is saved and published: constraints it adds must hold for the stored data (like
+     * {@code ALTER TABLE ADD CONSTRAINT}); otherwise the registration fails and the schema stays as it was.
+     */
+    private void schemaChanged(Schema next) {
+        Schema current = registry == null ? null : registry.schema();
+        if (current != null && !closed) {
+            for (Schema.Constraint c : next.constraints()) {
+                if (!current.constraints().contains(c)) {
+                    validateExisting(next, c);
+                }
+            }
+        }
+        storage.saveSchema(next);
+    }
+
+    private void validateExisting(Schema schema, Schema.Constraint c) {
+        Set<Integer> types = schema.subclassIds(c.owner());
+        if (types.isEmpty()) {
+            return;
+        }
+        try (ReadView rv = openRead()) {
+            Executor ex = new Executor(rv, c.collection(), types, new Cond.Not(new Cond.IsNull(c.path())), null);
+            Map<Object, Long> seen = new HashMap<>();
+            ex.forEach(h -> {
+                Object v = Executor.value(h, c.path());
+                long oid = h.view().oid(h.doc());
+                if (c.unique()) {
+                    Long other = seen.putIfAbsent(v, oid);
+                    if (other != null) {
+                        throw new SchemaException("cannot add @Unique to " + c + ": objects " + other + " and " + oid
+                                + " both have " + v);
+                    }
+                } else {
+                    for (Object t : v instanceof List<?> l ? l : List.of(v)) {
+                        if (getDynamic(rv, (Long) t) == null) {
+                            throw new SchemaException("cannot add @ForeignKey to " + c + ": object " + oid + " references object "
+                                    + t + ", which does not exist");
+                        }
+                    }
+                }
+                return true;
+            });
+        }
+    }
+
     // ---------------------------------------------------------------- writes
 
     @Override
@@ -209,6 +264,49 @@ public class Database implements ObjectDB, OqlHost {
         return new Batch(this);
     }
 
+    // ---------------------------------------------------------------- lifecycle (LifecycleEvent)
+
+    @Override
+    public <T> void addListener(Class<T> type, EntityListener<? super T> listener) {
+        if (type == null || listener == null) {
+            throw new IllegalArgumentException("type and listener must not be null");
+        }
+        listeners.add(Map.entry(type, listener));
+    }
+
+    @Override
+    public <T> boolean removeListener(Class<T> type, EntityListener<? super T> listener) {
+        return listeners.remove(Map.entry(type, listener));
+    }
+
+    /** Delivers {@code event} to the listeners of the entity's class, then to its own callback methods. */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void fire(LifecycleEvent event, EntityType<?> type, Object entity) {
+        if (type == null || entity == null) {
+            return;
+        }
+        for (Map.Entry<Class<?>, EntityListener<?>> l : listeners) {
+            if (l.getKey().isInstance(entity)) {
+                ((EntityListener) l.getValue()).on(event, entity);
+            }
+        }
+        ((EntityType<Object>) type).callback(event, entity);
+    }
+
+    /** {@code POST_*} events of committed ops (typed entities only). */
+    void firePost(List<WriteOp> ops, long[] res) {
+        for (int i = 0; i < ops.size(); i++) {
+            WriteOp op = ops.get(i);
+            if (op instanceof WriteOp.Insert ins) {
+                fire(LifecycleEvent.POST_PERSIST, ins.type(), ins.entity());
+            } else if (op instanceof WriteOp.Update u) {
+                fire(LifecycleEvent.POST_UPDATE, u.type(), u.entity());
+            } else if (op instanceof WriteOp.Delete d && res[i] == 1) {
+                fire(LifecycleEvent.POST_REMOVE, d.type(), d.entity());
+            }
+        }
+    }
+
     WriteOp insertOp(Object entity) {
         if (entity instanceof DynamicObject d) {
             checkOpen();
@@ -222,6 +320,7 @@ public class Database implements ObjectDB, OqlHost {
         if (t.id(entity) != 0) {
             throw new IllegalArgumentException("object already has OID " + t.id(entity) + "; use update()");
         }
+        fire(LifecycleEvent.PRE_PERSIST, t, entity);
         Record r = t.toRecord(entity);
         return new WriteOp.Insert(t, entity, allocateOid(r.classId()), r, RecordCodec.encode(r));
     }
@@ -236,6 +335,7 @@ public class Database implements ObjectDB, OqlHost {
         }
         EntityType<Object> t = type(entity);
         long oid = requireOid(t, entity);
+        fire(LifecycleEvent.PRE_UPDATE, t, entity);
         Record r = t.toRecord(entity);
         return new WriteOp.Update(t, entity, oid, t.hasVersion() ? t.version(entity) : WriteOp.ANY, r, RecordCodec.encode(r));
     }
@@ -251,6 +351,7 @@ public class Database implements ObjectDB, OqlHost {
         }
         EntityType<Object> t = type(entity);
         long oid = requireOid(t, entity);
+        fire(LifecycleEvent.PRE_REMOVE, t, entity);
         return new WriteOp.Delete(oid, t.hasVersion() ? t.version(entity) : WriteOp.ANY, t, entity);
     }
 
@@ -325,7 +426,7 @@ public class Database implements ObjectDB, OqlHost {
 
     @Override
     public Transaction begin() {
-        return begin(TxOptions.defaults());
+        return begin(TxOptions.defaults().isolation(config.txIsolation()));
     }
 
     @Override
@@ -357,18 +458,35 @@ public class Database implements ObjectDB, OqlHost {
     }
 
     @Override
+    public void inTransaction(TxOptions options, TxWork work) {
+        inTransactionResult(options, tx -> {
+            work.run(tx);
+            return null;
+        });
+    }
+
+    @Override
+    public <R> R inTransactionResult(TxOptions options, TxFunction<R> work) {
+        return run(options, work, config.txRetries());
+    }
+
+    @Override
     public <R> R inTransactionResult(TxFunction<R> work) {
         return inTransactionResult(work, config.txRetries());
     }
 
-    /** Runs, commits and retries on conflicts with jittered exponential back-off (1 ms … 100 ms). */
     @Override
     public <R> R inTransactionResult(TxFunction<R> work, int retries) {
+        return run(TxOptions.defaults().isolation(config.txIsolation()), work, retries);
+    }
+
+    /** Runs, commits and retries on conflicts with jittered exponential back-off (1 ms … 100 ms). */
+    private <R> R run(TxOptions options, TxFunction<R> work, int retries) {
         if (retries < 0) {
             throw new IllegalArgumentException("negative retries");
         }
         for (int attempt = 0; ; attempt++) {
-            try (Transaction tx = begin()) {
+            try (Transaction tx = begin(options)) {
                 R result = work.apply(tx);
                 if (tx.state() == Transaction.State.ACTIVE) {
                     tx.commit();
@@ -419,6 +537,7 @@ public class Database implements ObjectDB, OqlHost {
         throttle();
         long[] res = join(sequencer.submit(ops));
         writeBack(ops, res);
+        firePost(ops, res);
         return res;
     }
 
@@ -824,6 +943,19 @@ public class Database implements ObjectDB, OqlHost {
     }
 
     @Override
+    public BackupInfo backup(Path target) {
+        checkOpen();
+        return Backup.run(this, target);
+    }
+
+    /** Highest OID sequence handed out per class (a backup's commit continues from these). */
+    Map<Integer, Long> oidSeqs() {
+        Map<Integer, Long> out = new HashMap<>();
+        oidCounters.forEach((cid, n) -> out.put(cid, n.get()));
+        return out;
+    }
+
+    @Override
     public void flush() {
         checkOpen();
         List<CompletableFuture<Void>> jobs = Collections.synchronizedList(new ArrayList<>());
@@ -856,6 +988,11 @@ public class Database implements ObjectDB, OqlHost {
         return version.views(collection);
     }
 
+    /** The latest version (segment views including unpublished MemSegment rows). Sequencer thread only. */
+    Version currentVersion() {
+        return version;
+    }
+
     void publish(long seq) {
         visibleSeq = seq;
     }
@@ -886,7 +1023,9 @@ public class Database implements ObjectDB, OqlHost {
             throw new KookaburraException("class " + registry.schema().byId(view.classId(doc)).name()
                     + " is not on the classpath; use dynamic access");
         }
-        return t.fromRecord(view.record(doc), view.oid(doc), view.version(doc));
+        Object o = t.fromRecord(view.record(doc), view.oid(doc), view.version(doc));
+        fire(LifecycleEvent.POST_LOAD, t, o);
+        return o;
     }
 
     @Override
@@ -920,7 +1059,7 @@ public class Database implements ObjectDB, OqlHost {
                 if (!schema.subclassIds(def.name()).contains(Oids.classId(oid))) {
                     return null;
                 }
-                for (SegmentView v : rv.views(def.collection())) {
+                for (SegmentView v : rv.pointViews(def.collection(), oid)) {
                     int d = v.find(oid, rv.seq());
                     if (d == SegmentView.DELETED) {
                         return null;
@@ -970,7 +1109,7 @@ public class Database implements ObjectDB, OqlHost {
         } catch (SchemaException e) {
             return null;
         }
-        for (SegmentView v : rv.views(def.collection())) {
+        for (SegmentView v : rv.pointViews(def.collection(), oid)) {
             int d = v.find(oid, rv.seq());
             if (d == SegmentView.DELETED) {
                 return null;
@@ -1003,7 +1142,7 @@ public class Database implements ObjectDB, OqlHost {
         } catch (SchemaException e) {
             return null;
         }
-        for (SegmentView v : rv.views(def.collection())) {
+        for (SegmentView v : rv.pointViews(def.collection(), oid)) {
             int d = v.find(oid, rv.seq());
             if (d == SegmentView.DELETED) {
                 return null;
@@ -1046,7 +1185,7 @@ public class Database implements ObjectDB, OqlHost {
         if (!schema.subclassIds(type.getName()).contains(classId)) {
             return null;
         }
-        for (SegmentView v : rv.views(schema.byId(classId).collection())) {
+        for (SegmentView v : rv.pointViews(schema.byId(classId).collection(), oid)) {
             int d = v.find(oid, rv.seq());
             if (d == SegmentView.DELETED) {
                 return null;
@@ -1073,6 +1212,41 @@ public class Database implements ObjectDB, OqlHost {
     public <T> QueryStream<T> from(Class<T> type) {
         checkOpen();
         return new QueryStream<>(this, type, null);
+    }
+
+    @Override
+    public List<DynamicObject> referrers(long oid) {
+        try (ReadView rv = openRead()) {
+            return referrers(rv, oid, null);
+        }
+    }
+
+    @Override
+    public <T> List<T> referrers(Class<T> type, long oid) {
+        try (ReadView rv = openRead()) {
+            return referrers(rv, oid, type);
+        }
+    }
+
+    /** Referrers as of a read view: dynamic objects ({@code type == null}) or entities of {@code type}. */
+    @SuppressWarnings("unchecked")
+    <T> List<T> referrers(ReadView rv, long oid, Class<T> type) {
+        Schema schema = registry.schema();
+        Set<Integer> types = type == null ? null : schema.subclassIds(registry.entity(type).def().name());
+        Map<Long, T> out = new LinkedHashMap<>();
+        for (Schema.RefPath p : schema.refPaths()) {
+            if (types != null && types.stream().noneMatch(id -> schema.byId(id).collection().equals(p.collection()))) {
+                continue;
+            }
+            TypeDef ref = TypeDef.ref(p.target());
+            Cond cond = p.many() ? new Cond.Contains(p.path(), ref, Set.of(oid), false) : new Cond.Eq(p.path(), ref, oid);
+            new Executor(rv, p.collection(), types, cond, null).forEach(h -> {
+                long ref2 = h.view().oid(h.doc());
+                out.computeIfAbsent(ref2, k -> (T) (type == null ? materializeDynamic(h.view(), h.doc()) : materialize(h.view(), h.doc())));
+                return true;
+            });
+        }
+        return new ArrayList<>(out.values());
     }
 
     @Override

@@ -42,9 +42,10 @@ public class MetadataView extends BorderPane {
         fields.setId("meta-fields");
         fields.setPlaceholder(new Label("Select a class"));
         fields.getColumns().add(column("field", ClassMeta.FieldMeta::path, 130));
-        fields.getColumns().add(column("type", ClassMeta.FieldMeta::type, 170));
-        fields.getColumns().add(column("index", ClassMeta.FieldMeta::index, 70));
-        fields.getColumns().add(column("declared in", ClassMeta.FieldMeta::declaredIn, 90));
+        fields.getColumns().add(column("type", ClassMeta.FieldMeta::type, 130));
+        fields.getColumns().add(column("index", ClassMeta.FieldMeta::index, 60));
+        fields.getColumns().add(column("declared in", ClassMeta.FieldMeta::declaredIn, 80));
+        fields.getColumns().add(column("constraint", ClassMeta.FieldMeta::constraint, 170));
         fields.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
         // facts on top, the field table takes all remaining height and scrolls by itself
         setTop(top);
@@ -72,10 +73,10 @@ public class MetadataView extends BorderPane {
         facts.getChildren().clear();
         int row = 0;
         row = fact(row, "class id", String.valueOf(m.id()));
-        row = fact(row, "extends", m.parent() == null ? "—" : simple(m.parent()));
+        row = fact(row, "extends", m.parent() == null ? "none" : simple(m.parent()));
         row = fact(row, "collection", simple(m.collection()));
-        row = fact(row, "subclasses", m.subclasses().isEmpty() ? "—" : String.join(", ", m.subclasses()));
-        row = fact(row, "@Id / @Version", m.idField() + " / " + (m.versionField() == null ? "—" : m.versionField()));
+        row = fact(row, "subclasses", m.subclasses().isEmpty() ? "none" : String.join(", ", m.subclasses()));
+        row = fact(row, "@Id / @Version", m.idField() + " / " + (m.versionField() == null ? "none" : m.versionField()));
         row = fact(row, "layouts", String.valueOf(m.layouts()));
         fact(row, "objects", String.valueOf(m.count()));
         fields.getItems().setAll(m.fields());

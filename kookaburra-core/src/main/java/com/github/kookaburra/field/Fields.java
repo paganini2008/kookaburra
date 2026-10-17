@@ -184,7 +184,7 @@ public class Fields {
             case FLOAT64 -> new DoubleField<>(entity, path, chain);
             case STRING -> new StringField<>(entity, path, chain);
             case ENUM -> new EnumField<>(entity, path, chain);
-            case DATE, DATETIME, INSTANT -> new ComparableField<>(entity, path, chain);
+            case DECIMAL, DATE, DATETIME, INSTANT -> new ComparableField<>(entity, path, chain);
             case REF -> new RefField<>(entity, path, chain);
             case MULTI -> new ListField<>(entity, path, chain);
             case EMBEDDED, EMBEDDED_LIST, MAP, BYTES, OBJECT -> new ObjectField<>(entity, path, chain);

@@ -190,7 +190,7 @@ public class OqlQuery<T> {
             throw new OqlException("execute() is for UPDATE / DELETE; use list() or rows() for SELECT");
         }
         if (ast.explain()) {
-            throw new OqlException("EXPLAIN only describes the statement; use explain() — nothing was changed");
+            throw new OqlException("EXPLAIN only describes the statement; use explain(); nothing was changed");
         }
         try (ReadView view = host.openRead()) {
             Engine e = new Engine(host, view, named, positional);

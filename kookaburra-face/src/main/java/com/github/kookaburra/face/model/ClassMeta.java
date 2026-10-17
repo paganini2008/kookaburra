@@ -30,7 +30,8 @@ public record ClassMeta(String name, int id, String parent, String collection, L
      * @param type       stored type, e.g. {@code STRING}, {@code ENUM(LOW, HIGH)}, {@code LIST(STRING)}
      * @param index      index kind, or empty when the field has no column
      * @param declaredIn simple name of the class that declares the field
+     * @param constraint {@code UNIQUE}, {@code FK → Target · ON DELETE action} (e.g. {@code FK → Customer · CASCADE}), or empty
      */
-    public record FieldMeta(String path, String type, String index, String declaredIn) {
+    public record FieldMeta(String path, String type, String index, String declaredIn, String constraint) {
     }
 }

@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head><body><div class="canvas" data-size="1560x430">
+<h1>Write path <small>constraints, isolation and callbacks in one commit</small></h1>
+<div class="row">
+  <div class="group" style="width:250px"><div class="label">caller thread</div>
+    <div class="col">
+      <div class="box"><b>insert / update / delete</b><span>entity, batch or transaction</span></div>
+      <div class="down">↓</div>
+      <div class="box"><b>@PrePersist · @PreUpdate · @PreRemove</b><span>listeners, then entity methods</span></div>
+      <div class="down">↓</div>
+      <div class="box"><b>encode record</b><span>BigDecimal → exact DECIMAL</span></div>
+    </div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="group"><div class="label">sequencer (single writer, group commit)</div>
+    <div class="row" style="gap:8px; align-items:stretch">
+      <div class="box" style="width:150px"><b>1 · write conflicts</b><span>objects changed after<br>the read: abort</span></div>
+      <div class="box" style="width:160px"><b>2 · read validation</b><span>SERIALIZABLE: before / after<br>versions vs query conditions</span></div>
+      <div class="box" style="width:150px"><b>3 · version check</b><span>@Version optimistic lock</span></div>
+      <div class="box" style="width:180px;border-color:var(--cyan)"><b class="cyan">4 · integrity</b><span>@Unique values<br>@ForeignKey targets exist<br>ON DELETE: restrict / cascade /<br>set null (added to the batch)</span></div>
+      <div class="box" style="width:140px"><b>5 · WAL + fsync</b><span>one record per batch,<br>cascades included</span></div>
+      <div class="box" style="width:140px"><b>6 · apply + publish</b><span>MemSegment rows,<br>visible atomically</span></div>
+    </div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="box" style="width:170px"><b>@PostPersist …</b><span>after the commit is durable</span></div>
+</div>
+<p style="color:var(--muted);margin:16px 0 0;font-size:13px">A failed step rejects the whole batch or transaction: nothing is logged or visible. ConflictException is retried by inTransaction; ConstraintViolationException is not.</p>
+</div></body></html>

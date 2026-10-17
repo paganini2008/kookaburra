@@ -28,6 +28,7 @@ import java.util.function.Function;
 public class SchemaView extends BorderPane {
 
     final MetadataView metadata = new MetadataView();
+    final SplitPane split;
     final Label summary = new Label();
     final TableView<SegmentInfo> segments = new TableView<>();
     final TextArea layouts = new TextArea();
@@ -46,7 +47,7 @@ public class SchemaView extends BorderPane {
         segments.getColumns().add(column("documents", i -> String.format(Locale.ROOT, "%,d", i.docs()), 100));
         segments.getColumns().add(column("live", i -> String.format(Locale.ROOT, "%,d", i.live()), 100));
         segments.getColumns().add(column("garbage", i -> String.format(Locale.ROOT, "%.0f %%", i.garbage() * 100), 80));
-        segments.getColumns().add(column("size", i -> i.bytes() == 0 ? "—" : size(i.bytes()), 90));
+        segments.getColumns().add(column("size", i -> i.bytes() == 0 ? "" : size(i.bytes()), 90));
         segments.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
 
         layouts.setId("layouts");
@@ -64,8 +65,8 @@ public class SchemaView extends BorderPane {
         right.setOrientation(Orientation.VERTICAL);
         right.setDividerPositions(0.6);
         storage.setCenter(right);
-        SplitPane split = new SplitPane(metadata, storage);
-        split.setDividerPositions(0.45);
+        split = new SplitPane(metadata, storage);
+        split.setDividerPositions(0.5);                   // the field table has five columns
         setCenter(split);
     }
 

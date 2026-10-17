@@ -1,6 +1,6 @@
-# Kookaburra — Embedded Object Database Design
+# Kookaburra: Embedded Object Database Design
 
-> Status: **living document** — updated together with the code. See [§20 Changelog](#20-changelog).
+> Status: **living document**, updated together with the code. See [§20 Changelog](#20-changelog).
 
 ---
 
@@ -9,7 +9,7 @@
 | Goals | Non-goals (v1) |
 |---|---|
 | Pure-Java embedded object DB, **JDK 17+** | Full SQL, network server |
-| **Positioning: single-collection (single-table) queries with SQL-92 core semantics** — `SELECT` (expressions, `DISTINCT`), `WHERE`, `GROUP BY`, `HAVING`, `ORDER BY`, aggregates (`COUNT [DISTINCT]`, `SUM`, `AVG`, `MIN`, `MAX`), `LIMIT`/`OFFSET` | Multi-table `JOIN`, sub-queries in `FROM`, `UNION`, window functions, DDL |
+| **Positioning: single-collection (single-table) queries with SQL-92 core semantics**: `SELECT` (expressions, `DISTINCT`), `WHERE`, `GROUP BY`, `HAVING`, `ORDER BY`, aggregates (`COUNT [DISTINCT]`, `SUM`, `AVG`, `MIN`, `MAX`), `LIMIT`/`OFFSET` | Multi-table `JOIN`, sub-queries in `FROM`, `UNION`, window functions, DDL |
 | Object CRUD | Distributed / replicated storage |
 | Bitmap-accelerated queries on **Apache RoaringBitmap**; runtime deps: RoaringBitmap + ANTLR 4 runtime (OQL) | Joins other than reference navigation |
 | Type-safe, Stream-like query API (Speedment-inspired) | Implementing `java.util.stream.Stream` itself (interop only, §9.7) |
@@ -122,13 +122,18 @@ classDiagram
 public class Person {
     @Id      long oid;                          // assigned by DB
     @Version long version;                      // optimistic lock
+    @Unique                   String email;     // unique constraint (implies an index)
     @Index                    String city;      // AUTO: BITMAP or ORDINAL per segment
+    @Index                    BigDecimal salary;// exact decimal, numeric order
     @Index(ORDINAL)           int age;          // range / sort, no posting
                               String bio;       // row only
                               Address home;     // @Embeddable → paths home.city, home.zip
-    Ref<Company> employer;                      // stored as OID, lazy
+    @ForeignKey(onDelete = CASCADE)
+    Ref<Company> employer;                      // stored as OID, lazy; checked reference
     @Index                    List<String> tags;// multi-valued
     @Transient                String cache;     // not persisted (same for `transient`)
+
+    @PrePersist void created() { … }            // lifecycle callback (§3.7)
 }
 
 @Embeddable
@@ -144,6 +149,7 @@ public class Address {
 | `byte` `short` `char` `int` / boxed | INT32 | sortable 4 B | |
 | `long` / `Long` | INT64 | sortable 8 B | |
 | `float` `double` / boxed | FLOAT64 | sortable 8 B (§11) | |
+| `BigDecimal` | DECIMAL | (scale, unscaled bytes), numeric order | exact; stored without trailing zeros (D49) |
 | `String` | STRING | UTF-16 order (§11) | prefix-compressed dict |
 | `enum` | ENUM | name; sort = declaration order | dict→ordinal permutation at query time |
 | `LocalDate` | DATE | epochDay (8 B) | |
@@ -152,14 +158,14 @@ public class Address {
 | `Ref<T>` | REF | OID (8 B) | not sortable |
 | `List<S>` / `Set<S>` of scalar S | MULTI(S) | per element | |
 | `@Embeddable` class | EMBEDDED | flattened paths | |
-| `List` / `Set` of `@Embeddable` | EMBEDDED_LIST | — | row only |
-| `Map<S1, S2>` of scalars | MAP | — | row only |
-| `byte[]` | BYTES | — | row only |
-| any other `Serializable` (incl. `Map<String,Object>`, `UUID`) | OBJECT | — | row only, Java serialization |
+| `List` / `Set` of `@Embeddable` | EMBEDDED_LIST | n/a | row only |
+| `Map<S1, S2>` of scalars | MAP | n/a | row only |
+| `byte[]` | BYTES | n/a | row only |
+| any other `Serializable` (incl. `Map<String,Object>`, `UUID`) | OBJECT | n/a | row only, Java serialization |
 
 Not supported: `record` entities (immutable, no id back-fill), `final` persistent fields, entities without a no-arg constructor, fields hiding superclass fields. Null collection elements / map keys are rejected.
 
-Values are **normalized** before comparison: `short` / `byte` / `char` → `Integer`, `float` → `Double`.
+Values are **normalized** before comparison: `short` / `byte` / `char` → `Integer`, `float` → `Double`, `BigDecimal` → numerically canonical (`1.50` → `1.5`, `100` never `1E+2`).
 
 ### 3.4 Self-describing schema
 
@@ -172,10 +178,10 @@ schema_V
    ├─ class Dog     id=2  parent=Animal
    │   └─ field breed  STRING  index=AUTO  nullable
    ├─ fields (per class, in declaration order)
-   │   name STRING AUTO · age INT32 — · home EMBEDDED(Address) · tags MULTI(STRING) AUTO
+   │   name STRING AUTO · age INT32 (no index) · home EMBEDDED(Address) · tags MULTI(STRING) AUTO
    │   level ENUM(LOW, MEDIUM, HIGH)       ← constants in declaration order (= sort order)
    │   employer REF(Company)
-   └─ embeddables: Address { city STRING AUTO, zip STRING — }
+   └─ embeddables: Address { city STRING AUTO, zip STRING (no index) }
 ```
 
 ### 3.5 Schema evolution
@@ -196,9 +202,39 @@ flowchart LR
 | Widen `int → long` (INT32 → INT64, also inside collections / maps) | Widened on read |
 | Enum: constants appended | OK; order = declaration order. Reordering / removing constants is rejected |
 | Index kind added / changed | New layout; old segments simply lack the column (planner falls back to residual) |
+| `@Unique` / `@ForeignKey` added | Stored data is checked first (like `ALTER TABLE ADD CONSTRAINT`): duplicates or dangling references fail the registration and the schema stays unchanged |
 | Add subclass | New class id; old segments have no rows of it |
 | Rename (`@Renamed("old")`) | Reserved |
 | Any other type change | Rejected at open → explicit migration |
+
+### 3.6 Constraints
+
+![Constraints](assets/foreign-keys.png)
+
+| Annotation | On | Rule | Violation |
+|---|---|---|---|
+| `@Unique` | scalar field (also inside `@Embeddable`, not in embedded lists) | no two live objects of the declaring class and its subclasses share a non-null value; nulls never conflict; decimals compare numerically | `ConstraintViolationException(UNIQUE)` |
+| `@ForeignKey(onDelete)` | `Ref<T>`, `List / Set<Ref<T>>` (also inside `@Embeddable`) | every non-null reference points at a live `T` (or subclass) | `ConstraintViolationException(FOREIGN_KEY)` |
+| `onDelete = RESTRICT` (default) | target deleted | the delete fails while referrers exist | as above |
+| `onDelete = CASCADE` | target deleted | referrers deleted in the same commit, recursively | none |
+| `onDelete = SET_NULL` | target deleted | `Ref` cleared, collection element removed; referrer gets a new version | none |
+
+- Both imply `@Index(AUTO)`: checks are point lookups (index candidates confirmed with `find(oid, seq)`), cost follows the matches, not the collection size.
+- Checked on the sequencer when the write commits (§6.5), against the latest state plus the batch's own writes: a batch may swap two unique values, insert a target and its referrer together, or delete a referrer and its target together. Inside a transaction the checks are deferred to `commit()` (like `DEFERRABLE INITIALLY DEFERRED`).
+- Cascaded deletes and cleared references are appended to the batch: one WAL record, one sequence number, replayed as logged. They are storage-level (like SQL): no lifecycle callbacks.
+- Backlinks: `db.referrers(oid)` / `tx.referrers(oid)` returns every object pointing at an OID through any reference path (`Ref`, collections of refs, refs inside embedded objects and lists); indexed paths use the index, the others a scan.
+- Not retried by `inTransaction`: the same writes would fail again.
+
+### 3.7 Lifecycle callbacks
+
+| Event | Annotation / `EntityListener` method | When |
+|---|---|---|
+| PRE_PERSIST / PRE_UPDATE / PRE_REMOVE | `@PrePersist` `@PreUpdate` `@PreRemove` | on the caller thread when the write is issued (in a transaction: at `tx.insert / update / delete`); changes made here are stored; an exception cancels the write |
+| POST_PERSIST / POST_UPDATE / POST_REMOVE | `@PostPersist` `@PostUpdate` `@PostRemove` | after the commit is durable (in a transaction: after `commit()`); nothing on rollback |
+| POST_LOAD | `@PostLoad` | every object read as an entity (get, queries, OQL results) |
+
+- Callback methods: no arguments, any visibility, inherited (superclass methods first, an override runs once). Listeners: `db.addListener(type, listener)`, matched with `isInstance`, run before the entity's own methods, in registration order.
+- Skipped, like JPA: bulk OQL `UPDATE / DELETE`, deletes by OID, increments, `DynamicObject`s, FK cascades.
 
 ---
 
@@ -210,7 +246,7 @@ db/
 ├─ CURRENT                       → commit_N
 ├─ commit_N                      collections → [segment id, del gen], walSeq, schemaVersion
 ├─ schema/
-│  └─ schema_V                   all classes, fields, class ids, hierarchy
+│  └─ schema_V                   all classes, fields, class ids, hierarchy, constraints (format KKBSCH02; 01 still read)
 ├─ wal/
 │  └─ wal_<firstSeq>.log
 └─ col/<collection>/
@@ -263,6 +299,7 @@ seg_<id>.odbf   (little-endian, sections 8-byte aligned)
 | dict (LONG) | sorted `long` keys: BOOL 0/1, INT, sortable FLOAT64 bits, epochDay, enum index, OID | binary search |
 | dict (FIXED128) | `(epochSecond UTC, nano)` pairs (DATETIME, INSTANT) | binary search |
 | dict (STRING) | v1: offsets + UTF-8, compared with `String.compareTo` (front coding: backlog) | binary search |
+| dict (DECIMAL) | offsets + `zigzag(scale) · two's-complement unscaled` per key, compared with `BigDecimal.compareTo` | binary search |
 | ord | `bits = bitsFor(card)`, stores ordinal+1 (0 = null), `pos = docid × bits`, +8 B padding | O(1) |
 | post | concatenated `ImmutableRoaringBitmap`s + offset table, `runOptimize()` before write | zero-copy slice |
 | sdoc | documents sorted by (value, docid): `start[ord] … start[ord+1]` (4 B / document) | O(1) slice per value / range |
@@ -285,6 +322,7 @@ seg_<id>.odbf   (little-endian, sections 8-byte aligned)
 ```
 row := varint classId · varint layoutId · nullBits[ceil(F/8)] · value*
 value := BOOL 1 B | INT32/INT64/DATE zig-zag varint | FLOAT64 8 B | STRING varint-len UTF-8
+       | DECIMAL zig-zag scale · varint-len unscaled bytes
        | ENUM varint constant index | DATETIME/INSTANT zig-zag seconds + varint nanos | REF varint OID
        | MULTI/EMBEDDED_LIST varint count · element* | EMBEDDED nullBits · value* | MAP count · (key · present? · value)*
        | BYTES/OBJECT varint-len bytes
@@ -323,7 +361,9 @@ sequenceDiagram
     C->>C: entity → Record → row bytes (parallel)
     C->>Q: WriteBatch (insert / update / delete, any collections)
     S->>Q: drain up to N batches
+    S->>S: transaction: write conflicts, SERIALIZABLE read validation (§12.1)
     S->>S: per op: validate version (latest state), assign OID / version / seq,<br/>locate old (segment, docid) or mem row
+    S->>S: integrity (§6.5): @Unique, @ForeignKey, ON DELETE actions (may append ops)
     S->>L: append all records, one fsync (group commit)
     S->>M: append rows, mark deletes, delete-log entries
     S->>V: publish max seq (volatile)
@@ -392,6 +432,19 @@ sequenceDiagram
 - Commit also stores per-class OID high-water marks and the next segment id.
 - `ObjectDB.flush()` freezes every non-empty active MemSegment and waits for the installs.
 
+### 6.5 Integrity checks
+
+![Write path](assets/write-path.png)
+
+`Integrity.check(ops)` runs on the sequencer after version validation and before the WAL append; it returns the batch unchanged when the schema has no constraints.
+
+1. **Final state** per touched OID: the batch's last record, or deleted (transactions also pass OIDs they inserted and deleted again: never stored, but treated as deleted for the batch's own references).
+2. **Deletes** (worklist, so cascades recurse): for every foreign key whose target class covers the deleted object, find live referrers (index point lookup + the batch's own records); RESTRICT throws, CASCADE appends a delete, SET_NULL rewrites the referrer's record (its own op if the batch writes it, else a new update with version + 1).
+3. **References**: every reference in a final record must point at an object that is live in the batch or in the latest state, of the target class.
+4. **Unique**: per constraint, duplicates among the final records, then an index point lookup for each value excluding objects the batch itself changes.
+
+Failure rejects the whole batch (nothing logged); appended ops are logged, applied and published with it, and recorded in the conflict table so concurrent transactions on those objects conflict.
+
 ---
 
 ## 7. MVCC: Versions & Snapshots
@@ -402,7 +455,7 @@ flowchart TB
         direction LR
         A1["M2 active"] --- F1["M1 frozen"] --- S2a["seg 2"] --- S1a["seg 1 @ del gen 3"]
     end
-    subgraph V2["Version v2 (current) — after M1 flushed"]
+    subgraph V2["Version v2 (current), after M1 flushed"]
         direction LR
         A2["M2 active"] --- S3["seg 3 (= M1)"] --- S2b["seg 2"] --- S1b["seg 1 @ del gen 4"]
     end
@@ -478,7 +531,7 @@ classDiagram
     AbstractField <|-- ObjectField
 ```
 
-**Predicates** — `sealed interface Pred<T> extends java.util.function.Predicate<T>`:
+**Predicates** (`sealed interface Pred<T> extends java.util.function.Predicate<T>`):
 
 ```
 Pred ── Eq · In · Range(lo, loInc, hi, hiInc) · IsNull · StartsWith · Contains(Any/All)
@@ -488,9 +541,9 @@ Pred ── Eq · In · Range(lo, loInc, hi, hiInc) · IsNull · StartsWith · C
 - `and / or / negate` overridden → stay inside `Pred` (metadata preserved).
 - Every `Pred` is executable (`test(T)`): used for MemSegment fallback, residual evaluation and differential tests.
 
-**Orders** — `Order<T> extends Comparator<T>`: `field.asc()`, `field.desc()`, `.nullsFirst()`, `.nullsLast()`; `thenComparing` / `reversed` overridden.
+**Orders** (`Order<T> extends Comparator<T>`): `field.asc()`, `field.desc()`, `.nullsFirst()`, `.nullsLast()`; `thenComparing` / `reversed` overridden.
 
-### 9.2 Two ways to get a field — freely mixed
+### 9.2 Two ways to get a field, freely mixed
 
 | | Generated metamodel | Method reference |
 |---|---|---|
@@ -539,7 +592,7 @@ List<DynamicObject> rows = db.dynamic("Person").from()            // dynamic: st
 | `.where(getter)` → `eq / notEq / in / gt / ge / lt / le / between / isNull / isNotNull / isTrue / isFalse / startsWith / contains` | `.filter(Q.where(getter).eq(...))` | conditions AND together; reference fields compare by OID; `.where("path")` for dynamic queries |
 | `.orderBy(getter)` → `asc / desc / ascNullsFirst / descNullsLast` | `.sorted(Q.where(getter).desc(), ...)` | keys apply in call order |
 | `.list()` | `.toList()` | |
-| `.filter(or(a, b))`, `.filter(not(a))` | — | OR / NOT in the same chain |
+| `.filter(or(a, b))`, `.filter(not(a))` | n/a | OR / NOT in the same chain |
 
 Pipeline has a **fixed canonical order**; calls out of order throw `IllegalStateException`.
 
@@ -609,7 +662,9 @@ String plan = db.from(Person.class).filter(...).explain();
 
 ### 9.5 Terminals
 
-`toList` · `first` · `count` · `exists` · `forEach` · `min` / `max` / `sum` / `avg` · `cursor()` (`AutoCloseable`) · `stream()` · `explain()`.
+`toList` · `first` · `count` · `exists` · `forEach` · `min` / `max` / `sum` (long / double / exact `BigDecimal`) / `avg` (double) · `cursor()` (`AutoCloseable`) · `stream()` · `explain()`.
+
+Database-level: `referrers(oid)` / `referrers(Class, oid)` (backlinks, §3.6), `addListener` / `removeListener` (§3.7), `backup(Path)` (§15.2), `inTransaction(TxOptions, work)`.
 
 ### 9.6 Resources
 
@@ -771,10 +826,10 @@ flowchart TB
 | `StartsWith` | dict prefix → ord range | dict prefix → ord range | scan values | residual |
 | `IsNull` | null bitmap | null bitmap | scan values | residual |
 | `Contains` (MULTI) | post | scan multi | post list | residual |
-| `InstanceOf` | `$type` posts | — | `$type` posts | — |
+| `InstanceOf` | `$type` posts | n/a | `$type` posts | n/a |
 | `RefMatch` | subquery → OIDs → ref dict → posts | scan | scan | residual |
 | `Not(x)` | `[0,N) − x` | same | same | residual |
-| `Residual` | — | — | — | decode row, `test` |
+| `Residual` | n/a | n/a | n/a | decode row, `test` |
 
 Scans of `ord` are restricted to the current candidate bitmap when one exists.
 
@@ -820,8 +875,9 @@ Index execution **must** equal `Pred.test` / `Order.compare` on objects. Enforce
 | Null in comparisons | `eq / gt / range / startsWith` on null → `false`; `isNull` explicit |
 | Logic | Two-valued Java boolean: `not(age > 30)` matches `age == null` |
 | Null in sort | `nullsLast` for `asc()`, `nullsFirst` for `desc()`; overridable |
-| String order | `String.compareTo` (UTF-16 code units) — dict sorted the same, **not** UTF-8 byte order |
+| String order | `String.compareTo` (UTF-16 code units); dict sorted the same, **not** UTF-8 byte order |
 | Double order / equality | `Double.compare`: `-0.0 < 0.0`, `NaN` greatest, `NaN eq NaN` true |
+| Decimal order / equality | numeric (`BigDecimal.compareTo`): `1.50 = 1.5`; read back as `1.5`. OQL: an expression with a DECIMAL operand is exact (`0.1 + 0.2 = 0.3`), division to 34 digits; `SUM` / `AVG` of decimals are decimals (typed `avg()` returns double, like JPA) |
 | Enum order | declaration order (`Enum.compareTo`) |
 | Time zone | **UTC everywhere**: `LocalDateTime` is stored as UTC wall time, `Instant` is UTC; OQL `TIMESTAMP` / `INSTANT` literals are UTC; Studio displays UTC (labelled); the engine never uses `ZoneId.systemDefault()`. `ZonedDateTime` / `OffsetDateTime` / `java.util.Date` are not first-class types (store an `Instant`) |
 | Multi-valued `contains` | any element matches |
@@ -838,7 +894,7 @@ Index execution **must** equal `Pred.test` / `Order.compare` on objects. Enforce
 | `ObjectDB` | thread-safe, one per directory per process |
 | Writes | encoding on caller threads; one sequencer thread validates / logs / applies; WAL group commit |
 | Reads | lock-free on `Version` + `visibleSeq` |
-| Isolation | snapshot isolation; single op / `WriteBatch` atomically visible |
+| Isolation | snapshot reads; single op / `WriteBatch` atomically visible; transactions: READ COMMITTED, SNAPSHOT, SERIALIZABLE (§12.1) |
 | Conflicts | version mismatch → `OptimisticLockException` |
 | `Snapshot`, `Cursor`, `WriteBatch`, `QueryStream` | not thread-safe |
 | Back-pressure | too many segments / frozen memtables → writers throttled |
@@ -850,12 +906,15 @@ Full design: **[transaction-design.md](transaction-design.md)** (implemented 202
 | Aspect | Design |
 |---|---|
 | Switch | `kookaburra.transactions` (default `false` = autocommit only, no overhead) |
-| Isolation | `SNAPSHOT`: reads from the snapshot taken at `begin()` plus own writes; write skew possible (`SERIALIZABLE` on the roadmap) |
-| Concurrency control | optimistic: write set buffered; at commit the sequencer checks a conflict table (OID → last seq) — first committer wins; stale `@Version` entities rejected at the call |
+| Isolation | `READ_COMMITTED` (fresh snapshot per statement), `SNAPSHOT` (default, snapshot at `begin()`), `SERIALIZABLE` (snapshot + read validation at commit); default from `kookaburra.tx-isolation` |
+| Concurrency control | optimistic: write set buffered; at commit the sequencer checks a conflict table (OID → last seq): first committer wins; stale `@Version` entities rejected at the call |
 | Read-your-writes | private overlay `MemSegment` + masked snapshot views → every query / OQL / dynamic read sees the transaction's writes |
 | Atomicity | one WAL record per commit; a failing call has no effect (statement-level) |
 | Hot spots | `increment(Class, oid, field, delta)`: applied on the latest value at commit, never conflicts |
-| API | `db.begin(Isolation.SNAPSHOT)`, `tx.get / query / oql / dynamic / insert / update / delete / increment / commit / rollback`, `db.inTransaction(work, retries)`, `db.inTransactionResult(fn)` |
+| SERIALIZABLE | read set = OIDs read by lookup + every query condition (`ReadView.queryViews`); at commit the before / after versions of commits since the snapshot (`ChangeLog`, kept only while SERIALIZABLE transactions are open) are tested against it; a match aborts. Read-only transactions never fail |
+| API | `db.begin(Isolation.X)`, `tx.get / query / oql / dynamic / referrers / insert / update / delete / increment / commit / rollback`, `db.inTransaction([options,] work)`, `db.inTransactionResult([options,] fn)` |
+
+![Isolation levels](assets/isolation.png)
 
 ---|---|
 | Atomic multi-object, multi-collection write | `WriteBatch`: one WAL record, all or nothing |
@@ -863,9 +922,8 @@ Full design: **[transaction-design.md](transaction-design.md)** (implemented 202
 | Repeatable reads across queries | `Snapshot` (MVCC) |
 | Lost-update protection | `@Version` optimistic lock → `OptimisticLockException` |
 | Durability | WAL + fsync per commit group (`SYNC`) |
-| **Not provided** | interactive `begin … commit / rollback`, read-your-own-uncommitted-writes in queries, serializable isolation |
-
-**Next step (draft for review): full PostgreSQL-aligned transactions — see [transaction-design.md](transaction-design.md).** Decision D33: kept as is for v1. A `db.transaction(tx -> …)` helper (snapshot reads + batch + version check of read objects at commit, retried on conflict) is in the backlog.
+| Interactive transactions | `db.begin(...)` with three isolation levels (§12.1, [transaction-design.md](transaction-design.md)) |
+| **Not provided** | savepoints / nested transactions (T13), cross-process access |
 
 ---
 
@@ -934,6 +992,13 @@ Storage is behind an interface: `MemoryStorage` (heap segments, nothing persiste
 | `Database` / `Sequencer` | ERROR | flush / compaction / sequencer failure (writes stop) |
 | `WalFile` | WARN | torn / corrupt WAL tail truncated |
 
+
+### 15.2 Online backup
+
+![Online backup](assets/backup.png)
+
+`db.backup(target)` writes the live objects of one MVCC snapshot into a new or empty directory: per collection a k-way merge by OID over every view (segments are OID-sorted, MemSegment rows are sorted first), written as fresh segments of about `2 × mem-segment-bytes` of rows, plus the schema and a commit (`lastSeq` = snapshot, OID counters read after the snapshot). Writers are not blocked; old versions and deleted rows are not copied. Works for in-memory databases (backup to disk). Restore = open the directory. Returns `BackupInfo(path, seq, objects, segments, bytes, millis)`.
+
 ---
 
 ## 16. Configuration
@@ -959,7 +1024,8 @@ Later sources override earlier ones (`Settings.load`, `Config.load` / `Config.fr
 | `kookaburra.tx-timeout` | `60s` | core | open transactions older than this are rolled back |
 | `kookaburra.tx-max-bytes` | `100MB` | core | encoded bytes buffered by one transaction |
 | `kookaburra.tx-retries` | `3` | core | retries of `inTransaction` on `ConflictException` |
-| `kookaburra.tx-conflict-table-max` | `2000000` | core | conflict-table entries before the oldest open transaction is evicted |
+| `kookaburra.tx-isolation` | `SNAPSHOT` | core | isolation of `begin()` / `inTransaction` without options: `READ_COMMITTED`, `SNAPSHOT`, `SERIALIZABLE` |
+| `kookaburra.tx-conflict-table-max` | `2000000` | core | conflict-table (and SERIALIZABLE change-log) entries before the oldest open transaction is evicted |
 | `kookaburra.bloom-fpp` | `0.01` | core | OID bloom filter false-positive rate per segment |
 | `kookaburra.auto-postings-ratio` | `16` | core | AUTO index writes postings when rows / distinct ≥ ratio |
 | `kookaburra.postings-or-max` | `64` | core | range / IN over at most this many postings ORs bitmaps, else scans ordinals |
@@ -988,28 +1054,31 @@ Sizes accept `KB` / `MB` / `GB`.
 | Lock-free reads: immutable `Version`, append-only chunked arrays, volatile publication | §6.2, §7 |
 | Zero-copy on-disk structures: `ImmutableRoaringBitmap` over mapped slices, O(1) bit-packed ordinals | §5 |
 
-**Harness**: `kookaburra-bench` (D31) — `java -Xmx8g -jar kookaburra-bench/target/kookaburra-bench.jar --n=10000000 --threads=16 --seconds=20`; warm-up + repeated runs (p50 / p99); consistency checked after every phase (count ≡ scan ≡ OQL); test data deleted afterwards. Full report: [`benchmark-10m.md`](benchmark-10m.md).
+**Harness**: `kookaburra-bench` (D31): `java -Xmx8g -jar kookaburra-bench/target/kookaburra-bench.jar --n=10000000 --threads=16 --seconds=20`; warm-up + repeated runs (p50 / p99); consistency checked after every phase (count ≡ scan ≡ OQL); test data deleted afterwards. Full report: [`benchmark-10m.md`](benchmark-10m.md).
 
 **Environment**: Apple M2 Max (12 cores), 32 GB, internal SSD (APFS, `force()` = `F_FULLFSYNC` ≈ 4 ms), macOS, JDK 17.0.12, `-Xmx8g`; 10 M objects (`Member`: indexed `name` (unique), `city` (50 values), `age` ORDINAL, `tags` list; plain `score`, `balance`, `active`, `note`), 18 segments after load, 4 after compaction.
 
-| Benchmark (10 M objects, run of 2026-10-15) | Target | Before tuning | **Result** |
+| Benchmark (10 M objects, run of 2026-10-17) | Target | Before tuning | **Result** |
 |---|---|---|---|
-| bulk insert, batches of 100, `ASYNC`, 1 thread | ≥ 300 k/s | 468 k/s | **632 k/s** ✅ |
-| single insert, `SYNC`, 16 / 128 threads | ≈ threads ÷ fsync latency | 3.1 k/s | **3.7 k/s / 27.8 k/s** ✅ (fsync 4 ms) |
-| `get(oid)` MemSegment / segment (p50) | ≤ 2 µs / ≤ 10 µs | 0.75 / 0.92 µs | **0.63 / 0.75 µs** ✅ |
+| bulk insert, batches of 100, `ASYNC`, 1 thread | ≥ 300 k/s | 468 k/s | **696 k/s** ✅ |
+| single insert, `SYNC`, 16 / 128 threads | ≈ threads ÷ fsync latency | 3.1 k/s | **3.2 k/s / 21.2 k/s** ✅ (fsync 4 ms) |
+| `get(oid)` MemSegment / segment (p50) | ≤ 2 µs / ≤ 10 µs | 0.75 / 0.92 µs | **0.58 / 1.08 µs** ✅ |
 | `count()` with one BITMAP `eq` | ≤ 5 ms | 0.23 ms | **0.24 ms** ✅ |
 | `eq` + `range` + `limit(100)` | ≤ 20 ms | 0.18 ms | **0.21 ms** ✅ |
-| top-10 by an ORDINAL column, 2.3 M matches | ≤ 50 ms / 1 M | 187 ms | **0.40 ms** ✅ |
-| `groupBy(city).agg(count)` | ≤ 100 ms | 902 ms | **4.1 ms** ✅ |
-| point lookup on a unique indexed string (OQL) | — | 13 ms | **0.11 ms** |
-| OQL `GROUP BY city, COUNT, AVG(age) WHERE age > 40` | — | 756 ms | **246 ms** |
-| unindexed predicate, full scan of 10 M rows | — | did not finish (full row decode) | **0.76 s** |
-| `compact()` 10 M objects (1.4 GB) | — | 17.7 s | **11.4 s** |
-| transactions: transfers (read 2, update 2), 16 threads | ≥ 50 k/s | — | **135 k/s** ✅ (0.022 retries / commit) |
-| `increment` of one hot counter, 16 threads | no lost updates | — | **251 k/s** ✅ |
-| OQL `DELETE` of all 10.6 M objects, then `compact()` | space reclaimed | 1.5 GB left (4 segments) | **1.16 M/s, 0 B left** ✅ (D44) |
-| reopen (no WAL to replay) / heap after reopen | — | — | **2.4 ms / 6.4 MiB** (mmap) |
-| disk footprint | — | 136 B / object | **148 B / object** (+ sdoc lists) |
+| top-10 by an ORDINAL column, 2.3 M matches | ≤ 50 ms / 1 M | 187 ms | **0.39 ms** ✅ |
+| `groupBy(city).agg(count)` | ≤ 100 ms | 902 ms | **4.0 ms** ✅ |
+| point lookup on a unique indexed string (OQL) | n/a | 13 ms | **0.12 ms** |
+| OQL `GROUP BY city, COUNT, AVG(age) WHERE age > 40` | n/a | 756 ms | **244 ms** |
+| unindexed predicate, full scan of 10 M rows | n/a | did not finish (full row decode) | **0.81 s** |
+| `compact()` 10 M objects (1.4 GB) | n/a | 17.7 s | **10.4 s** |
+| transactions: transfers (read 2, update 2), 16 threads: SNAPSHOT / READ COMMITTED / SERIALIZABLE | ≥ 50 k/s | n/a | **136 / 142 / 140 k/s** ✅ (0.023 retries / commit) |
+| `increment` of one hot counter, 16 threads | no lost updates | n/a | **265 k/s** ✅ |
+| insert with `@Unique` vs without, batches of 100, in memory | ≥ 50 % of plain | n/a | **235 vs 258 k/s** ✅ |
+| insert with a checked `@ForeignKey` / delete with ON DELETE CASCADE, batches of 100 | n/a | n/a | **225 k/s / 181 k/s** |
+| online backup of 10.5 M objects (1.4 GB) | n/a | n/a | **25.4 s** (413 k objects/s), writers not blocked |
+| OQL `DELETE` of all 10.5 M objects, then `compact()` | space reclaimed | 1.5 GB left (4 segments) | **1.32 M/s, 0 B left** ✅ (D44) |
+| reopen (no WAL to replay) / heap after reopen | n/a | n/a | **2.0 ms / 6.5 MiB** (mmap) |
+| disk footprint | n/a | 136 B / object | **148 B / object** (+ sdoc lists) |
 
 **Problems found and fixed** (M11):
 
@@ -1021,6 +1090,7 @@ Sizes accept `KB` / `MB` / `GB`.
 | unique-key lookup 13 ms | AUTO index without postings scanned 10 M ordinals | value-sorted doc lists (D32) |
 | flush / merge memory | a RoaringBitmap per distinct value built even when postings were not written | build postings only when written |
 | deleting all 10 M objects left 1.5 GB on disk | size-tiered merging never picked lone / oversized segments | garbage-driven compaction, `flush()` / `compact()` wait for running work (D44) |
+| 200 k inserts with `@Unique` took minutes (quadratic) | each check ran the generic executor, which builds the live bitmap of the whole memtable | index point lookup confirmed with `find(oid, seq)` (§3.6) |
 
 **Known limits** (documented, not bugs): durable single writes are bound by fsync latency × concurrency; sorting / filtering on unindexed fields reads rows (≈ 80 ns / row); a flush / merge buffers the whole segment in heap (streaming writer: backlog); mixed read p99 (~150 ms) is dominated by sorts on the unindexed `score`.
 
@@ -1028,12 +1098,12 @@ Sizes accept `KB` / `MB` / `GB`.
 
 ## 17. Kookaburra Studio (standalone UI)
 
-Independent desktop application: module / jar **`kookaburra-face`** (own launcher); opens any database directory through the dynamic API — no entity classes needed.
+Independent desktop application: module / jar **`kookaburra-face`** (own launcher); opens any database directory through the dynamic API: no entity classes needed.
 
 | Concern | Choice |
 |---|---|
 | Runtime | JDK 17, JavaFX 21 LTS |
-| Theme | AtlantaFX 2.0.1 (last line on JDK 17; 2.1 needs 21, 3.x needs 25) — default **Kookaburra Neon** (Dracula + `neon.css`); switchable to Dracula, Nord, Primer, Cupertino (dark / light), saved in user preferences |
+| Theme | AtlantaFX 2.0.1 (last line on JDK 17; 2.1 needs 21, 3.x needs 25): default **Kookaburra Neon** (Dracula + `neon.css`); switchable to Dracula, Nord, Primer, Cupertino (dark / light), saved in user preferences |
 | Icons | Ikonli 12.4.0 (Material Design 2 pack) |
 | Editors | RichTextFX 0.11.7 `CodeArea`: OQL console, JSON object editor, explain / log viewer |
 | Packaging | separate Maven project; dev run `mvn -f kookaburra-face/pom.xml javafx:run`; **distribution** `mvn -f kookaburra-face/pom.xml -P dist package` → `bin/kookaburra-face.jar` (fat jar, JavaFX natives of the build OS) + `studio.sh` / `studio.cmd` + `kookaburra.properties` |
@@ -1065,7 +1135,7 @@ Independent desktop application: module / jar **`kookaburra-face`** (own launche
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 17.2 Visual style — dark / neon
+### 17.2 Visual style: dark / neon
 
 `studio.css` holds layout and derives its `-k-*` tokens from the active AtlantaFX theme; `neon.css` (default theme) sets the palette below.
 
@@ -1094,15 +1164,16 @@ Independent desktop application: module / jar **`kookaburra-face`** (own launche
 
 | Tab / area | Feature |
 |---|---|
+| Toolbar | open / demo / close / refresh; **Flush** writes the current database's memtables to segment files now (an open transaction is not included: its changes are private until commit); **Backup** (online backup of the current database into a chosen folder: used as is when empty, else a time-stamped `<name>-backup-yyyyMMdd-HHmmss` sub-folder; status shows objects, segments, snapshot seq); new / edit / delete; run; transaction buttons; themes; About |
 | Navigator (sidebar) | **several databases at once**: tree database → classes (hierarchy, live object counts); close button per database; a directory already open is focused, not reopened; same-named databases get unique labels (`demo`, `demo (2)`); selecting a class opens it in Data and Schema |
-| Transactions | toolbar **Begin / Commit / Rollback** per database (no cross-database transactions); create / edit / delete / console DML go into the open transaction; status `TX #id · SNAPSHOT · N pending changes`; `ConflictException` → dialog; Studio opens databases with `kookaburra.transactions=true`, timeout 30 min; closing a database or the window with pending changes asks first |
+| Transactions | toolbar **Begin / Commit / Rollback** per database (no cross-database transactions); Begin is a split button whose menu picks READ COMMITTED / SNAPSHOT / SERIALIZABLE (default `kookaburra.tx-isolation`); create / edit / delete / console DML go into the open transaction; status `TX #id · SERIALIZABLE · N pending changes`; `ConflictException` → dialog; Studio opens databases with `kookaburra.transactions=true`, timeout 30 min; closing a database or the window with pending changes asks first; the console's `BEGIN` / `COMMIT` / `ROLLBACK` drive the same transaction (D48) |
 | About | product, version (filtered from the POM), GitHub link, author, e-mail, license, core / JavaFX / Java versions |
-| Data | paged grid with `#` row numbers; embedded objects flattened into dotted columns, lists of embedded objects / maps summarised as `[ 2 elements ]` / `{ 3 entries }`, long texts cut at 200 characters, binaries as `PNG · 1.1 KiB` (full value in the tooltip); **inspector** on the right: Key / Value / Type tree of the selected object (embedded objects, list elements `[i]`, map keys; lists ≤ 10 elements expanded), double-click a reference = open its target (dangling references reported);  column header click = server-side sort; quick filter box = OQL `WHERE` fragment; reload button keeps filter / sort / page; **export** of all matches (filter + sort, every page) as JSON / JSONL (one object per line, recommended for large exports) / CSV (RFC 4180, refs as OIDs), fetched in chunks of 5 000; double-click a row = edit |
-| Object editor — Form | widgets per `ValueType` (text, checkbox, date picker, enum combo, OID for references); embedded objects = titled nested sections (any depth, dotted paths); **lists of embedded objects and maps = element tables** (one row per element / entry, map key column, nested fields as dotted columns, add / remove / move up / down; duplicate or empty keys and bad values are reported); **binaries**: format + size, image preview (PNG / JPEG / GIF / BMP), Load… / Save… / Clear; **long or multi-line texts** in a text area (⤢ expands short ones); values nested deeper than an element table (a list inside a list element) are kept and edited in the JSON tab |
-| Object editor — JSON | RichTextFX JSON with highlighting + validation against schema; binaries as Base64, those over 64 KiB as a placeholder that keeps the stored bytes (megabytes of Base64 would stall the editor) |
-| CRUD | create / update (optimistic lock: conflict dialog with reload / overwrite) / delete (multi-select = one batch) |
-| Query | OQL console: highlighting from `OqlLexer` tokens, Ctrl+Space completion (classes after FROM / JOIN / UPDATE, `alias.` paths, keywords), Ctrl / ⌘ + Enter runs; results paged (100 / 500 / 1000; statements with their own LIMIT / OFFSET are not re-paged) with `#` row numbers; whole-object results (`SELECT x`) expand to one column per property; `EXPLAIN` view; history; **export** of the statement's whole result (JSON / JSONL / CSV, read in chunks of 5 000) |
-| Schema | **left**: metadata of the selected class — full name, class id, parent, collection, subclasses, `@Id` / `@Version`, layouts, count; field table (path, type, index, declared in; scrolls as one panel, tooltips for clipped text). **right**: segments of every collection (memory / disk, documents, live, garbage %, size) + layout history |
+| Data | paged grid with `#` row numbers; embedded objects flattened into dotted columns, lists of embedded objects / maps summarised as `[ 2 elements ]` / `{ 3 entries }`, long texts cut at 200 characters, binaries as `PNG · 1.1 KiB` (full value in the tooltip); **inspector** on the right: Key / Value / Type tree of the selected object (embedded objects, list elements `[i]`, map keys; lists ≤ 10 elements expanded), double-click a reference = open its target (dangling references reported); **← referenced by** node: backlinks looked up when expanded (`referrers`), double-click opens one;  column header click = server-side sort; quick filter box = OQL `WHERE` fragment; reload button keeps filter / sort / page; **export** of all matches (filter + sort, every page) as JSON / JSONL (one object per line, recommended for large exports) / CSV (RFC 4180, refs as OIDs), fetched in chunks of 5 000; double-click a row = edit |
+| Object editor: Form | widgets per `ValueType` (text, checkbox, date picker, enum combo, OID for references); embedded objects = titled nested sections (any depth, dotted paths); **lists of embedded objects and maps = element tables** (one row per element / entry, map key column, nested fields as dotted columns, add / remove / move up / down; duplicate or empty keys and bad values are reported); **binaries**: format + size, image preview (PNG / JPEG / GIF / BMP), Load… / Save… / Clear; **long or multi-line texts** in a text area (⤢ expands short ones); values nested deeper than an element table (a list inside a list element) are kept and edited in the JSON tab |
+| Object editor: JSON | RichTextFX JSON with highlighting + validation against schema; binaries as Base64, those over 64 KiB as a placeholder that keeps the stored bytes (megabytes of Base64 would stall the editor) |
+| CRUD | create / update (optimistic lock: conflict dialog with reload / overwrite) / delete (multi-select = one batch); constraint violations (`@Unique`, `ON DELETE RESTRICT`, missing FK target) → "Constraint violated" dialog, nothing stored; cascades show in the refreshed counts; decimals edited as exact text (`BigDecimal`) |
+| Query | OQL console: highlighting from `OqlLexer` tokens, Ctrl+Space completion (classes after FROM / JOIN / UPDATE, `alias.` paths, keywords), Ctrl / ⌘ + Enter runs; results paged (100 / 500 / 1000; statements with their own LIMIT / OFFSET are not re-paged) with `#` row numbers; whole-object results (`SELECT x`) expand to one column per property; `EXPLAIN` view; history; **scripts**: statements separated by `;` (outside strings and comments) run in order, stop at the first error (`statement 2 of 3: …`), the last one's result is shown and paged; **transaction commands** `BEGIN [TRANSACTION \| WORK] [ISOLATION LEVEL READ COMMITTED \| REPEATABLE READ \| SNAPSHOT \| SERIALIZABLE]` (REPEATABLE READ = SNAPSHOT, as in PostgreSQL), `START TRANSACTION`, `COMMIT`, `ROLLBACK` (highlighted and completed as keywords); **export** of the statement's whole result (JSON / JSONL / CSV, read in chunks of 5 000) |
+| Schema | **left**: metadata of the selected class: full name, class id, parent, collection, subclasses, `@Id` / `@Version`, layouts, count; field table (path, type, index, declared in, **constraint**: `UNIQUE`, `FK → Customer · CASCADE`; scrolls as one panel, tooltips for clipped text). **right**: segments of every collection (memory / disk, documents, live, garbage %, size) + layout history |
 
 ### 17.4 Threading
 
@@ -1146,7 +1217,7 @@ kookaburra/
 │   └─ io/                       MappedFile, ByteSink / ByteSource
 ├─ kookaburra-processor/         annotation processor → Person_
 ├─ kookaburra-bench/             load / stress harness (§16.1): separate Maven project, fat jar, smoke-tested (coverage ≥ 90 %), deletes its data after a run
-└─ kookaburra-face/              Kookaburra Studio: standalone JavaFX app — **separate Maven project** (own pom, not a
+└─ kookaburra-face/              Kookaburra Studio: standalone JavaFX app: **separate Maven project** (own pom, not a
                                   module of the parent), depends on the published kookaburra-core; built / released on its own
 ```
 
@@ -1170,14 +1241,15 @@ kookaburra/
 
 ### 18.3 Backlog
 
-- [ ] BSI index kind (numeric range / sum / top-K) — own 64-bit BSI over `ImmutableRoaringBitmap` (library `bsi` module is 32-bit value or 64-bit-docid only)
+- [ ] BSI index kind (numeric range / sum / top-K): own 64-bit BSI over `ImmutableRoaringBitmap` (library `bsi` module is 32-bit value or 64-bit-docid only)
 - [ ] JDK 22+ `MemorySegment` MR-JAR
 - [ ] Global ordinal cache for frequent group-by
 - [ ] Column overlay for hot single-field updates
 - [ ] Streaming segment writer (peak heap of flush / merge = segment size today)
-- [ ] Transactions roadmap ([transaction-design.md](transaction-design.md) §2): `SERIALIZABLE`, savepoints, unique constraints, thread-bound transaction + Spring adapter, per-transaction durability, Studio console `BEGIN / COMMIT`
+- [ ] Transactions roadmap ([transaction-design.md](transaction-design.md) §2): per-transaction durability, transaction metrics; optional extensions only (no Spring / JPA integration planned; no savepoints: T13)
+- [ ] Composite unique constraints (`@Unique` on several fields)
 - [ ] Studio `jpackage` installers with a bundled runtime
-- [ ] `@Renamed`, `BigDecimal`, element-correlated embedded collections
+- [ ] `@Renamed`, element-correlated embedded collections
 
 ---
 
@@ -1232,16 +1304,25 @@ kookaburra/
 | D45 | Nested values in Studio follow document-database tools (MongoDB Compass, Studio 3T): summaries in the grid, Key / Value / Type tree, element tables in the form | user request: mainstream presentation |
 | D46 | Binaries in JSON / CSV are Base64 (Jackson's `byte[]` default, MongoDB Extended JSON `$binary.base64`); the editor shows large ones as a placeholder | lossless exports; a usable editor |
 | D47 | The shared core suites run twice: in memory and on disk (`disk-suite` surefire execution, `TestDbs`) | user requirement: the file-based database is the product, the in-memory one a convenience |
+| D48 | Studio console: `;` scripts and SQL-style `BEGIN / COMMIT / ROLLBACK` as console commands, not OQL grammar; toolbar Flush | PostgreSQL / DBeaver console habits; OQL stays a query language (transaction-design T14) |
+| D49 | `BigDecimal` = DECIMAL, canonical without trailing zeros (`1.50` stored and read as `1.5`) | numeric equality everywhere (hash maps in grouping, DISTINCT, memtable postings) like `compareTo`; SQL DECIMAL / MongoDB Decimal128 compare numerically too; display with `setScale` |
+| D50 | `@Unique` / `@ForeignKey` checked on the sequencer at commit, as index point lookups; ON DELETE actions appended to the same batch | one writer = no race between check and write; deferred like `DEFERRABLE INITIALLY DEFERRED`; cascades atomic and replayable from the WAL |
+| D51 | SERIALIZABLE by optimistic read validation (read set of OIDs and query conditions vs before / after versions of later commits) | no locks or blocking (fits the single-writer OCC engine), no false positives from unrelated rows; FoundationDB / CockroachDB style; read-only transactions never abort |
+| D52 | READ COMMITTED = fresh snapshot per statement, conflicts relative to the statement that read the object | PostgreSQL / Oracle default semantics; long transactions abort less |
+| D53 | Lifecycle callbacks with JPA semantics: PRE at the call, POST after the durable commit, skipped for bulk OQL / by-OID / dynamic writes | familiar to JPA users; no callback runs for a write that never commits |
+| D54 | Online backup = export of one snapshot into fresh compacted segments (not a file copy) | consistent without pausing writers, works for in-memory databases, the copy is compact and immediately openable |
 
 ## 20. Changelog
 
 | Date | Change |
 |---|---|
+| 2026-10-17 | `BigDecimal` (DECIMAL, D49); `@Unique` and `@ForeignKey` with RESTRICT / CASCADE / SET_NULL and backlinks `referrers` (§3.6, §6.5, D50); READ COMMITTED and SERIALIZABLE (§12.1, D51, D52), `kookaburra.tx-isolation`, `inTransaction(TxOptions, …)`; lifecycle callbacks and `EntityListener` (§3.7, D53); online backup (§15.2, D54); schema file format 2; Studio: isolation menu, Backup, backlinks, constraint column, decimals; demo with unique e-mail / SKU, foreign keys and decimal prices; bench phases Integrity and backup |
+| 2026-10-16 | Studio: console scripts (`;`) and `BEGIN` / `START TRANSACTION` / `COMMIT` / `ROLLBACK` (D48, transaction-design T14), toolbar **Flush**; `bin/data` re-seeded with the nested demo; savepoints dropped from the roadmap (T13) |
 | 2026-10-15 | Tutorial video (2:33, English subtitles, original synthesised BGM): `TutorialRecorder` drives Studio and renders frames, `docs/tools/make-tutorial.sh` (ffmpeg: crossfades, libass subtitles, loudnorm) → `docs/assets/kookaburra-tutorial.mp4`, played on the website; 10 M benchmark re-run (§16.1) |
 | 2026-10-15 | Garbage-driven compaction and waiting `flush()` / `compact()` (D44, §13); Studio nested-object UI: grid summaries, inspector, element tables, binary fields with preview, long texts (D45, §17.3); binaries as Base64 in JSON / CSV with an editor placeholder (D46); demo data with nested objects, photos and long notes; LOB tests (texts to 3 M characters, binaries to 16 MiB); core suites also on disk (D47) |
 | 2026-10-15 | Studio: transactions (Begin / Commit / Rollback, conflict dialog), several databases in one window (D43), `--data` + `--demo` together; `.odbf` segment files (D41); nested objects: `Map<String, Embeddable>`, element paths through embedded lists (D42), keywords as OQL path segments; bench Transactions + Delete phases; memory + disk variants of transaction / nested / Studio tests |
 | 2026-10-15 | M12: transactions per [transaction-design.md](transaction-design.md) (opt-in `kookaburra.transactions`), atomic `increment`, OIDs at insert, flush thread pool; chained query API (`query / where / orderBy / list`, dynamic `where("path")`); Studio: export of console results (JSON / JSONL / CSV) |
-| 2026-10-13 | Draft [transaction-design.md](transaction-design.md): PostgreSQL-aligned isolation levels (RC / RR / SERIALIZABLE), read-your-writes overlay, optimistic commit validation, savepoints, error codes — for review, no code yet |
+| 2026-10-13 | Draft [transaction-design.md](transaction-design.md): PostgreSQL-aligned isolation levels (RC / RR / SERIALIZABLE), read-your-writes overlay, optimistic commit validation, savepoints, error codes: for review, no code yet |
 | 2026-10-11 | Boundary testing of Studio: fixed `EXPLAIN DELETE` executing (core `execute()` now refuses EXPLAIN), `LIMIT 0` returning a row, empty last page after deletes, stale tree counts after console DML, editor closing on type errors, filter accepting `LIMIT`; readable OQL syntax errors (unterminated strings named, long expected-token sets cut); malformed dates reported per field; license Apache-2.0 confirmed (D36) |
 | 2026-10-11 | M11 performance pass from the 10 M benchmark: path-only row decoding, ordinal / postings group-by, index-order top-N, sdoc lists (§5, §10.3, §10.4); SLF4J logging (§15.1); transactions scope (§12.1); Studio: export JSON / JSONL / CSV, Schema tab merges metadata, cross-platform jar, logback, `StudioApplication` |
 | 2026-10-11 | M10 done. Single `kookaburra.properties` (§16); Studio fat jar (`-P dist` → `bin/`), default data dir next to the jar; Schema tab merges class metadata + segments; `#` row numbers; Data reload button |

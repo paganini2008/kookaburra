@@ -5,6 +5,8 @@ import com.github.kookaburra.mapping.TypeDef;
 import com.github.kookaburra.mapping.ValueType;
 import org.roaringbitmap.RoaringBitmap;
 
+import java.math.BigDecimal;
+import java.math.MathContext;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -198,6 +200,7 @@ public class Aggregator {
         private long count;
         private long longSum;
         private double doubleSum;
+        private BigDecimal decimalSum;
         private Object best;
         private Set<Object> distinct;
 
@@ -214,6 +217,8 @@ public class Aggregator {
                 case SUM, AVG -> {
                     if (v instanceof Double d) {
                         doubleSum += d;
+                    } else if (v instanceof BigDecimal d) {
+                        decimalSum = decimalSum == null ? d : decimalSum.add(d);
                     } else {
                         longSum += ((Number) v).longValue();
                     }
@@ -243,6 +248,9 @@ public class Aggregator {
             count += o.count;
             longSum += o.longSum;
             doubleSum += o.doubleSum;
+            if (o.decimalSum != null) {
+                decimalSum = decimalSum == null ? o.decimalSum : decimalSum.add(o.decimalSum);
+            }
             if (o.distinct != null) {
                 if (distinct == null) {
                     distinct = new HashSet<>();
@@ -257,6 +265,11 @@ public class Aggregator {
 
         Object result() {
             boolean floating = spec.type() != null && spec.type().kind() == ValueType.FLOAT64;
+            if (decimalSum != null && (spec.fn() == Fn.SUM || spec.fn() == Fn.AVG)) {
+                // SQL: SUM / AVG of a DECIMAL column is a DECIMAL (exact sum, average to 34 digits)
+                BigDecimal sum = decimalSum.add(BigDecimal.valueOf(longSum));
+                return ValueType.decimal(spec.fn() == Fn.SUM ? sum : sum.divide(BigDecimal.valueOf(count), MathContext.DECIMAL128));
+            }
             return switch (spec.fn()) {
                 case COUNT -> count;
                 case COUNT_DISTINCT -> distinct == null ? 0L : (long) distinct.size();

@@ -4,6 +4,7 @@ import com.github.kookaburra.annotation.Entity;
 import com.github.kookaburra.annotation.Id;
 import com.github.kookaburra.annotation.Index;
 import com.github.kookaburra.annotation.IndexKind;
+import com.github.kookaburra.annotation.Unique;
 import com.github.kookaburra.annotation.Version;
 
 import java.time.LocalDate;
@@ -22,6 +23,7 @@ public class Customer {
     @Id long oid;
     @Version long version;
     @Index String name;
+    @Unique String email;
     @Index Tier tier;
     @Index(IndexKind.ORDINAL) int age;
     LocalDate since;

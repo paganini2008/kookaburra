@@ -119,12 +119,12 @@ public class Q {
         return new Agg<>(Agg.Kind.COUNT_DISTINCT, field, null);
     }
 
-    /** {@code SUM(field)}: long for integer fields, double for floating fields; null when there are no non-null values (SQL). */
+    /** {@code SUM(field)}: long for integer fields, double for floating fields, BigDecimal for decimals; null when there are no non-null values (SQL). */
     public static <T> Agg<T> sum(Field<T, ? extends Number> field) {
         return new Agg<>(Agg.Kind.SUM, field, null);
     }
 
-    /** {@code AVG(field)} as double; null for no rows. */
+    /** {@code AVG(field)}: double, BigDecimal for decimals (SQL); null for no rows. */
     public static <T> Agg<T> avg(Field<T, ? extends Number> field) {
         return new Agg<>(Agg.Kind.AVG, field, null);
     }

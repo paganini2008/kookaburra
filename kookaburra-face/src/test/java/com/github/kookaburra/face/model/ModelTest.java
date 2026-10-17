@@ -1,11 +1,13 @@
 package com.github.kookaburra.face.model;
 
+import com.github.kookaburra.ConstraintViolationException;
 import com.github.kookaburra.OptimisticLockException;
 import com.github.kookaburra.Ref;
 import com.github.kookaburra.dynamic.DynamicObject;
 import com.github.kookaburra.face.demo.DemoData;
 import com.github.kookaburra.mapping.ClassDef;
 import com.github.kookaburra.mapping.ValueType;
+import com.github.kookaburra.oql.OqlException;
 import com.github.kookaburra.oql.grammar.OqlLexer;
 import org.fxmisc.richtext.model.StyleSpan;
 import org.fxmisc.richtext.model.StyleSpans;
@@ -14,9 +16,12 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -44,6 +49,7 @@ class ModelTest {
     static Session demo;
     static final String CUSTOMER = "com.github.kookaburra.face.demo.Customer";
     static final String PRODUCT = "com.github.kookaburra.face.demo.Product";
+    static final String PURCHASE = "com.github.kookaburra.face.demo.Purchase";
 
     @BeforeAll
     static void open() {
@@ -95,10 +101,15 @@ class ModelTest {
         assertThat(book.idField()).isEqualTo("oid");
         assertThat(book.versionField()).isNull();
         assertThat(book.layouts()).isEqualTo(1);
-        assertThat(book.fields()).extracting(ClassMeta.FieldMeta::path).containsExactly("title", "price", "photo", "author", "pages");
+        assertThat(book.fields()).extracting(ClassMeta.FieldMeta::path).containsExactly("title", "sku", "price", "photo", "author", "pages");
         assertThat(book.fields().get(0).declaredIn()).isEqualTo("Product");
-        assertThat(book.fields().get(3).index()).isEqualTo("AUTO");
-        assertThat(book.fields().get(4).index()).isEmpty();
+        assertThat(book.fields().get(4).index()).isEqualTo("AUTO");
+        assertThat(book.fields().get(5).index()).isEmpty();
+        assertThat(book.fields().get(1).index()).isEqualTo("AUTO");                  // implied by @Unique
+        assertThat(book.fields().get(1).constraint()).isEqualTo("UNIQUE");
+        assertThat(book.fields().get(5).constraint()).isEmpty();
+        assertThat(demo.meta(PURCHASE).fields()).extracting(ClassMeta.FieldMeta::constraint)
+                .contains("FK → Customer · CASCADE", "FK → Product · RESTRICT");
         ClassMeta customer = demo.meta(CUSTOMER);
         assertThat(customer.fields()).extracting(ClassMeta.FieldMeta::type).contains("ENUM(BRONZE, SILVER, GOLD)", "LIST(STRING)");
         assertThat(customer.fields()).filteredOn(f -> f.path().equals("address.city")).singleElement()
@@ -131,10 +142,93 @@ class ModelTest {
         assertThat(upd.summary()).contains("0 objects affected");
         Session s = Session.demo();
         try {
-            assertThat(s.run("DELETE FROM Gadget g WHERE g.wireless = TRUE").summary()).contains("affected");
+            assertThatThrownBy(() -> s.run("DELETE FROM Gadget g WHERE g.wireless = TRUE"))   // purchased: ON DELETE RESTRICT
+                    .isInstanceOf(ConstraintViolationException.class).hasMessageContaining("Purchase.product");
+            assertThat(s.run("DELETE FROM Purchase p WHERE p.quantity = 1").summary()).contains("affected");
             assertThat(s.run("UPDATE Book b SET b.pages = 1 WHERE b.pages > 0 AND b.title = 'Book #0'").summary()).contains("1 object affected");
         } finally {
             s.close();
+        }
+    }
+
+    @Test
+    void scriptSplitting() {
+        assertThat(Session.statements("BEGIN; UPDATE Customer c SET c.age = 1 WHERE c.name = 'a;b';\n-- x; y\nCOMMIT;  ;"))
+                .containsExactly("BEGIN", "UPDATE Customer c SET c.age = 1 WHERE c.name = 'a;b'", "-- x; y\nCOMMIT");
+        assertThat(Session.statements("SELECT c FROM Customer c /* a; b */")).containsExactly("SELECT c FROM Customer c /* a; b */");
+        assertThat(Session.statements(" ; -- only a comment")).isEmpty();
+    }
+
+    /** Console BEGIN / COMMIT / ROLLBACK and scripts, in memory and on disk (flushed, reopened afterwards). */
+    @ParameterizedTest(name = "on disk = {0}")
+    @ValueSource(booleans = {false, true})
+    void consoleTransactions(boolean onDisk, @TempDir Path dir) {
+        Session s = onDisk ? Session.open(dir.resolve("db")) : Session.demo();
+        try {
+            if (onDisk) {
+                DemoData.fill(s.db(), 60, 42);
+                assertThat(s.flush()).isPositive();
+            }
+            long total = (Long) s.run("SELECT COUNT(*) FROM Customer c").rows().get(0).get(0);
+            QueryOutcome begun = s.run("begin transaction isolation level snapshot;");
+            assertThat(begun.note()).startsWith("transaction started (SNAPSHOT)");
+            assertThat(begun.isTable()).isFalse();
+            assertThat(begun.summary()).contains("transaction started", " ms");
+            assertThat(s.txLabel()).contains("SNAPSHOT");
+            assertThatThrownBy(() -> s.run("BEGIN")).hasMessageContaining("already open");
+            assertThat(s.run("DELETE FROM Customer c WHERE c.age < 30").affected()).isPositive();
+            long inside = (Long) s.run("SELECT COUNT(*) FROM Customer c").rows().get(0).get(0);
+            assertThat(inside).isLessThan(total);
+            assertThat(s.db().oql("SELECT COUNT(*) FROM Customer c").list().get(0)).isEqualTo(total);   // private until COMMIT
+            assertThat(s.run("ROLLBACK WORK").note()).isEqualTo("transaction rolled back");
+            assertThat(s.tx()).isNull();
+            assertThatThrownBy(() -> s.run("ROLLBACK")).hasMessageContaining("no open transaction");
+            assertThatThrownBy(() -> s.run("COMMIT")).hasMessageContaining("no open transaction");
+
+            // a script: the last statement's outcome, earlier ones applied in order
+            QueryOutcome last = s.script(Session.statements(
+                    "START TRANSACTION; UPDATE Customer c SET c.age = 99 WHERE c.age < 30; COMMIT TRANSACTION; "
+                            + "SELECT COUNT(*) FROM Customer c WHERE c.age = 99"), 100);
+            assertThat(last.isTable()).isTrue();
+            assertThat((Long) last.rows().get(0).get(0)).isPositive();
+            assertThat(s.tx()).isNull();
+            assertThat(s.script(List.of("BEGIN WORK"), 100).note()).startsWith("transaction started");
+            assertThat(s.run("commit").note()).isEqualTo("transaction committed");
+            assertThatThrownBy(() -> s.script(List.of("BEGIN", "SELEC x", "COMMIT"), 100))
+                    .hasMessageStartingWith("statement 2 of 3:");
+            assertThat(s.tx()).isNotNull();                     // the script stopped: BEGIN stays open, like any console
+            s.rollback();
+            assertThatThrownBy(() -> s.script(List.of("SELECT COUNT(*) FROM Customer c", "SELEC x"), 100))
+                    .hasMessageStartingWith("statement 2 of 2:");
+            assertThatThrownBy(() -> s.script(List.of("SELEC x"), 100)).isInstanceOf(OqlException.class);
+
+            assertThatThrownBy(() -> s.run("BEGIN ISOLATION LEVEL CHAOS"))
+                    .hasMessage("unsupported isolation level CHAOS (supported: READ COMMITTED, REPEATABLE READ, SNAPSHOT, SERIALIZABLE)");
+            for (String level : List.of("READ COMMITTED", "repeatable read", "SNAPSHOT", "Serializable")) {
+                assertThat(s.run("BEGIN ISOLATION LEVEL " + level).note()).startsWith("transaction started ("
+                        + (level.equalsIgnoreCase("repeatable read") ? "SNAPSHOT" : level.toUpperCase()) + ")");
+                assertThat(s.txLabel()).contains(level.equalsIgnoreCase("repeatable read") ? "SNAPSHOT" : level.toUpperCase());
+                s.run("ROLLBACK");
+            }
+            assertThatThrownBy(() -> s.run("BEGIN NOW")).hasMessageStartingWith("syntax: BEGIN");
+            assertThatThrownBy(() -> s.run("BEGIN ISOLATION SNAPSHOT")).hasMessageStartingWith("syntax: BEGIN");
+            assertThatThrownBy(() -> s.run("START")).hasMessageStartingWith("syntax: START TRANSACTION");
+            assertThatThrownBy(() -> s.run("COMMIT NOW")).hasMessageStartingWith("syntax: COMMIT");
+            assertThat(s.tx()).isNull();
+            if (onDisk) {
+                s.flush();
+            }
+        } finally {
+            s.close();
+        }
+        if (onDisk) {
+            Session again = Session.open(dir.resolve("db"));
+            try {
+                assertThat((Long) again.run("SELECT COUNT(*) FROM Customer c WHERE c.age < 30").rows().get(0).get(0)).isZero();
+                assertThat((Long) again.run("SELECT COUNT(*) FROM Customer c WHERE c.age = 99").rows().get(0).get(0)).isPositive();
+            } finally {
+                again.close();
+            }
         }
     }
 
@@ -253,7 +347,7 @@ class ModelTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> back = (Map<String, Object>) Json.parse(text);
         assertThat(back.get("s")).isEqualTo("a\"b\\c\n\t\r\u0001");
-        assertThat(back.get("d")).isEqualTo(-2500.0);
+        assertThat(back.get("d")).isEqualTo(new BigDecimal("-2500.0"));          // exact
         assertThat(back.get("x")).isEqualTo("2020-01-02");
         assertThat(back).containsKeys("z", "l", "o");
         assertThat(Json.parse(" {\"u\": \"\\u0041\\b\\f\\/\"} ")).isEqualTo(Map.of("u", "A\b\f/"));
@@ -321,6 +415,9 @@ class ModelTest {
         js.forEach(s -> jstyles.addAll(s.getStyle()));
         assertThat(jstyles).contains("key", "str", "num", "kw", "op");
         assertThat(Highlight.oqlStyle(OqlLexer.WS)).isNull();
+        List<String> tx = new ArrayList<>();
+        Highlight.oql("begin; commit").forEach(s -> tx.addAll(s.getStyle()));
+        assertThat(tx).containsExactly("kw", "op", "kw");            // console commands are keywords, not identifiers
     }
 
     @Test
@@ -393,7 +490,7 @@ class ModelTest {
         p.set("photo", big);
         Map<String, byte[]> kept = new LinkedHashMap<>();
         String json = ObjectJson.toEditorJson(p, def, kept);
-        assertThat(json).contains("<photo: binary · 64.0 KiB — kept unchanged").hasSizeLessThan(1000);
+        assertThat(json).contains("<photo: binary · 64.0 KiB, kept unchanged").hasSizeLessThan(1000);
         assertThat(kept).hasSize(1);
         assertThat((byte[]) ObjectJson.fromJson(p, def, json, kept).get("photo")).isSameAs(big);
         assertThatThrownBy(() -> ObjectJson.fromJson(p, def, json)).hasMessageContaining("photo: not valid Base64");

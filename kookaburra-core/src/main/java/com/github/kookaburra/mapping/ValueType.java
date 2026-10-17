@@ -3,6 +3,7 @@ package com.github.kookaburra.mapping;
 import com.github.kookaburra.Ref;
 import com.github.kookaburra.annotation.Embeddable;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -17,7 +18,10 @@ import java.util.Map;
  * @Version 1.0.0
  */
 public enum ValueType {
-    BOOL, INT32, INT64, FLOAT64, STRING, ENUM, DATE, DATETIME, INSTANT, REF,
+    BOOL, INT32, INT64, FLOAT64,
+    /** {@link BigDecimal}, compared by numeric value; stored without trailing zeros (see {@link #decimal}). */
+    DECIMAL,
+    STRING, ENUM, DATE, DATETIME, INSTANT, REF,
     /** {@code List} / {@code Set} of a scalar type; one row has many values. */
     MULTI,
     /** {@link Embeddable} value object, flattened into paths. */
@@ -41,6 +45,7 @@ public enum ValueType {
         if (type == long.class || type == Long.class) return INT64;
         if (type == double.class || type == Double.class
                 || type == float.class || type == Float.class) return FLOAT64;
+        if (type == BigDecimal.class) return DECIMAL;
         if (type == String.class) return STRING;
         if (type.isEnum()) return ENUM;
         if (type == LocalDate.class) return DATE;
@@ -66,14 +71,28 @@ public enum ValueType {
 
     /**
      * Normalizes a Java value to its canonical representation: narrow integers and chars become
-     * {@link Integer}, {@code float} becomes {@link Double}. Other values are returned unchanged.
+     * {@link Integer}, {@code float} becomes {@link Double}, a {@link BigDecimal} loses its trailing zeros
+     * ({@link #decimal}). Other values are returned unchanged.
      */
     public static Object normalize(Object value) {
+        if (value instanceof BigDecimal d) return decimal(d);
         if (value instanceof Short s) return (int) s;
         if (value instanceof Byte b) return (int) b;
         if (value instanceof Character c) return (int) c;
         if (value instanceof Float f) return (double) f;
         return value;
+    }
+
+    /**
+     * Canonical form of a decimal: numerically equal values are equal ({@code 1.50} and {@code 1.5} both become
+     * {@code 1.5}, like {@link BigDecimal#compareTo}), and never in exponent form ({@code 100}, not {@code 1E+2}).
+     */
+    public static BigDecimal decimal(BigDecimal d) {
+        if (d.signum() == 0) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal s = d.stripTrailingZeros();
+        return s.scale() < 0 ? s.setScale(0) : s;
     }
 
     /**

@@ -3,6 +3,7 @@ package com.github.kookaburra.mapping;
 import com.github.kookaburra.Ref;
 import com.github.kookaburra.dynamic.DynamicObject;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -121,6 +122,7 @@ public class DynamicCodec {
             case INT64 -> c instanceof Number n && (c instanceof Long || c instanceof Integer || n.doubleValue() == n.longValue())
                     ? (Object) n.longValue() : null;
             case FLOAT64 -> c instanceof Number n ? (Object) n.doubleValue() : null;
+            case DECIMAL -> decimal(c);
             case STRING -> c instanceof String ? c : null;
             case ENUM -> c instanceof String s && t.constantIndex(s) >= 0 ? s : null;
             case DATE -> c instanceof LocalDate ? c : c instanceof String s ? temporal(() -> LocalDate.parse(s)) : null;
@@ -135,6 +137,24 @@ public class DynamicCodec {
                     + ") is not a valid " + t);
         }
         return out;
+    }
+
+    /** A number or numeric text as a canonical decimal; null when it is not one (NaN, infinity, other text). */
+    private static Object decimal(Object c) {
+        try {
+            if (c instanceof BigDecimal d) {
+                return d;
+            }
+            if (c instanceof Double d) {
+                return Double.isFinite(d) ? ValueType.decimal(BigDecimal.valueOf(d)) : null;
+            }
+            if (c instanceof Number n) {
+                return ValueType.decimal(BigDecimal.valueOf(n.longValue()));
+            }
+            return c instanceof String s ? ValueType.decimal(new BigDecimal(s.strip())) : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /** Parses ISO text; null (reported as "not a valid …" with the field) when malformed. */
