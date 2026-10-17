@@ -25,7 +25,7 @@ public class Display {
 
     /**
      * Grid cell text: like {@link #text} but nested documents are summarised the way document-database tools
-     * (MongoDB Compass, Studio 3T) do — {@code [ 2 elements ]} for a list of embedded objects, {@code { 3 entries }}
+     * (MongoDB Compass, Studio 3T) do: {@code [ 2 elements ]} for a list of embedded objects, {@code { 3 entries }}
      * for a map; the full value is in the tooltip ({@link #pretty}) and the inspector tree.
      */
     public static String cell(Object v) {
@@ -149,6 +149,9 @@ public class Display {
         }
         if (v instanceof List<?> l) {
             return l.stream().map(Display::text).collect(Collectors.joining(", ", "[", "]"));
+        }
+        if (v instanceof BigDecimal d) {
+            return d.toPlainString();
         }
         if (v instanceof Double d && !d.isNaN() && !d.isInfinite()) {
             if (d == Math.rint(d)) {

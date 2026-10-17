@@ -1,6 +1,8 @@
 package com.github.kookaburra.face.view;
 
 import com.github.kookaburra.ConflictException;
+import com.github.kookaburra.ConstraintViolationException;
+import com.github.kookaburra.Isolation;
 import com.github.kookaburra.OptimisticLockException;
 import com.github.kookaburra.dynamic.DynamicObject;
 import com.github.kookaburra.face.StudioPaths;
@@ -21,6 +23,7 @@ import javafx.scene.control.MenuItem;
 import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.RadioMenuItem;
 import javafx.scene.control.Separator;
+import javafx.scene.control.SplitMenuButton;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
@@ -75,13 +78,25 @@ public class MainView extends BorderPane {
     final Button open = button("open", "mdi2f-folder-open-outline", "Open database directory…");
     final Button demo = button("demo", "mdi2d-database-eye-outline", "Open the demo database (in memory)");
     final Button refresh = button("refresh", "mdi2r-refresh", "Refresh");
+    final Button flush = button("flush", "mdi2c-content-save-outline",
+            "Flush: write the in-memory changes (memtable) to segment files now");
     final Button add = button("new", "mdi2p-plus", "New object");
     final Button edit = button("edit", "mdi2p-pencil-outline", "Edit selected object");
     final Button delete = button("delete", "mdi2d-delete-outline", "Delete selected objects");
     final Button run = button("run-toolbar", "mdi2p-play", "Run query (Ctrl+Enter)");
     final Button about = button("about", "mdi2i-information-outline", "About Kookaburra Studio");
     final Button closeDb = button("close-db", "mdi2d-database-remove-outline", "Close the current database");
-    final Button txBegin = button("tx-begin", "mdi2s-source-branch", "Begin transaction: changes stay private until Commit");
+    /** Begin; its menu picks the isolation level (default: {@code kookaburra.tx-isolation}). */
+    final SplitMenuButton txBegin = new SplitMenuButton();
+    final ToggleGroup isolation = new ToggleGroup();
+    final Button backup = button("backup", "mdi2b-backup-restore",
+            "Backup: copy the current database as of now (consistent snapshot) into a directory; open it to restore");
+    /** Chooses the backup directory (replaceable in tests). */
+    Supplier<File> backupChooser = () -> {
+        DirectoryChooser c = new DirectoryChooser();
+        c.setTitle("Back up into (an empty folder, or a new sub-folder is created)");
+        return c.showDialog(window());
+    };
     final Button txCommit = button("tx-commit", "mdi2c-check-circle-outline", "Commit the transaction");
     final Button txRollback = button("tx-rollback", "mdi2u-undo-variant", "Roll back the transaction (discard its changes)");
     final Label txStatus = new Label();
@@ -131,6 +146,7 @@ public class MainView extends BorderPane {
         demo.setOnAction(e -> tasks.run(Session::demo, this::open, this::error));
         closeDb.setOnAction(e -> closeCurrent());
         refresh.setOnAction(e -> refresh());
+        flush.setOnAction(e -> flush());
         add.setOnAction(e -> newObject());
         edit.setOnAction(e -> {
             List<DynamicObject> sel = data.selected();
@@ -171,6 +187,21 @@ public class MainView extends BorderPane {
             themes.getItems().add(item);
         }
         about.setOnAction(e -> About.show(window(), browser));
+        txBegin.setId("tx-begin");
+        txBegin.setGraphic(Icons.of("mdi2s-source-branch"));
+        txBegin.getStyleClass().add("k-tool");
+        for (Isolation level : Isolation.values()) {
+            RadioMenuItem item = new RadioMenuItem(isolationLabel(level));
+            item.setId("tx-isolation-" + level.name().toLowerCase());
+            item.setUserData(level);
+            item.setToggleGroup(isolation);
+            item.setSelected(level == Session.defaultIsolation());
+            txBegin.getItems().add(item);
+        }
+        txBegin.setTooltip(new Tooltip());
+        isolation.selectedToggleProperty().addListener((o, a, b) -> updateBeginTip());
+        updateBeginTip();
+        backup.setOnAction(e -> backupCurrent());
         txBegin.setText("Begin");
         txCommit.setText("Commit");
         txRollback.setText("Rollback");
@@ -179,7 +210,7 @@ public class MainView extends BorderPane {
         txBegin.setOnAction(e -> beginTransaction());
         txCommit.setOnAction(e -> commitTransaction());
         txRollback.setOnAction(e -> rollbackTransaction());
-        ToolBar toolbar = new ToolBar(logo, brand, new Region(), open, demo, closeDb, refresh, add, edit, delete, run, new Separator(),
+        ToolBar toolbar = new ToolBar(logo, brand, new Region(), open, demo, closeDb, refresh, flush, backup, add, edit, delete, run, new Separator(),
                 txBegin, txCommit, txRollback, gap, busy, themes, about);
         toolbar.getStyleClass().add("k-toolbar");
         setTop(toolbar);
@@ -294,7 +325,7 @@ public class MainView extends BorderPane {
         logo.getStyleClass().add("k-hero-logo");
         Label title = new Label("Kookaburra Studio");
         title.getStyleClass().add("k-hero-title");
-        Label sub = new Label("Browse, query and edit any Kookaburra database — no entity classes needed.");
+        Label sub = new Label("Browse, query and edit any Kookaburra database, no entity classes needed.");
         sub.getStyleClass().add("k-muted");
         Button o = new Button("Open database…", Icons.of("mdi2f-folder-open-outline"));
         o.setOnAction(e -> open.fire());
@@ -371,7 +402,7 @@ public class MainView extends BorderPane {
     void use(Session s) {
         session = s;
         if (getScene() != null && getScene().getWindow() instanceof Stage st) {
-            st.setTitle("Kookaburra Studio — " + labels.getOrDefault(s, s.title())
+            st.setTitle("Kookaburra Studio · " + labels.getOrDefault(s, s.title())
                     + (sessions.size() > 1 ? "  (" + sessions.size() + " databases)" : ""));
         }
         showTransaction(txLabels.get(s));
@@ -508,6 +539,52 @@ public class MainView extends BorderPane {
         return null;
     }
 
+    /** Writes the current database's memtables to segments (files for an on-disk database). */
+    void flush() {
+        Session s = session;
+        if (s == null) {
+            return;
+        }
+        tasks.run(s::flush, n -> {
+            status("flushed " + labels.get(s) + " · " + n + " segment" + (n == 1 ? "" : "s")
+                    + (s.dir() == null ? " (in memory)" : "") + (txLabels.get(s) == null ? "" : " · open transaction not included"));
+            refresh();
+        }, this::error);
+    }
+
+    static String isolationLabel(Isolation level) {
+        return switch (level) {
+            case READ_COMMITTED -> "Read committed: each statement sees the latest commits";
+            case SNAPSHOT -> "Snapshot (repeatable read): one consistent snapshot";
+            case SERIALIZABLE -> "Serializable: fails on concurrent changes to what it read";
+        };
+    }
+
+    Isolation selectedIsolation() {
+        return (Isolation) isolation.getSelectedToggle().getUserData();
+    }
+
+    private void updateBeginTip() {
+        txBegin.getTooltip().setText("Begin a " + selectedIsolation().name().replace('_', ' ')
+                + " transaction: changes stay private until Commit (the arrow picks the isolation level)");
+    }
+
+    /** Online backup of the current database into a chosen directory. */
+    void backupCurrent() {
+        Session s = session;
+        if (s == null) {
+            return;
+        }
+        File dir = backupChooser.get();
+        if (dir == null) {
+            return;
+        }
+        status("backing up " + labels.get(s) + " …");
+        tasks.run(() -> s.backup(dir.toPath()), info -> status("backup of " + labels.get(s) + ": " + info.objects() + " objects, "
+                + info.segments() + " segment" + (info.segments() == 1 ? "" : "s") + ", snapshot seq " + info.seq() + " → "
+                + info.path()), this::error);
+    }
+
     void newObject() {
         if (session == null || data.className() == null) {
             return;
@@ -613,6 +690,8 @@ public class MainView extends BorderPane {
     private void updateButtons() {
         boolean none = session == null;
         refresh.setDisable(none);
+        flush.setDisable(none);
+        backup.setDisable(none);
         add.setDisable(none);
         edit.setDisable(none);
         delete.setDisable(none);
@@ -641,8 +720,9 @@ public class MainView extends BorderPane {
         if (s == null) {
             return;
         }
+        Isolation level = selectedIsolation();
         tasks.run(() -> {
-            s.begin();
+            s.begin(level);
             return s.txLabel();
         }, label -> {
             showTransaction(label);
@@ -717,7 +797,7 @@ public class MainView extends BorderPane {
             refresh();                                         // a timeout may have ended the transaction
         }
         status("error: " + t.getMessage());
-        Dialogs.error(window(), "Error", String.valueOf(t.getMessage()));
+        Dialogs.error(window(), t instanceof ConstraintViolationException ? "Constraint violated" : "Error", String.valueOf(t.getMessage()));
     }
 
     private Window window() {

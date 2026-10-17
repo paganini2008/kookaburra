@@ -10,6 +10,7 @@ import com.github.kookaburra.mapping.TypeDef;
 import com.github.kookaburra.mapping.ValueType;
 import org.roaringbitmap.RoaringBitmap;
 
+import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -175,11 +176,11 @@ public class SegmentWriter {
                 long[] f = Keys.toFixed(v);
                 out.writeLong(f[0]).writeLong(f[1]);
             });
-            case STRING -> {
+            case STRING, DECIMAL -> {
                 int off = 0;
                 List<byte[]> utf = new ArrayList<>(card);
                 for (Object v : dict) {
-                    byte[] b = ((String) v).getBytes(StandardCharsets.UTF_8);
+                    byte[] b = kind == Keys.Kind.STRING ? ((String) v).getBytes(StandardCharsets.UTF_8) : Keys.decimalBytes((BigDecimal) v);
                     utf.add(b);
                     out.writeInt(off);
                     off += b.length;

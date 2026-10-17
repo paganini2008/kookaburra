@@ -26,6 +26,7 @@ import org.testfx.framework.junit5.ApplicationExtension;
 import org.testfx.framework.junit5.Start;
 import org.testfx.util.WaitForAsyncUtils;
 
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -222,7 +223,7 @@ class StudioNestedTest {
         TreeItem<ObjectInspector.Entry> price = child(child(linesNode, "[0]"), "price");
         assertThat(price.getValue().value()).isEqualTo("{ 2 fields }");
         assertThat(child(price, "currency").getValue().value()).isEqualTo("AUD");
-        assertThat(child(price, "amount").getValue().type()).isEqualTo("Double");
+        assertThat(child(price, "amount").getValue().type()).isEqualTo("Decimal");
         ObjectInspector.Entry product = child(child(linesNode, "[0]"), "product").getValue();
         assertThat(product.type()).isEqualTo("→ Product");
         assertThat(view.data.inspector.title.getText()).isEqualTo("Purchase  #" + p.oid());
@@ -327,7 +328,7 @@ class StudioNestedTest {
             assertThat(first.get("sku")).isEqualTo("SKU-NEW");
             assertThat(((Number) first.get("qty")).intValue()).isEqualTo(2);
             assertThat(((Map<?, ?>) first.get("price")).get("currency")).isEqualTo("NZD");
-            assertThat(((Map<?, ?>) first.get("price")).get("amount")).isEqualTo(12.5);
+            assertThat(((Map<?, ?>) first.get("price")).get("amount")).isEqualTo(new BigDecimal("12.5"));
             assertThat(((Ref<?>) first.get("product")).oid()).isEqualTo(productOid);
             if (expected > 1) {
                 assertThat(((Number) ((Map<?, ?>) lines.get(1)).get("qty")).intValue()).isEqualTo(9);
@@ -454,13 +455,13 @@ class StudioNestedTest {
         edit(robot, view.session().get(PRODUCT, p.oid()), e -> {
             e.tabs.getSelectionModel().select(1);
             String json = e.json.getText();
-            assertThat(json).contains("<photo: PNG · 3.0 MiB — kept unchanged").hasSizeLessThan(2000);
+            assertThat(json).contains("<photo: PNG · 3.0 MiB, kept unchanged").hasSizeLessThan(2000);
             e.json.replaceText(json.replaceFirst("\"price\": [0-9.]+", "\"price\": 1.25"));
         });
         settle();
         DynamicObject afterJson = view.session().get(PRODUCT, p.oid());
         assertThat((byte[]) afterJson.get("photo")).isEqualTo(big);
-        assertThat(afterJson.get("price")).isEqualTo(1.25);
+        assertThat(afterJson.get("price")).isEqualTo(new BigDecimal("1.25"));
         ObjectEditor broken = edit(robot, afterJson, e -> {
             e.tabs.getSelectionModel().select(1);
             e.json.replaceText(e.json.getText().replaceFirst("\"<photo: [^\"]*\"", "\"not base64!\""));

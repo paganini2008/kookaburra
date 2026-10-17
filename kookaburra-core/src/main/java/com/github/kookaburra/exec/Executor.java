@@ -53,7 +53,7 @@ public class Executor {
     }
 
     public List<SegmentView> views() {
-        return read.views(collection);
+        return read.queryViews(collection, types, cond, materializer);
     }
 
     /** Matching documents of one view. */

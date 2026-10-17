@@ -1,9 +1,19 @@
 package com.github.kookaburra.mapping;
 
+import com.github.kookaburra.LifecycleEvent;
+
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * A registered Java entity class: converts objects to / from {@link Record}s and accesses
@@ -24,6 +34,8 @@ public class EntityType<T> {
     private final MethodHandle idSet;
     private final MethodHandle versionGet;
     private final MethodHandle versionSet;
+    /** Lifecycle callback methods per event (superclass methods first); null when the class has none. */
+    private final Map<LifecycleEvent, List<MethodHandle>> callbacks;
 
     EntityType(Class<T> type, ClassDef def) {
         this.type = type;
@@ -35,6 +47,57 @@ public class EntityType<T> {
         MethodHandle[] v = def.versionField() == null ? new MethodHandle[2] : accessors(type, def.versionField());
         this.versionGet = v[0];
         this.versionSet = v[1];
+        this.callbacks = callbacks(type);
+    }
+
+    /** Annotated no-argument lifecycle methods of the class hierarchy (design §3.3). */
+    private static Map<LifecycleEvent, List<MethodHandle>> callbacks(Class<?> type) {
+        List<Class<?>> chain = new ArrayList<>();
+        for (Class<?> c = type; c != null && c != Object.class; c = c.getSuperclass()) {
+            chain.add(0, c);
+        }
+        Map<LifecycleEvent, List<MethodHandle>> out = new EnumMap<>(LifecycleEvent.class);
+        Set<String> overridden = new HashSet<>();
+        for (int i = chain.size() - 1; i >= 0; i--) {
+            for (Method m : chain.get(i).getDeclaredMethods()) {
+                for (LifecycleEvent e : LifecycleEvent.values()) {
+                    if (!m.isAnnotationPresent(e.annotation())) {
+                        continue;
+                    }
+                    if (m.getParameterCount() != 0 || Modifier.isStatic(m.getModifiers())) {
+                        throw new SchemaException("@" + e.annotation().getSimpleName() + " method " + m
+                                + " must be a non-static method without parameters");
+                    }
+                    // an overriding method replaces the overridden one (called once, like JPA)
+                    if (!Modifier.isPrivate(m.getModifiers()) && !overridden.add(e + ":" + m.getName())) {
+                        continue;
+                    }
+                    try {
+                        MethodHandle h = MethodHandles.privateLookupIn(m.getDeclaringClass(), MethodHandles.lookup()).unreflect(m)
+                                .asType(MethodType.methodType(void.class, Object.class));
+                        out.computeIfAbsent(e, k -> new ArrayList<>()).add(0, h);
+                    } catch (IllegalAccessException ex) {
+                        throw new SchemaException("cannot access " + m, ex);
+                    }
+                }
+            }
+        }
+        return out.isEmpty() ? null : out;
+    }
+
+    /** Calls the entity's own methods for {@code event} (superclass methods first). */
+    public void callback(LifecycleEvent event, T entity) {
+        List<MethodHandle> hs = callbacks == null ? null : callbacks.get(event);
+        if (hs == null) {
+            return;
+        }
+        for (MethodHandle h : hs) {
+            try {
+                h.invokeExact((Object) entity);
+            } catch (Throwable t) {
+                throw rethrow(t);
+            }
+        }
     }
 
     private static MethodHandle[] accessors(Class<?> type, String name) {

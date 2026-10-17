@@ -18,6 +18,8 @@ import com.github.kookaburra.query.Pred;
 import com.github.kookaburra.query.QueryStream;
 import com.github.kookaburra.query.Row;
 
+import java.math.BigDecimal;
+import java.math.MathContext;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -954,6 +956,7 @@ class Engine {
         private long count;
         private long longSum;
         private double doubleSum;
+        private BigDecimal decimalSum;
         private boolean floating;
         private Object best;
         private final Set<Object> distinct = new LinkedHashSet<>();
@@ -966,7 +969,8 @@ class Engine {
             if (v == null) {
                 return;
             }
-            if (agg.distinct() && !distinct.add(v instanceof Number n && !(v instanceof Double) ? (Object) n.longValue() : v)) {
+            if (agg.distinct() && !distinct.add(v instanceof Number n && !(v instanceof Double) && !(v instanceof BigDecimal)
+                    ? (Object) n.longValue() : v)) {
                 return;
             }
             count++;
@@ -978,7 +982,11 @@ class Engine {
                     if (v instanceof Double || v instanceof Float) {
                         floating = true;
                     }
-                    longSum += n.longValue();
+                    if (v instanceof BigDecimal d) {
+                        decimalSum = decimalSum == null ? d : decimalSum.add(d);
+                    } else {
+                        longSum += n.longValue();
+                    }
                     doubleSum += n.doubleValue();
                 }
                 case "MIN" -> best = best == null || Eval.compare(v, best) < 0 ? v : best;
@@ -989,6 +997,10 @@ class Engine {
         }
 
         Object result() {
+            if (decimalSum != null && !floating && (agg.fn().equals("SUM") || agg.fn().equals("AVG"))) {
+                BigDecimal sum = decimalSum.add(BigDecimal.valueOf(longSum));
+                return ValueType.decimal(agg.fn().equals("SUM") ? sum : sum.divide(BigDecimal.valueOf(count), MathContext.DECIMAL128));
+            }
             return switch (agg.fn()) {
                 case "COUNT" -> count;
                 case "SUM" -> count == 0 ? null : floating ? (Object) doubleSum : (Object) longSum;

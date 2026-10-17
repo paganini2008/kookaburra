@@ -14,6 +14,7 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -42,7 +43,9 @@ public class DemoData {
     }
 
     /**
-     * Inserts {@code customers} customers, 30 products and 3 purchases per customer. Nested examples: customer
+     * Inserts {@code customers} customers (unique e-mail), 30 products (unique SKU, decimal price) and 3 purchases
+     * per customer (foreign keys: deleting a customer cascades to its purchases, a purchased product cannot be
+     * deleted). Nested examples: customer
      * address with coordinates (two levels), contacts (map of embedded addresses), notes (long text), product photos
      * (PNG), purchase lines (list of embedded objects with a nested price and a reference).
      */
@@ -54,6 +57,7 @@ public class DemoData {
             for (int i = 0; i < customers; i++) {
                 Customer c = new Customer();
                 c.name = NAMES[i % NAMES.length] + " " + (char) ('A' + r.nextInt(26)) + ".";
+                c.email = NAMES[i % NAMES.length].toLowerCase() + "." + (i + 1) + "@example.com";
                 c.tier = Tier.values()[r.nextInt(3)];
                 c.age = 18 + r.nextInt(60);
                 c.since = LocalDate.of(2015, 1, 1).plusDays(r.nextInt(3600));
@@ -74,7 +78,7 @@ public class DemoData {
         }
         db.from(Customer.class).toList().forEach(c -> customerOids.add(c.oid));
         List<Long> productOids = new ArrayList<>();
-        List<Double> prices = new ArrayList<>();
+        List<BigDecimal> prices = new ArrayList<>();
         for (int i = 0; i < 30; i++) {
             Product p;
             if (i % 3 == 0) {
@@ -92,7 +96,8 @@ public class DemoData {
                 p = new Product();
                 p.title = "Item #" + i;
             }
-            p.price = Math.round(r.nextDouble() * 50_000) / 100.0;
+            p.sku = "SKU-" + (1000 + i);
+            p.price = BigDecimal.valueOf(Math.round(r.nextDouble() * 50_000), 2);
             p.photo = photo(i, p.title);
             productOids.add(db.insert(p));
             prices.add(p.price);

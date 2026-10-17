@@ -1,5 +1,7 @@
 package com.github.kookaburra.mapping;
 
+import com.github.kookaburra.annotation.OnDelete;
+
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -26,6 +28,34 @@ public final class Schema {
     private final Map<String, ClassDef> byName;
     private final ClassDef[] byId;
     private final Map<String, Map<String, ColumnDef>> columns = new ConcurrentHashMap<>();
+    private volatile List<Constraint> constraints;
+
+    /**
+     * A {@code @Unique} or {@code @ForeignKey} field of a stored class.
+     *
+     * @param owner      topmost class declaring it (the constraint covers its stored subclasses)
+     * @param collection collection of the owner
+     * @param path       dotted column path
+     * @param type       stored type of the path ({@code REF} or {@code MULTI(REF)} for foreign keys)
+     * @param unique     values must be unique
+     * @param onDelete   foreign-key action, or null
+     */
+    public record Constraint(String owner, String collection, String path, TypeDef type, boolean unique, OnDelete onDelete) {
+
+        public boolean foreignKey() {
+            return onDelete != null;
+        }
+
+        /** Referenced class of a foreign key ({@code java.lang.Object} = any entity). */
+        public String target() {
+            return type.scalarType().name();
+        }
+
+        @Override
+        public String toString() {
+            return owner.substring(owner.lastIndexOf('.') + 1) + "." + path;
+        }
+    }
 
     public Schema(int version, Collection<ClassDef> classes) {
         this.version = version;
@@ -148,6 +178,103 @@ public final class Schema {
                 }
             }
         }
+    }
+
+    /** Every constraint of every stored class (current layouts). */
+    public List<Constraint> constraints() {
+        List<Constraint> c = constraints;
+        if (c == null) {
+            List<Constraint> out = new ArrayList<>();
+            for (ClassDef def : byName.values()) {
+                collectConstraints(def, "", def.current().fields(), out);
+            }
+            c = List.copyOf(out);
+            constraints = c;
+        }
+        return c;
+    }
+
+    /**
+     * A path holding references: a {@code Ref} field, a collection of refs, or a ref inside embedded objects or
+     * embedded lists ({@code lines.product}).
+     *
+     * @param many   the path yields several references per object (collection or embedded list)
+     * @param target referenced class ({@code java.lang.Object} = any)
+     */
+    public record RefPath(String collection, String path, boolean many, String target) {
+    }
+
+    /** Every reference path of every collection (union over the current layouts of its classes). */
+    public List<RefPath> refPaths() {
+        Map<String, RefPath> out = new LinkedHashMap<>();
+        for (ClassDef def : byName.values()) {
+            collectRefs(def.collection(), "", def.current().fields(), false, out);
+        }
+        return List.copyOf(out.values());
+    }
+
+    private static void collectRefs(String collection, String prefix, List<FieldDef> fields, boolean many, Map<String, RefPath> out) {
+        for (FieldDef f : fields) {
+            String path = prefix + f.name();
+            TypeDef t = f.type();
+            switch (t.kind()) {
+                case REF -> out.putIfAbsent(collection + "#" + path, new RefPath(collection, path, many, t.name()));
+                case MULTI -> {
+                    if (t.element().kind() == ValueType.REF) {
+                        out.putIfAbsent(collection + "#" + path, new RefPath(collection, path, true, t.element().name()));
+                    }
+                }
+                case EMBEDDED -> collectRefs(collection, path + ".", t.fields(), many, out);
+                case EMBEDDED_LIST -> collectRefs(collection, path + ".", t.element().fields(), true, out);
+                default -> {
+                }
+            }
+        }
+    }
+
+    /** Constraints whose owner is in {@code collection}. */
+    public List<Constraint> constraints(String collection) {
+        List<Constraint> out = new ArrayList<>();
+        for (Constraint c : constraints()) {
+            if (c.collection().equals(collection)) {
+                out.add(c);
+            }
+        }
+        return out;
+    }
+
+    private void collectConstraints(ClassDef def, String prefix, List<FieldDef> fields, List<Constraint> out) {
+        for (FieldDef f : fields) {
+            String path = prefix + f.name();
+            if (f.type().kind() == ValueType.EMBEDDED) {
+                collectConstraints(def, path + ".", f.type().fields(), out);
+            } else if ((f.unique() || f.onDelete() != null) && !inheritedConstraint(def, path, f)) {
+                out.add(new Constraint(def.name(), def.collection(), path, f.type(), f.unique(), f.onDelete()));
+            }
+        }
+    }
+
+    /** True when an ancestor class declares the same constraint (it already covers {@code def}). */
+    private boolean inheritedConstraint(ClassDef def, String path, FieldDef f) {
+        for (ClassDef p = def.parent() == null ? null : byName.get(def.parent()); p != null;
+             p = p.parent() == null ? null : byName.get(p.parent())) {
+            FieldDef pf = fieldAt(p.current().fields(), path);
+            if (pf != null && pf.unique() == f.unique() && pf.onDelete() == f.onDelete()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static FieldDef fieldAt(List<FieldDef> fields, String path) {
+        int dot = path.indexOf('.');
+        String head = dot < 0 ? path : path.substring(0, dot);
+        for (FieldDef f : fields) {
+            if (f.name().equals(head)) {
+                return dot < 0 ? f : f.type().kind() == ValueType.EMBEDDED ? fieldAt(f.type().fields(), path.substring(dot + 1)) : null;
+            }
+        }
+        return null;
     }
 
     /** Returns a schema with {@code def} added or replaced, version + 1. Validates column consistency. */

@@ -1,7 +1,10 @@
 package com.github.kookaburra.oql;
 
 import com.github.kookaburra.Ref;
+import com.github.kookaburra.mapping.ValueType;
 
+import java.math.BigDecimal;
+import java.math.MathContext;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -65,6 +68,9 @@ class Eval {
             }
             if (v instanceof Double d) {
                 return -d;
+            }
+            if (v instanceof BigDecimal d) {
+                return ValueType.decimal(d.negate());
             }
             return -number(v, "-").longValue();
         }
@@ -173,6 +179,10 @@ class Eval {
         }
         Number a = number(l, op);
         Number b = number(r, op);
+        if ((a instanceof BigDecimal || b instanceof BigDecimal) && finite(a) && finite(b)) {
+            // a DECIMAL operand makes the expression exact: literals like 0.1 are taken by their decimal text
+            return decimal(op, decimal(a), decimal(b));
+        }
         if (integral(a) && integral(b)) {
             long x = a.longValue();
             long y = b.longValue();
@@ -203,6 +213,28 @@ class Eval {
             case "/" -> x / y;
             default -> x % y;
         };
+    }
+
+    /** DECIMAL arithmetic (exact; division to 34 significant digits, like SQL DECIMAL / IEEE decimal128). */
+    private static Object decimal(String op, BigDecimal x, BigDecimal y) {
+        if ((op.equals("/") || op.equals("%")) && y.signum() == 0) {
+            throw new OqlException("division by zero");
+        }
+        return ValueType.decimal(switch (op) {
+            case "+" -> x.add(y);
+            case "-" -> x.subtract(y);
+            case "*" -> x.multiply(y);
+            case "/" -> x.divide(y, MathContext.DECIMAL128);
+            default -> x.remainder(y);
+        });
+    }
+
+    /** A number as a decimal: doubles by their shortest decimal text ({@code 0.1}, not its binary expansion). */
+    static BigDecimal decimal(Number n) {
+        if (n instanceof BigDecimal d) {
+            return d;
+        }
+        return n instanceof Double || n instanceof Float ? BigDecimal.valueOf(n.doubleValue()) : BigDecimal.valueOf(n.longValue());
     }
 
     private static Object function(Ast.Func f, Env env) {
@@ -281,7 +313,7 @@ class Eval {
             case "ABS" -> {
                 arity(f, 1);
                 Number n = number(v[0], "ABS");
-                yield integral(n) ? (Object) Math.abs(n.longValue()) : (Object) Math.abs(n.doubleValue());
+                yield n instanceof BigDecimal d ? d.abs() : integral(n) ? (Object) Math.abs(n.longValue()) : (Object) Math.abs(n.doubleValue());
             }
             case "MOD" -> {
                 arity(f, 2);
@@ -299,6 +331,10 @@ class Eval {
 
     private static String text(Object v) {
         return v instanceof Ref<?> r ? String.valueOf(r.oid()) : String.valueOf(v);
+    }
+
+    private static boolean finite(Number n) {
+        return !(n instanceof Double d) || Double.isFinite(d);
     }
 
     private static boolean integral(Number n) {
@@ -321,6 +357,9 @@ class Eval {
         if ((a instanceof Number || a instanceof Ref) && (b instanceof Number || b instanceof Ref)) {
             Number x = number(a, "compare");
             Number y = number(b, "compare");
+            if ((x instanceof BigDecimal || y instanceof BigDecimal) && finite(x) && finite(y)) {
+                return decimal(x).compareTo(decimal(y));
+            }
             return integral(x) && integral(y) ? Long.compare(x.longValue(), y.longValue())
                     : Double.compare(x.doubleValue(), y.doubleValue());
         }

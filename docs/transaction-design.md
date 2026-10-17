@@ -1,10 +1,10 @@
-# Kookaburra Transactions — Design
+# Kookaburra Transactions: Design
 
 | | |
 |---|---|
-| Status | **Implemented** (2026-10-15) |
+| Status | **Implemented** (2026-10-15; READ COMMITTED, SERIALIZABLE and deferred constraints 2026-10-17) |
 | Date | 2026-10-15 |
-| Model | Snapshot isolation + optimistic concurrency control (OCC) + redo-only WAL |
+| Model | MVCC snapshots + optimistic concurrency control (OCC) + redo-only WAL; three isolation levels |
 | Builds on | [design.md](design.md) §6 write path, §7 MVCC, §12 concurrency, §15 recovery |
 | Supersedes | design.md §12.1 "Transactions (scope of v1)"; the 2026-10-13 PostgreSQL-style draft |
 
@@ -21,7 +21,8 @@
 | Conflicts | first committer wins: a write to an object that another transaction committed after `S` aborts the commit; stale entities (`@Version`) are rejected at the call |
 | Recovery | redo-only: aborted transactions never reach the WAL; no undo |
 | Hot spots | atomic `increment` executed on the latest value at commit, never conflicts with other increments |
-| Isolation | `SNAPSHOT` (= snapshot isolation of Oracle "serializable", PostgreSQL REPEATABLE READ, SQL Server SNAPSHOT); `SERIALIZABLE` on the roadmap |
+| Isolation | `READ_COMMITTED` (snapshot per statement), `SNAPSHOT` (default; = Oracle "serializable", PostgreSQL REPEATABLE READ, SQL Server SNAPSHOT), `SERIALIZABLE` (snapshot + read validation at commit); default `kookaburra.tx-isolation` |
+| Constraints | `@Unique` / `@ForeignKey` checked at commit on the sequencer (deferred), cascades in the same commit (design.md §3.6, §6.5) |
 
 ---
 
@@ -29,11 +30,13 @@
 
 | Goals (this delivery) | Non-goals | Roadmap (later deliveries) |
 |---|---|---|
-| Multi-statement, multi-collection ACID transactions | distributed / XA transactions | `SERIALIZABLE` (read-set + predicate validation) |
-| Snapshot isolation with read-your-own-writes in `get`, queries, OQL, dynamic API | transactions larger than memory | savepoints |
-| Optimistic conflict detection, automatic retry helper | blocking row locks / deadlock handling (atomic `increment` covers hot spots) | unique constraints (`@Unique`, checked at commit) |
-| Atomic `increment` for counters | transactional DDL (class registration is immediate) | thread-bound current transaction + Spring `PlatformTransactionManager` |
-| Timeouts, size limits, bounded memory | | per-transaction durability, Studio console `BEGIN / COMMIT`, transaction metrics |
+| Multi-statement, multi-collection ACID transactions | distributed / XA transactions | per-transaction durability |
+| Snapshot isolation with read-your-own-writes in `get`, queries, OQL, dynamic API | transactions larger than memory; savepoints (T13) | |
+| Optimistic conflict detection, automatic retry helper | blocking row locks / deadlock handling (atomic `increment` covers hot spots) | transaction metrics |
+| Atomic `increment` for counters | transactional DDL (class registration is immediate) | |
+| READ COMMITTED, SNAPSHOT, SERIALIZABLE | Spring / JPA integration (optional extensions, not planned) | |
+| Deferred `@Unique` / `@ForeignKey` checks with ON DELETE actions | | |
+| Timeouts, size limits, bounded memory | | |
 | Zero cost for code that does not use transactions (and none at all while the switch is off) | | |
 
 ---
@@ -70,17 +73,25 @@
 
 ---
 
-## 5. Isolation: `SNAPSHOT`
+## 5. Isolation levels
 
-| Anomaly | `SNAPSHOT` |
-|---|:-:|
-| Dirty read | ✅ prevented |
-| Non-repeatable read | ✅ prevented |
-| Phantom read | ✅ prevented (queries read the snapshot) |
-| Lost update | ✅ prevented (conflict table + `@Version`) |
-| Write skew | ❌ possible — two transactions read overlapping data and write **different** objects |
+![Isolation levels](assets/isolation.png)
 
-Write skew is the known limit of snapshot isolation in every system listed in §3. Applications that need it closed today write a common "guard" object in both transactions (the second commit then conflicts); `SERIALIZABLE` (roadmap) will close it without changes.
+| Anomaly | `READ_COMMITTED` | `SNAPSHOT` | `SERIALIZABLE` |
+|---|:-:|:-:|:-:|
+| Dirty read | ✅ prevented | ✅ prevented | ✅ prevented |
+| Non-repeatable read | ❌ possible | ✅ prevented | ✅ prevented |
+| Phantom read | ❌ possible | ✅ prevented (queries read the snapshot) | ✅ prevented |
+| Lost update | ✅ prevented (conflict table + `@Version`) | ✅ prevented | ✅ prevented |
+| Write skew | ❌ possible | ❌ possible: two transactions read overlapping data and write **different** objects | ✅ prevented (read validation) |
+
+| Level | Reads | Commit check |
+|---|---|---|
+| `READ_COMMITTED` | each statement (get, query, OQL, dynamic, referrers, write) opens a fresh snapshot, plus own writes | written objects must be unchanged since the statement that read them (`since` per write-set entry) |
+| `SNAPSHOT` | the snapshot `S` of `begin()`, plus own writes | written objects unchanged since `S` |
+| `SERIALIZABLE` | as SNAPSHOT, and every read is recorded (§11.3) | as SNAPSHOT, plus nothing it read changed since `S` |
+
+Read-only transactions never fail at any level: they are serialized at their snapshot. SERIALIZABLE aborts are `ConflictException`s and are retried by `inTransaction`.
 
 ---
 
@@ -122,12 +133,12 @@ db.insert(person);
 | Type | Members |
 |---|---|
 | `ObjectDB` (new members) | `Transaction begin()`, `begin(Isolation)`, `begin(TxOptions)`, `inTransaction(TxWork)`, `inTransaction(TxWork, int retries)`, `<R> R inTransactionResult(TxFunction<R>)`, `<R> R inTransactionResult(TxFunction<R>, int retries)` (separate name: `tx -> tx.insert(x)` would be ambiguous between the two forms; jOOQ uses `transaction` / `transactionResult` for the same reason), `increment(Class<?>, long oid, String field, Number delta)` |
-| `Transaction` reads | `get(Class, oid)`, `get(oid)`, `getAll(Class, oids)`, `query(Class)` / `from(Class)`, `oql(text)`, `oql(text, Class)`, `dynamic(className)` — same signatures as `ObjectDB` |
+| `Transaction` reads | `get(Class, oid)`, `get(oid)`, `getAll(Class, oids)`, `query(Class)` / `from(Class)`, `oql(text)`, `oql(text, Class)`, `dynamic(className)`: same signatures as `ObjectDB` |
 | Query style (all APIs) | chained: `query(X.class).where(X::getY).eq(v).where(X::getZ).gt(1).orderBy(X::getAge).desc().limit(10).list()`; dynamic: `.where("home.city").eq("Perth")`; OR / NOT via `.filter(or(...))` in the same chain |
 | `Transaction` writes | `insert`, `update`, `delete(entity)`, `delete(Class, oid)`, `increment(Class, oid, field, delta)`; OQL `UPDATE` / `DELETE` and `QueryStream.updateEach / deleteAll` inside the transaction write into it |
 | `Transaction` control | `commit()`, `rollback()`, `close()`, `id()`, `snapshotSeq()`, `isReadOnly()`, `state()` |
-| `TxOptions` | `isolation(Isolation.SNAPSHOT)`, `readOnly(boolean)`, `timeout(Duration)`; presets `TxOptions.defaults()`, `TxOptions.readOnly()` |
-| `Isolation` | `SNAPSHOT` |
+| `TxOptions` | `isolation(Isolation.X)`, `readOnly(boolean)`, `timeout(Duration)`; presets `TxOptions.defaults()`, `TxOptions.readOnly()`; `db.inTransaction(options, work)` / `inTransactionResult(options, fn)` |
+| `Isolation` | `READ_COMMITTED`, `SNAPSHOT`, `SERIALIZABLE`; `db.begin()` uses `kookaburra.tx-isolation` |
 
 | Rule | |
 |---|---|
@@ -144,11 +155,12 @@ db.insert(person);
 
 | Exception | Parent | When | Retried by `inTransaction` |
 |---|---|---|:-:|
-| `ConflictException` | `KookaburraException` | commit: an object in the write set was changed by a commit after `S`; or the transaction was aborted as the oldest when the conflict table overflowed | ✅ |
+| `ConflictException` | `KookaburraException` | commit: an object in the write set was changed by a commit after `S` (READ COMMITTED: after the statement that read it); SERIALIZABLE: something it read changed ("serialization failure"); or the transaction was evicted as the oldest when the conflict table / change log overflowed | ✅ |
+| `ConstraintViolationException` | `KookaburraException` | commit: `@Unique` duplicate, missing `@ForeignKey` target, ON DELETE RESTRICT | n/a (the same writes would fail again) |
 | `OptimisticLockException` | **`ConflictException`** (was `KookaburraException`) | stale entity version at `update` / `delete`, or version mismatch outside transactions | ✅ |
-| `TransactionTimeoutException` | `KookaburraException` | `kookaburra.tx-timeout` exceeded | — |
-| `KookaburraException` | | read-only transaction written to; `tx-max-bytes` exceeded | — |
-| `IllegalStateException` | | use after commit / rollback / close | — |
+| `TransactionTimeoutException` | `KookaburraException` | `kookaburra.tx-timeout` exceeded |: |
+| `KookaburraException` | | read-only transaction written to; `tx-max-bytes` exceeded |: |
+| `IllegalStateException` | | use after commit / rollback / close |: |
 
 Existing `catch (OptimisticLockException e)` code keeps working.
 
@@ -229,8 +241,8 @@ Registration before taking `S` guarantees that every commit with `seq > S` happe
 | | Before | Now |
 |---|---|---|
 | Who allocates | sequencer, at commit | caller, at `insert()`: per-class atomic counter (`Oids.make(classId, ++counter)`) |
-| Why | — | read-your-writes and `Ref`s between new objects need final OIDs inside the transaction; no temporary IDs to rewrite |
-| Rollback | — | leaves a gap (like sequences) |
+| Why |: | read-your-writes and `Ref`s between new objects need final OIDs inside the transaction; no temporary IDs to rewrite |
+| Rollback |: | leaves a gap (like sequences) |
 | Recovery | counters from commit file + WAL | same; the allocator starts after the highest committed OID per class |
 
 Autocommit inserts and `WriteBatch` use the same allocator.
@@ -239,10 +251,10 @@ Autocommit inserts and `WriteBatch` use the same allocator.
 
 | Existing entry | New call | Result |
 |---|---|---|
-| — | insert | INSERT (version 1) |
-| — | update | UPDATE (expected = version in `S`) |
-| — | delete | DELETE |
-| — | increment | INCREMENT (accumulated deltas per field) |
+|: | insert | INSERT (version 1) |
+|: | update | UPDATE (expected = version in `S`) |
+|: | delete | DELETE |
+|: | increment | INCREMENT (accumulated deltas per field) |
 | INSERT | update / increment | INSERT with the new record |
 | INSERT | delete | entry removed |
 | UPDATE | update / increment | UPDATE with the new record |
@@ -253,7 +265,7 @@ Autocommit inserts and `WriteBatch` use the same allocator.
 
 ### 9.3 Stale entity check
 
-`update(entity)` and `delete(entity)` of a `@Version` entity compare `entity.version` with the version the transaction sees (overlay first, else snapshot `S`). A mismatch throws `OptimisticLockException` immediately. This catches objects loaded **before** `begin()` and changed by someone else before `S` — the conflict table only sees changes after `S`.
+`update(entity)` and `delete(entity)` of a `@Version` entity compare `entity.version` with the version the transaction sees (overlay first, else snapshot `S`). A mismatch throws `OptimisticLockException` immediately. This catches objects loaded **before** `begin()` and changed by someone else before `S`: the conflict table only sees changes after `S`.
 
 Inside the overlay, rows keep the version they had in `S` (inserted rows: 1); the sequencer assigns version + 1 at commit, once per object and transaction.
 
@@ -281,12 +293,12 @@ flowchart TB
     TV --> OV["overlay MemSegment<br/>columns + postings as usual"]
     TV --> M1["masked active / frozen MemSegments @ S"]
     TV --> M2["masked segments @ S"]
-    OV & M1 & M2 --> EX["Planner / Executor / Aggregator / OQL Engine — unchanged"]
+    OV & M1 & M2 --> EX["Planner / Executor / Aggregator / OQL Engine: unchanged"]
 ```
 
 | Write | Overlay | Hidden OIDs |
 |---|---|---|
-| insert | append row (seq 0) | — |
+| insert | append row (seq 0) |: |
 | update / increment | append new row; previous overlay row of the OID marked deleted (seq 0) | + OID (if it exists in `S`) |
 | delete | previous overlay row marked deleted | + OID (if it exists in `S`) |
 
@@ -343,6 +355,22 @@ sequenceDiagram
 
 Correctness: a transaction registers before reading `visibleSeq`. Any commit `c > S` is published after `S` was read, so the transaction was registered (as pending or with `S`) during that commit's prune, and `c` survives until the transaction ends.
 
+### 11.3 SERIALIZABLE: read validation
+
+| Part | Design |
+|---|---|
+| Read set | OIDs read by lookup (`ReadView.pointViews`: get, getAll, dynamic get, OQL dereference) and every query condition (`ReadView.queryViews` from the `Executor`: collection, class ids, `Cond`, materializer for residual conditions); a read without a known condition counts as `TRUE` over the collection |
+| Change log | `ChangeLog` on the sequencer: `(seq, collection, oid, before record, after record)` for every commit, kept only while SERIALIZABLE transactions are open (`TxRegistry.serializable() > 0`), pruned to the oldest SERIALIZABLE snapshot, bounded by `tx-conflict-table-max` (overflow evicts the oldest SERIALIZABLE transaction) |
+| Validation | at commit, after the write-write check: an OID read and changed after `S` aborts; for each query condition the before and after versions of the changes after `S` in that collection are loaded into a temporary MemSegment and evaluated with the normal executor; any match aborts (the query's result would differ: update, delete or phantom) |
+| Precision | changes outside the conditions never abort (predicate level, not table level); evaluation errors count as a match |
+| Coverage | logging switches on with the first SERIALIZABLE `register`; a transaction whose snapshot predates continuous logging cannot be validated and aborts (retryable) |
+| Read-only | no validation needed: serialized at `S` |
+| Mainstream | optimistic read validation as in FoundationDB (read conflict ranges) and CockroachDB (refresh spans); PostgreSQL SSI reaches the same guarantee with predicate locks |
+
+### 11.4 READ COMMITTED
+
+Every statement calls `statement()`: if the committed state moved, the base `ReadView` is replaced and the view cache cleared; write-set entries remember the sequence number of the read they are based on (`since`), which becomes the per-OID check in `TxCommit.checkSeqs`. The registry snapshot is lowered to the oldest `since`, so the conflict table keeps what the commit needs.
+
 ---
 
 ## 12. Atomic increment
@@ -394,6 +422,7 @@ Storage side (related, same delivery): flush and compaction run on a fixed pool 
 | `kookaburra.tx-timeout` | `60s` | transactions older than this are rolled back (`0` = no limit) |
 | `kookaburra.tx-max-bytes` | `100MB` | encoded bytes in one write set |
 | `kookaburra.tx-retries` | `3` | retries of `inTransaction` on `ConflictException` |
+| `kookaburra.tx-isolation` | `SNAPSHOT` | isolation of `begin()` / `inTransaction` without options |
 | `kookaburra.tx-conflict-table-max` | `2000000` | conflict-table entries before the oldest transaction is evicted |
 | `kookaburra.flush-threads` | `2` | flush / compaction threads |
 
@@ -413,7 +442,9 @@ Storage side (related, same delivery): flush and compaction run on a fixed pool 
 
 | Suite | Content |
 |---|---|
-| Anomalies | dirty read, non-repeatable read, phantom, lost update prevented; write skew demonstrated (documented limit) |
+| Anomalies | per level: non-repeatable reads and phantoms (READ COMMITTED), lost updates rejected everywhere, write skew under READ COMMITTED / SNAPSHOT and prevented under SERIALIZABLE (`IsolationTest`, memory and disk) |
+| SERIALIZABLE | validation by OID, indexed / unindexed / residual / OQL conditions, before-version matches, precision (unrelated changes commit), read-only never fails, retries, change-log eviction |
+| Constraints | unique duplicates in batches and concurrent transactions, FK existence, RESTRICT / CASCADE (two levels) / SET_NULL, WAL replay of cascades (`ConstraintTest`, memory and disk) |
 | Conflicts | first committer wins; conflict with autocommit, `WriteBatch`, OQL bulk writes; stale `@Version` entity loaded before `begin()` |
 | Read-your-writes | differential: queries / OQL / dynamic inside a transaction ≡ `List.stream()` over (snapshot ∪ write set) on random workloads |
 | Increments | concurrent increments without lost counts; increment vs update conflicts; overflow |
@@ -468,3 +499,8 @@ Storage side (related, same delivery): flush and compaction run on a fixed pool 
 | T10 | `begin()` with the switch off throws instead of falling back to autocommit | code written for all-or-nothing must not silently lose atomicity |
 | T11 | `inTransactionResult` is a separate name from `inTransaction` | `tx -> tx.insert(x)` would be ambiguous between a void and a value body (jOOQ: `transaction` / `transactionResult`) |
 | T12 | One chained API style everywhere (`query().where().eq().orderBy().desc().list()`) | user decision; `from` / `filter` / `toList` remain as equivalents |
+| T13 | No savepoints | user decision (2026-10-16); a failed step rolls back the whole transaction, `inTransaction` retries it |
+| T14 | Studio console accepts `BEGIN [TRANSACTION \| WORK] [ISOLATION LEVEL l]`, `START TRANSACTION`, `COMMIT`, `ROLLBACK` as console commands (not OQL), sharing the toolbar's transaction | PostgreSQL / MySQL console syntax; OQL stays a query language, the API keeps `db.begin()` |
+| T15 | READ COMMITTED as a fresh snapshot per statement | PostgreSQL / Oracle semantics; long transactions see new data and abort less |
+| T16 | SERIALIZABLE by optimistic read validation at commit (read set vs before / after versions) | fits OCC and the single sequencer; predicate precision without locks |
+| T17 | Constraints deferred to commit inside transactions | the sequencer sees the final state of the whole transaction; no lookups per statement |

@@ -7,6 +7,7 @@ import com.github.kookaburra.mapping.FieldDef;
 import com.github.kookaburra.mapping.TypeDef;
 
 import java.time.temporal.Temporal;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -50,7 +51,7 @@ public class ObjectJson {
         if (v instanceof byte[] b && b.length > EDITOR_INLINE_MAX) {
             String format = Display.format(b);
             String placeholder = "<" + path + ": " + (format == null ? "binary" : format) + " · " + Display.size(b.length, "bytes")
-                    + " — kept unchanged; use Load… / Save… in the Form tab>";
+                    + ", kept unchanged; use Load… / Save… in the Form tab>";
             kept.put(placeholder, b);
             return placeholder;
         }
@@ -196,6 +197,8 @@ public class ObjectJson {
                     return Ref.of(n.longValue());
                 }
                 throw new IllegalArgumentException(where + ": expected an OID number");
+            case FLOAT64:
+                return v instanceof BigDecimal d ? (Object) d.doubleValue() : v;   // JSON decimals parse exactly
             default:
                 return v;
         }

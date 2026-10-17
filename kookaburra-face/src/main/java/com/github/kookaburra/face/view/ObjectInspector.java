@@ -18,6 +18,7 @@ import javafx.scene.layout.BorderPane;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
@@ -38,6 +39,9 @@ public class ObjectInspector extends BorderPane {
     final Label title = new Label("Select a row");
     private final Function<String, ClassDef> classDefs;
     private DynamicObject object;
+    private final BiConsumer<Long, Consumer<List<DynamicObject>>> referrers;
+    /** Key of the backlinks node (objects referencing the shown one). */
+    static final String REFERENCED_BY = "← referenced by";
 
     /**
      * One row of the tree.
@@ -50,9 +54,13 @@ public class ObjectInspector extends BorderPane {
     /**
      * @param classDefs schema lookup by class name
      * @param openRef   called with (class, OID) when a reference row is double-clicked
+     * @param referrers looks up the objects referencing an OID (off the UI thread) and hands them to the callback
+     *                  on the UI thread; used when the "referenced by" node is expanded
      */
-    public ObjectInspector(Function<String, ClassDef> classDefs, BiConsumer<String, Long> openRef) {
+    public ObjectInspector(Function<String, ClassDef> classDefs, BiConsumer<String, Long> openRef,
+                           BiConsumer<Long, Consumer<List<DynamicObject>>> referrers) {
         this.classDefs = classDefs;
+        this.referrers = referrers;
         getStyleClass().add("k-inspector");
         title.getStyleClass().add("k-section-title");
         setTop(title);
@@ -96,8 +104,34 @@ public class ObjectInspector extends BorderPane {
             for (FieldDef f : def.current().fields()) {
                 root.getChildren().add(node(f.name(), f.type(), o.values().get(f.name())));
             }
+            root.getChildren().add(backlinks(o));
         }
         tree.setRoot(root);
+    }
+
+    /** "referenced by" node: looked up when first expanded (a scan for unindexed references). */
+    private TreeItem<Entry> backlinks(DynamicObject o) {
+        TreeItem<Entry> item = new TreeItem<>(new Entry(REFERENCED_BY, "expand to look up", "Backlinks", null, 0));
+        item.getChildren().add(new TreeItem<>(new Entry("…", "", "", null, 0)));
+        boolean[] loaded = new boolean[1];
+        item.expandedProperty().addListener((obs, was, now) -> {
+            if (!now || loaded[0]) {
+                return;
+            }
+            loaded[0] = true;
+            item.setValue(new Entry(REFERENCED_BY, "searching …", "Backlinks", null, 0));
+            referrers.accept(o.oid(), found -> {
+                item.getChildren().clear();
+                for (DynamicObject r : found) {
+                    String cls = classDefs.apply(r.className()).simpleName();
+                    item.getChildren().add(new TreeItem<>(new Entry(cls + "  #" + r.oid(), "double-click to open", "→ " + cls,
+                            r.className(), r.oid())));
+                }
+                item.setValue(new Entry(REFERENCED_BY, found.isEmpty() ? "no objects" : "[ " + count(found.size(), "object") + " ]",
+                        "Backlinks", null, 0));
+            });
+        });
+        return item;
     }
 
     public DynamicObject object() {
@@ -158,6 +192,7 @@ public class ObjectInspector extends BorderPane {
             case INT32 -> "Int32";
             case INT64 -> "Int64";
             case FLOAT64 -> "Double";
+            case DECIMAL -> "Decimal";
             case STRING -> "String";
             case DATE -> "Date";
             case DATETIME -> "DateTime";

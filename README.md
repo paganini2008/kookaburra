@@ -4,7 +4,7 @@
 
 <h1 align="center">Kookaburra</h1>
 
-<p align="center"><b>Query Java objects like a database — bitmaps underneath, streams on top.</b></p>
+<p align="center"><b>Query Java objects like a database: bitmaps underneath, streams on top.</b></p>
 
 <p align="center">
   <a href="https://openjdk.org/projects/jdk/17/"><img src="https://img.shields.io/badge/Java-17%2B-orange?logo=openjdk" alt="Java 17+"></a>
@@ -15,7 +15,7 @@
   <a href="https://paganini2008.github.io/kookaburra/"><img src="https://img.shields.io/badge/docs-GitHub%20Pages-00E5FF" alt="Docs"></a>
 </p>
 
-Kookaburra is an **embedded object database for Java 17+**. You store plain annotated objects. Then you query them with a type-safe, chained API (`query(Book.class).where(Book::getYear).ge(1960).list()`) or with **OQL**, a JPQL-style query language. Filters, sorts and aggregates run on **RoaringBitmap** indexes over memory-mapped segment files, with a WAL, MVCC snapshots, optional **SNAPSHOT transactions** and crash recovery. **Kookaburra Studio** is a desktop admin tool for browsing, editing and querying any database.
+Kookaburra is an **embedded object database for Java 17+**. You store plain annotated objects. Then you query them with a type-safe, chained API (`query(Book.class).where(Book::getYear).ge(1960).list()`) or with **OQL**, a JPQL-style query language. Filters, sorts and aggregates run on **RoaringBitmap** indexes over memory-mapped segment files, with a WAL, MVCC snapshots, optional **transactions** (READ COMMITTED, SNAPSHOT, SERIALIZABLE), **unique and foreign-key constraints**, online backup and crash recovery. **Kookaburra Studio** is a desktop admin tool for browsing, editing and querying any database.
 
 <p align="center">
   <img src="https://paganini2008.github.io/kookaburra/assets/studio-data.png" width="860" alt="Kookaburra Studio">
@@ -30,18 +30,61 @@ Kookaburra is an **embedded object database for Java 17+**. You store plain anno
 
 ## Features
 
-| | Feature | Problem it solves |
+### Query
+
+| | Feature | What you get |
 |---|---|---|
-| 🧭 | **Type-safe chained queries from method references**: `query(Book.class).where(Book::getGenre).eq(SCIFI).orderBy(Book::getYear).desc().list()`, or a generated metamodel `Book_.price.lt(10.0)` | No string field names, refactoring-safe, no SQL / ORM mapping layer |
-| ⚡ | **Bitmap & ordinal indexes** (Roaring postings, sorted dictionaries, value-sorted doc lists) | Filter, count, top-N and group on 10 M objects in milliseconds |
-| 🔤 | **OQL**: JPQL-style `SELECT / UPDATE / DELETE`, SQL-92 core (expressions, `CASE`, `LIKE`, `DISTINCT`, `GROUP BY … HAVING`, aggregates, `ORDER BY` alias / position) | Text queries for tools, configs and ad-hoc analysis |
-| 🧬 | **Inheritance & nested objects**: polymorphic queries via a `$type` bitmap, dot paths into embedded values at any depth, lists of embedded objects (`whereAny`, `MEMBER OF`), maps of embedded objects, references with `fetch` | Rich domain models without flattening |
-| 🔁 | **Transactions (opt-in)**: `db.begin(Isolation.SNAPSHOT)`, read-your-writes, first-committer-wins (`ConflictException`), atomic `increment`, `inTransaction` with retries | Multi-object invariants (transfers, stock) without locks |
-| 📦 | **Large values**: long texts and binaries (`byte[]`, e.g. images) up to tens of MiB per value, `Map<String, byte[]>` | Store documents and pictures next to their metadata |
-| 🛡 | **Durable and consistent**: WAL with group commit, crash recovery, MVCC snapshots, cross-collection atomic `WriteBatch`, optimistic locking (`@Version`); deleted space reclaimed by compaction | Safe local persistence without an external server |
-| 🧩 | **Self-describing schema & dynamic API** (`DynamicObject`) with schema evolution (layouts) | Open any database without its classes; add / remove fields freely |
-| 🗜 | **Compact, zero-copy storage**: immutable mmap'd segments, LSM write path, tiered compaction, ~150 B / object | Small heap (6.5 MiB after reopening 10 M objects), fast restarts (1.6 ms) |
-| 🖥 | **Kookaburra Studio** (JavaFX): several databases side by side, CRUD in transactions, nested-object inspector and element editor, image preview, OQL console with completion, schema & segments, JSON / JSONL / CSV export, themes | Inspect and fix data visually; one jar for Windows, Linux and macOS |
+| 🧭 | **Type-safe chained queries** from method references or a generated metamodel | Refactoring-safe filters, no SQL mapping layer |
+| ⚡ | **Bitmap and ordinal indexes** (Roaring postings, sorted dictionaries) | Filter, count, top-N and group 10 M objects in milliseconds |
+| 🔤 | **OQL**: JPQL-style `SELECT / UPDATE / DELETE` with SQL-92 core | Text queries for tools, configs and ad-hoc analysis |
+| 🧩 | **Dynamic API** on a self-describing schema | Open any database without its classes |
+
+### Data model
+
+| | Feature | What you get |
+|---|---|---|
+| 🧬 | **Inheritance and nested objects**: embedded values at any depth, lists and maps of them | Rich domain models without flattening |
+| 💰 | **Exact decimals** (`BigDecimal`), compared by value | Money without rounding errors |
+| 📦 | **Large values**: long texts and binaries of tens of MiB | Documents and pictures next to their metadata |
+| 🔄 | **Schema evolution** by layouts | Add or remove fields freely |
+
+### Integrity and transactions
+
+| | Feature | What you get |
+|---|---|---|
+| 🔑 | **`@Unique`** constraints | No duplicate e-mails, SKUs or order numbers |
+| 🔗 | **`@ForeignKey`** with RESTRICT, CASCADE or SET_NULL, plus backlinks | No dangling references |
+| 🔁 | **Transactions**: READ COMMITTED, SNAPSHOT, SERIALIZABLE, retries | Multi-object invariants without locks |
+| 🪝 | **Lifecycle callbacks** (`@PrePersist` …) and listeners | Audit fields and validation in one place |
+
+### Storage and operations
+
+| | Feature | What you get |
+|---|---|---|
+| 🛡 | **WAL, group commit, crash recovery, MVCC snapshots** | Safe local persistence, no server |
+| 🗜 | **Compact mmap segments** with tiered compaction, ~150 B per object | Small heap, restarts in milliseconds |
+| 💾 | **Online backup** of a consistent snapshot | Back up while writing; restore = open |
+| 🖥 | **Kookaburra Studio** desktop tool | Browse, edit, query and back up visually |
+
+### Supported data types
+
+| Java type | Stored as | Index | Notes |
+|---|---|:-:|---|
+| `boolean`, `Boolean` | BOOL | ✅ | |
+| `byte`, `short`, `char`, `int` and boxed | INT32 | ✅ | |
+| `long`, `Long` | INT64 | ✅ | |
+| `float`, `double` and boxed | FLOAT64 | ✅ | `Double.compare` order, `NaN` greatest |
+| `BigDecimal` | DECIMAL | ✅ | exact, numeric equality (`1.50` = `1.5`, read back as `1.5`) |
+| `String` | STRING | ✅ | prefix queries (`startsWith`, `LIKE 'x%'`) use the index |
+| `enum` | ENUM | ✅ | ordered by declaration; constants may be appended |
+| `LocalDate` / `LocalDateTime` / `Instant` | DATE / DATETIME / INSTANT | ✅ | UTC |
+| `Ref<T>` | REF | ✅ | reference by OID; `@ForeignKey` for integrity |
+| `List<S>` / `Set<S>` of the scalars above | MULTI | ✅ | `contains`, `MEMBER OF` |
+| `@Embeddable` class | EMBEDDED | ✅ per path | dotted paths at any depth (`address.geo.lat`) |
+| `List` / `Set` of `@Embeddable` | EMBEDDED_LIST | scan | "any element" paths (`items.sku`) |
+| `Map<K, V>` (scalar keys, scalar or `@Embeddable` values) | MAP | | |
+| `byte[]` | BYTES | | images, files; Base64 in JSON / CSV exports |
+| any other `Serializable` | OBJECT | | Java serialization |
 
 ## Architecture
 
@@ -66,8 +109,12 @@ flowchart LR
 |---|---|
 | API | typed fields from getters / metamodel, OQL, dynamic access; all compile to the same `Pred` / plan |
 | Planner / Executor | pushes predicates to postings and ordinals, orders conjuncts by cost, evaluates residuals on rows |
-| Write path | single sequencer thread (LevelDB-style): validate → WAL (fsync per group) → MemSegment → publish `visibleSeq` |
+| Write path | single sequencer thread (LevelDB-style): conflicts → constraints → WAL (fsync per group) → MemSegment → publish `visibleSeq` |
 | Storage | immutable segment files (dictionary, bit-packed ordinals, Roaring postings, value-sorted docs, nulls, bloom), delete logs, commit files |
+
+<p align="center">
+  <img src="https://paganini2008.github.io/kookaburra/assets/write-path.png" width="860" alt="Write path: callbacks, conflict checks, constraints, WAL">
+</p>
 
 Full design: [docs/design.md](docs/design.md).
 
@@ -78,7 +125,7 @@ Full design: [docs/design.md](docs/design.md).
 | Java | **17+** (JDK for building; JRE for running) |
 | Runtime dependencies | RoaringBitmap 1.6.22, ANTLR 4.13.2 runtime, SLF4J API 2.0 (bring any backend) |
 | Build | Maven 3.8+ |
-| Studio | Java 17+ runtime; Windows x64, Linux x64 (GTK 3) or macOS Apple Silicon — JavaFX is bundled |
+| Studio | Java 17+ runtime; Windows x64, Linux x64 (GTK 3) or macOS Apple Silicon; JavaFX is bundled |
 
 ## Quick Start
 
@@ -156,16 +203,18 @@ java -jar bin/kookaburra-face.jar --data=data            # or double-click the j
 
 | Studio feature | |
 |---|---|
-| Several databases side by side (disk + demo); transactions per database: Begin / Commit / Rollback, pending changes in the status | <img src="https://paganini2008.github.io/kookaburra/assets/studio-transaction.png" width="420" alt="Studio transaction"> |
-| Nested objects: lists of embedded objects show as `[ 2 elements ]`, maps as `{ 3 entries }`; the Key / Value / Type inspector expands every level; double-click a reference to open its target | <img src="https://paganini2008.github.io/kookaburra/assets/studio-nested.png" width="420" alt="Studio nested inspector"> |
-| Element editor for lists of embedded objects and maps (add / remove / reorder, nested fields as dotted columns) | <img src="https://paganini2008.github.io/kookaburra/assets/studio-nested-editor.png" width="420" alt="Studio element editor"> |
-| Binary fields: format, size, image preview, Load… / Save… / Clear; long texts in a text area | <img src="https://paganini2008.github.io/kookaburra/assets/studio-binary.png" width="420" alt="Studio binary field"> |
+| Several databases side by side; transactions per database: **Begin** (pick READ COMMITTED, SNAPSHOT or SERIALIZABLE), Commit, Rollback, or `BEGIN ISOLATION LEVEL …; COMMIT` scripts in the console | <img src="https://paganini2008.github.io/kookaburra/assets/studio-transaction.png" width="420" alt="Studio transaction"> |
+| Nested objects: lists show as `[ 2 elements ]`, maps as `{ 3 entries }`; the Key / Value / Type inspector expands every level | <img src="https://paganini2008.github.io/kookaburra/assets/studio-nested.png" width="420" alt="Studio nested inspector"> |
+| **← referenced by**: the objects pointing at the selected one (backlinks); double-click opens one | <img src="https://paganini2008.github.io/kookaburra/assets/studio-backlinks.png" width="420" alt="Studio backlinks"> |
+| Constraint column (`UNIQUE`, `FK → Customer · CASCADE`); violations open a "Constraint violated" dialog | <img src="https://paganini2008.github.io/kookaburra/assets/studio-constraints.png" width="420" alt="Studio constraints"> |
+| Element editor for lists of embedded objects and maps (add, remove, reorder) | <img src="https://paganini2008.github.io/kookaburra/assets/studio-nested-editor.png" width="420" alt="Studio element editor"> |
+| Binary fields with image preview, long texts, exact decimals; **Flush** and **Backup** in the toolbar | <img src="https://paganini2008.github.io/kookaburra/assets/studio-binary.png" width="420" alt="Studio binary field"> |
 
-The demo database (`--demo`) contains all of these: customers with a two-level address and a map of contacts, purchases with order lines (embedded list with nested prices and product references), product photos (PNG) and long notes.
+The demo database (`--demo`) contains all of these: customers with a unique e-mail, a two-level address and a map of contacts; products with a unique SKU, a decimal price and a PNG photo; purchases with order lines and foreign keys (deleting a customer deletes their purchases, a purchased product cannot be deleted).
 
 ## Examples
 
-All outputs below are from a real run on six books (Dune, Neuromancer, Foundation, The Hobbit, Hyperion, The Big Sleep); the Quick Start, transaction and nested-object snippets are executed by `ReadmeExamplesTest`, in memory and on disk.
+All outputs below are from a real run on six books (Dune, Neuromancer, Foundation, The Hobbit, Hyperion, The Big Sleep); the Quick Start, transaction, constraint, isolation, backup and nested-object snippets are executed by `ReadmeExamplesTest`, in memory and on disk.
 
 ### Generated metamodel
 
@@ -217,17 +266,81 @@ try (Transaction tx = db.begin(Isolation.SNAPSHOT)) {
     tx.increment(Account.class, to, "balance", 30);                    // atomic, never conflicts
     tx.query(Account.class).where(Account::getOwner).eq("ann").list();  // sees its own writes
     tx.commit();                                                        // ConflictException if `a` changed meanwhile
-}                                                                       // not committed → rolled back
+}                                                                       // not committed: rolled back
 db.inTransaction(tx -> tx.increment(Account.class, to, "balance", 5));  // retried on conflicts
 ```
 
-| Property | Behaviour |
-|---|---|
-| Isolation | SNAPSHOT (as Oracle / PostgreSQL REPEATABLE READ): one consistent snapshot, no dirty / non-repeatable reads, no phantoms |
-| Conflicts | optimistic, first committer wins; the loser gets `ConflictException` and retries |
-| Off (default) | every write commits on its own; `begin()` fails with a hint to set `kookaburra.transactions=true` |
+| Level | Reads | Prevents |
+|---|---|---|
+| `READ_COMMITTED` | latest commit, per statement | dirty reads, lost updates |
+| `SNAPSHOT` (default) | one snapshot from `begin()` | plus non-repeatable reads and phantoms |
+| `SERIALIZABLE` | snapshot, validated at commit | plus write skew |
+
+<p align="center">
+  <img src="https://paganini2008.github.io/kookaburra/assets/isolation.png" width="760" alt="Isolation levels">
+</p>
+
+### SERIALIZABLE: no write skew
+
+Two doctors are on call; each checks that the other one still is, then goes off call. Under SNAPSHOT both commit and nobody is on call. Under SERIALIZABLE the second commit fails and `inTransaction` retries it:
+
+```java
+db.inTransaction(TxOptions.defaults().isolation(Isolation.SERIALIZABLE), tx -> {
+    long onCall = tx.query(Doctor.class).where(Doctor::isOnCall).eq(true).count();
+    if (onCall > 1) {
+        tx.update(tx.get(Doctor.class, me).offCall());
+    }
+});
+```
+```text
+second concurrent commit: ConflictException "serialization failure: a concurrent commit changed the result of a query …"
+on call afterwards: 1
+```
 
 Design: [docs/transaction-design.md](docs/transaction-design.md).
+
+### Constraints, decimals and callbacks
+
+```java
+@Entity
+public class Order {
+    @Id long oid;
+    @Unique String number;                                            // no two orders share a number
+    @ForeignKey(onDelete = OnDelete.CASCADE) Ref<Customer> customer;  // deleted with the customer
+    @Index BigDecimal total;                                          // exact money, numeric order
+    Instant created;
+
+    @PrePersist void stamp() { created = Instant.now(); }            // lifecycle callback
+}
+```
+
+| Input | Code | Output |
+|---|---|---|
+| a second order `A-1` | `db.insert(new Order("A-1", ann, "5"))` | `ConstraintViolationException: duplicate value 'A-1' for unique Order.number` |
+| totals 19.90 and 10.15 | `db.query(Order.class).sum(where(Order::getTotal))` | `30.05` (exact) |
+| `19.90` stored | `db.query(Order.class).where(Order::getTotal).eq(new BigDecimal("19.9")).count()` | `1` |
+| Ann's backlinks | `db.referrers(Order.class, ann)` | `[A-1, A-2]` |
+| delete Ann | `db.delete(Customer.class, ann)` | her orders are deleted in the same commit |
+
+<p align="center">
+  <img src="https://paganini2008.github.io/kookaburra/assets/foreign-keys.png" width="760" alt="Unique and foreign-key constraints">
+</p>
+
+Constraints are checked when the write commits, against the latest data and the batch's own writes. `RESTRICT` (default) refuses the delete, `SET_NULL` clears the reference. Listeners: `db.addListener(Order.class, listener)`.
+
+### Online backup
+
+```java
+BackupInfo info = db.backup(Path.of("backups/2026-10-17"));   // writers keep going
+try (ObjectDB copy = ObjectDB.open(info.path())) { … }        // restore = open the directory
+```
+```text
+BackupInfo[path=/…/backups/2026-10-17, seq=1, objects=2, segments=1, bytes=…, millis=…]   (two books, one batch)
+```
+
+<p align="center">
+  <img src="https://paganini2008.github.io/kookaburra/assets/backup.png" width="760" alt="Online backup">
+</p>
 
 ### Nested objects
 
@@ -283,6 +396,9 @@ FILTER
 | Write in `WriteBatch`es; use `Durability.ASYNC` for bulk loads | one fsync per group; 485 k objects/s batched |
 | Use a `Snapshot` for several reads that must agree | MVCC: one consistent point in time |
 | Use transactions only where several objects must change together | autocommit writes skip the conflict bookkeeping |
+| Pick SERIALIZABLE when a decision depends on what other rows say (rotas, quotas) | it closes write skew; retries come from `inTransaction` |
+| Declare `@Unique` / `@ForeignKey` instead of checking in code | the check and the write are one atomic step |
+| Back up with `db.backup(dir)`, not by copying files | a copy of a live directory may be inconsistent |
 | Prefer `increment` for counters | it never conflicts, even inside transactions |
 | Keep one `ObjectDB` per directory per process | it is thread-safe and holds the directory lock |
 
@@ -306,8 +422,9 @@ All settings live in one file, [`kookaburra.properties`](kookaburra.properties):
 | `kookaburra.sequencer-max-group` | `512` | max requests per commit group |
 | `kookaburra.flush-threads` | `2` | threads for flushes and compactions |
 | `kookaburra.transactions` | `false` | enables `begin()` / `inTransaction()`; off = every write commits directly |
+| `kookaburra.tx-isolation` | `SNAPSHOT` | isolation of `begin()` / `inTransaction`: `READ_COMMITTED`, `SNAPSHOT`, `SERIALIZABLE` |
 | `kookaburra.tx-timeout` / `tx-max-bytes` / `tx-retries` | `60s` / `100MB` / `3` | transaction limits and `inTransaction` retries |
-| `kookaburra.tx-conflict-table-max` | `2000000` | conflict history entries (~32 B each) before the oldest transaction is aborted |
+| `kookaburra.tx-conflict-table-max` | `2000000` | conflict history (and SERIALIZABLE change log) entries before the oldest transaction is aborted |
 | `kookaburra.data` | `<jar dir>/data` | Studio: default database directory |
 | `kookaburra.log-dir` / `kookaburra.log-level` | `<jar dir>/logs` / `INFO` | Studio: logback output |
 | `kookaburra.theme` / `page-size` / `console-page-size` | `NEON` / `50` / `100` | Studio UI |
@@ -318,20 +435,23 @@ All settings live in one file, [`kookaburra.properties`](kookaburra.properties):
 
 | Operation (10 M objects) | p50 |
 |---|---|
-| bulk insert, batches of 100 (`ASYNC`) | **632 k objects/s** |
-| durable single inserts (`SYNC`), 16 / 128 threads | 3.7 k/s / **27.8 k/s** (group commit) |
-| `get(oid)` | **0.75 µs** |
+| bulk insert, batches of 100 (`ASYNC`) | **696 k objects/s** |
+| durable single inserts (`SYNC`), 16 / 128 threads | 3.2 k/s / **21.2 k/s** (group commit) |
+| `get(oid)` | **0.6 to 1.1 µs** |
 | `count()` where `city = ?` (bitmap) | **0.24 ms** |
 | `city = ? AND age BETWEEN 30 AND 40 LIMIT 100` | **0.21 ms** |
-| top-10 by `age DESC` over 2.3 M matches | **0.40 ms** |
-| `GROUP BY city COUNT(*)` | **4.1 ms** |
-| unique-key lookup via OQL (`name = ?`) | **0.11 ms** |
-| OQL `GROUP BY city, COUNT, AVG(age) WHERE age > 40` | 246 ms |
-| full scan with an unindexed predicate | 0.76 s |
-| transactions: transfers (read 2, update 2), 16 threads | **135 k/s**, 0.022 retries / commit |
-| atomic `increment` of one hot counter, 16 threads | **251 k/s**, no lost updates |
-| OQL `DELETE` of all 10.6 M objects / disk after `compact()` | 1.16 M objects/s / **0 B** (fully reclaimed) |
-| reopen / heap after reopen | 2.4 ms / 6.4 MiB |
+| top-10 by `age DESC` over 2.3 M matches | **0.39 ms** |
+| `GROUP BY city COUNT(*)` | **4.0 ms** |
+| unique-key lookup via OQL (`name = ?`) | **0.12 ms** |
+| OQL `GROUP BY city, COUNT, AVG(age) WHERE age > 40` | 244 ms |
+| full scan with an unindexed predicate | 0.81 s |
+| transfers (read 2, update 2), 16 threads: SNAPSHOT / READ COMMITTED / SERIALIZABLE | **136 / 142 / 140 k/s**, 0.023 retries / commit |
+| atomic `increment` of one hot counter, 16 threads | **265 k/s**, no lost updates |
+| insert with `@Unique` / without, batches of 100 (in memory) | **235 / 258 k/s** |
+| insert with a checked `@ForeignKey` / delete with ON DELETE CASCADE | 225 k/s / 181 k/s |
+| online backup of 10.5 M objects (1.4 GB) | **25.4 s**, writers not blocked |
+| OQL `DELETE` of all 10.5 M objects / disk after `compact()` | 1.32 M objects/s / **0 B** (fully reclaimed) |
+| reopen / heap after reopen | 2.0 ms / 6.5 MiB |
 | disk footprint | 148 B / object |
 
 | Trade-off | Consequence |
@@ -339,7 +459,8 @@ All settings live in one file, [`kookaburra.properties`](kookaburra.properties):
 | Durable single writes are bound by fsync | throughput ≈ concurrent writers ÷ fsync latency; batch or use `ASYNC` for bulk |
 | Indexes cost space | ≈ 4 B / object per high-cardinality index (value-sorted docs) |
 | Single-collection queries | no joins across collections (references + `fetch` / semi-join `in(...)` instead) |
-| Transactions are SNAPSHOT, not SERIALIZABLE | write skew is possible, as in Oracle / PostgreSQL REPEATABLE READ; guard invariants with a shared write ([transaction design](docs/transaction-design.md)) |
+| Optimistic transactions | conflicts surface at commit and are retried, never blocked; SERIALIZABLE keeps a change log while such transactions are open |
+| Constraints are single-field | composite unique keys are not supported yet |
 
 ## Documentation
 
@@ -347,8 +468,8 @@ All settings live in one file, [`kookaburra.properties`](kookaburra.properties):
 |---|---|
 | Video tutorial | [Watch on the website](https://paganini2008.github.io/kookaburra/#tutorial) (2:33) · made by `docs/tools/make-tutorial.sh` |
 | Getting Started | [Quick Start](#quick-start) |
-| User Guide & Architecture | [docs/design.md](docs/design.md) — storage format, query execution, OQL grammar, concurrency, recovery |
-| Transactions | [docs/transaction-design.md](docs/transaction-design.md) — SNAPSHOT + OCC, decisions T1–T12 |
+| User Guide & Architecture | [docs/design.md](docs/design.md): storage format, query execution, OQL grammar, constraints, concurrency, backup, recovery |
+| Transactions | [docs/transaction-design.md](docs/transaction-design.md): three isolation levels with OCC, decisions T1 to T17 |
 | Examples | [Examples](#examples) · tests under `kookaburra-core/src/test` |
 | Configuration | [Configuration](#configuration) · [`kookaburra.properties`](kookaburra.properties) |
 | Benchmarks | [docs/benchmark-10m.md](docs/benchmark-10m.md) |
@@ -362,6 +483,8 @@ All settings live in one file, [`kookaburra.properties`](kookaburra.properties):
 | Can I query without the entity classes? | Yes: `db.dynamic("Book")`, OQL, or Studio |
 | Is there a server? | No, it is embedded: one process opens a directory |
 | Which time zone? | UTC everywhere |
+| How do I back up and restore? | `db.backup(dir)` while running; open the directory to restore |
+| Why is `1.50` read back as `1.5`? | decimals are stored by value, so `1.50` and `1.5` are equal everywhere; format with `setScale(2)` |
 
 ## Contributing & License
 

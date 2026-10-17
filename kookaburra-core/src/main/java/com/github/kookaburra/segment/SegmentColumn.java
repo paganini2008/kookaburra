@@ -8,6 +8,7 @@ import org.roaringbitmap.RoaringBitmap;
 import org.roaringbitmap.buffer.ImmutableRoaringBitmap;
 import org.roaringbitmap.buffer.MutableRoaringBitmap;
 
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -60,7 +61,7 @@ public class SegmentColumn implements ColumnIndex {
         this.card = in.readVarInt();
         this.kind = Keys.kind(type);
         this.dictOff = in.readVarLong();
-        this.dictDataOff = kind == Keys.Kind.STRING ? in.readVarLong() : -1;
+        this.dictDataOff = kind == Keys.Kind.STRING || kind == Keys.Kind.DECIMAL ? in.readVarLong() : -1;
         if (!multi) {
             this.ordOff = in.readVarLong();
             this.ordBits = in.readVarInt();
@@ -126,13 +127,23 @@ public class SegmentColumn implements ColumnIndex {
             case LONG -> Keys.fromLong(type, f.getLong(dictOff + 8L * ord), constants);
             case FIXED128 -> Keys.fromFixed(type, f.getLong(dictOff + 16L * ord), f.getLong(dictOff + 16L * ord + 8));
             case STRING -> string(ord);
+            case DECIMAL -> decimal(ord);
         };
     }
 
     private String string(int ord) {
+        return new String(varBytes(ord), StandardCharsets.UTF_8);
+    }
+
+    private BigDecimal decimal(int ord) {
+        return Keys.decimal(varBytes(ord));
+    }
+
+    /** Bytes of a variable-length dictionary entry (STRING / DECIMAL). */
+    private byte[] varBytes(int ord) {
         int start = f.getInt(dictOff + 4L * ord);
         int end = f.getInt(dictOff + 4L * (ord + 1));
-        return new String(f.bytes(dictDataOff + start, end - start), StandardCharsets.UTF_8);
+        return f.bytes(dictDataOff + start, end - start);
     }
 
     /** Compares dictionary entry {@code ord} with a canonical value. */
@@ -145,6 +156,7 @@ public class SegmentColumn implements ColumnIndex {
                 yield c != 0 ? c : Long.compare(f.getLong(dictOff + 16L * ord + 8), k[1]);
             }
             case STRING -> string(ord).compareTo((String) v);
+            case DECIMAL -> decimal(ord).compareTo((BigDecimal) v);
         };
     }
 

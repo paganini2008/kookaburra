@@ -1,11 +1,14 @@
 package com.github.kookaburra.readme;
 
-import com.github.kookaburra.TestDbs;
+import com.github.kookaburra.BackupInfo;
 import com.github.kookaburra.Config;
 import com.github.kookaburra.ConflictException;
+import com.github.kookaburra.ConstraintViolationException;
 import com.github.kookaburra.Isolation;
 import com.github.kookaburra.ObjectDB;
+import com.github.kookaburra.TestDbs;
 import com.github.kookaburra.Transaction;
+import com.github.kookaburra.TxOptions;
 import com.github.kookaburra.model.Account;
 import com.github.kookaburra.model.Geo;
 import com.github.kookaburra.model.Item;
@@ -15,9 +18,13 @@ import com.github.kookaburra.model.Route;
 import com.github.kookaburra.model.Shipment;
 import com.github.kookaburra.readme.Book.Genre;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.math.BigDecimal;
+import java.nio.file.Path;
 import java.util.List;
 
+import static com.github.kookaburra.query.Q.where;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -99,6 +106,68 @@ class ReadmeExamplesTest {
                     .extracting(Shipment::getCode).containsExactly("S-1");
             assertThat(db.oql("SELECT s.code FROM Shipment s WHERE 'kiwi' MEMBER OF s.items.sku").rows())
                     .extracting(r -> r.get(0)).containsExactly("S-2");
+        }
+    }
+    @Test
+    void constraintsDecimalsAndCallbacks() {
+        try (ObjectDB db = TestDbs.create()) {
+            long ann = db.insert(new Customer("Ann", "ann@example.com"));
+            db.insert(new Order("A-1", ann, "19.90"));
+            db.insert(new Order("A-2", ann, "10.15"));
+
+            assertThatThrownBy(() -> db.insert(new Order("A-1", ann, "5")))
+                    .isInstanceOf(ConstraintViolationException.class)
+                    .hasMessageStartingWith("duplicate value 'A-1' for unique Order.number");
+            assertThatThrownBy(() -> db.insert(new Customer("Ann 2", "ann@example.com")))
+                    .isInstanceOf(ConstraintViolationException.class);
+            assertThat(db.query(Order.class).sum(where(Order::getTotal))).isEqualTo(new BigDecimal("30.05"));
+            assertThat(db.query(Order.class).where(Order::getTotal).eq(new BigDecimal("19.9")).count()).isEqualTo(1);
+            assertThat(db.query(Order.class).list()).allMatch(o -> o.getCreated() != null);   // @PrePersist
+            assertThat(db.referrers(ann)).hasSize(2);
+            assertThat(db.referrers(Order.class, ann)).extracting(Order::getNumber).containsExactlyInAnyOrder("A-1", "A-2");
+
+            db.delete(Customer.class, ann);                                   // ON DELETE CASCADE
+            assertThat(db.query(Order.class).count()).isZero();
+        }
+    }
+
+    @Test
+    void serializablePreventsWriteSkew() {
+        try (ObjectDB db = TestDbs.create(Config.defaults().withTransactions(true))) {
+            long alice = db.insert(new Doctor("Alice"));
+            long bob = db.insert(new Doctor("Bob"));
+            TxOptions serializable = TxOptions.defaults().isolation(Isolation.SERIALIZABLE);
+            try (Transaction t1 = db.begin(serializable); Transaction t2 = db.begin(serializable)) {
+                for (Transaction tx : List.of(t1, t2)) {
+                    assertThat(tx.query(Doctor.class).where(Doctor::isOnCall).eq(true).count()).isEqualTo(2);
+                }
+                t1.update(t1.get(Doctor.class, alice).offCall());
+                t2.update(t2.get(Doctor.class, bob).offCall());
+                t1.commit();
+                assertThatThrownBy(t2::commit).isInstanceOf(ConflictException.class).hasMessageContaining("serialization failure");
+            }
+            db.inTransaction(serializable, tx -> {
+                long onCall = tx.query(Doctor.class).where(Doctor::isOnCall).eq(true).count();
+                if (onCall > 1) {
+                    tx.update(tx.get(Doctor.class, bob).offCall());
+                }
+            });
+            assertThat(db.query(Doctor.class).where(Doctor::isOnCall).eq(true).count()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void onlineBackup(@TempDir Path tmp) {
+        try (ObjectDB db = TestDbs.create()) {
+            db.batch().insert(new Book("Dune", "Frank Herbert", Genre.SCIFI, 1965, 9.99))
+                    .insert(new Book("Hyperion", "Dan Simmons", Genre.SCIFI, 1989, 14.20)).commit();
+            BackupInfo info = db.backup(tmp.resolve("backups").resolve("2026-10-17"));
+            assertThat(info.objects()).isEqualTo(2);
+            assertThat(info.seq()).isEqualTo(1);                     // as shown in the README
+            assertThat(info.segments()).isEqualTo(1);
+            try (ObjectDB copy = ObjectDB.open(info.path())) {
+                assertThat(copy.query(Book.class).count()).isEqualTo(2);
+            }
         }
     }
 }

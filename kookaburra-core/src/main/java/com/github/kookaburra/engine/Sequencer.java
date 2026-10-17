@@ -5,6 +5,9 @@ import com.github.kookaburra.Durability;
 import com.github.kookaburra.KookaburraException;
 import com.github.kookaburra.OptimisticLockException;
 import com.github.kookaburra.TransactionTimeoutException;
+import com.github.kookaburra.exec.Executor;
+import com.github.kookaburra.exec.ReadView;
+import com.github.kookaburra.exec.SegmentView;
 import com.github.kookaburra.mapping.Record;
 import com.github.kookaburra.mapping.RecordCodec;
 import com.github.kookaburra.mapping.Schema;
@@ -32,6 +35,7 @@ import java.util.concurrent.TimeUnit;
 class Sequencer implements Runnable {
 
     private static final Logger LOG = LoggerFactory.getLogger(Sequencer.class);
+    private static final byte[] NO_ROW = new byte[0];
 
     /**
      * One atomic batch and its completion (results: insert → OID, update → new version, delete → 1 / 0),
@@ -40,8 +44,13 @@ class Sequencer implements Runnable {
     record Request(List<WriteOp> ops, Runnable task, CompletableFuture<long[]> done, TxCommit tx) {
     }
 
-    /** Commit of a transaction: its snapshot and the OIDs it updates or deletes (docs/transaction-design.md §11). */
-    record TxCommit(TxRegistry.Entry entry, long snapshot, long[] checkOids) {
+    /**
+     * Commit of a transaction (docs/transaction-design.md §11): its snapshot; the OIDs it updates or deletes with
+     * the sequence number each must not have changed after ({@code checkSeqs}: the snapshot, or for READ COMMITTED
+     * the statement that read it); the OIDs it inserted and deleted again ({@code vanished}: never stored, but
+     * foreign keys of the batch's own writes must see them as deleted); and for SERIALIZABLE what it read.
+     */
+    record TxCommit(TxRegistry.Entry entry, long snapshot, long[] checkOids, long[] checkSeqs, long[] vanished, ReadSet reads) {
     }
 
     private final Database db;
@@ -51,6 +60,8 @@ class Sequencer implements Runnable {
     private final Map<Integer, Long> lastOidSeq = new HashMap<>();
     /** OID → seq of its last change, for transaction conflict checks; only kept while transactions are open. */
     private final ConflictTable conflicts = new ConflictTable();
+    /** Before / after records of commits, kept while SERIALIZABLE transactions are open. */
+    private final ChangeLog changes = new ChangeLog();
     private volatile boolean running = true;
     private long lastSeq;
     private volatile Throwable failure;
@@ -257,12 +268,16 @@ class Sequencer implements Runnable {
         }
         long[] out;
         List<WriteOp> ops;
+        changes.track(db.txRegistry().serializable() > 0, lastSeq + 1);
         try {
             if (req.tx() != null) {
                 checkConflicts(req.tx());
             }
             ops = resolveIncrements(req.ops());
             out = validate(ops);
+            Integrity.Result checked = Integrity.check(db, lastSeq, ops, out, req.tx() == null ? null : req.tx().vanished());
+            ops = checked.ops();
+            out = checked.out();
         } catch (KookaburraException | IllegalArgumentException | ArithmeticException e) {
             req.done().completeExceptionally(e);
             return null;
@@ -282,14 +297,87 @@ class Sequencer implements Runnable {
         if (e.abortReason != null) {
             throw e.timedOut ? new TransactionTimeoutException(e.abortReason) : new ConflictException(e.abortReason);
         }
-        for (long oid : tx.checkOids()) {
+        long[] oids = tx.checkOids();
+        for (int i = 0; i < oids.length; i++) {
+            long oid = oids[i];
             long last = conflicts.lastSeq(oid);
-            if (last > tx.snapshot()) {
-                LOG.debug("transaction {} conflicts on object {} (changed at seq {}, snapshot {})", e.id, oid, last, tx.snapshot());
+            if (last > tx.checkSeqs()[i]) {
+                LOG.debug("transaction {} conflicts on object {} (changed at seq {}, read at {})", e.id, oid, last, tx.checkSeqs()[i]);
                 throw new ConflictException(oid, "object " + oid + " was changed by a concurrent commit (seq " + last
-                        + ") after the snapshot of transaction " + e.id + " (seq " + tx.snapshot() + ")");
+                        + ") after transaction " + e.id + " read it (seq " + tx.checkSeqs()[i] + ")");
             }
         }
+        if (tx.reads() != null) {
+            checkReads(e, tx.snapshot(), tx.reads());
+        }
+    }
+
+    /**
+     * SERIALIZABLE (§11.3): nothing the transaction read may have changed after its snapshot. Objects read by OID
+     * are looked up in the conflict table; for each query condition, the before and after versions of the objects
+     * committed since the snapshot are tested against it (a match = the query's result would differ: an update,
+     * a delete or a phantom).
+     */
+    private void checkReads(TxRegistry.Entry e, long snapshot, ReadSet reads) {
+        if (!changes.covers(snapshot)) {
+            throw new ConflictException("serialization failure: transaction " + e.id
+                    + " started while validation was being switched on and cannot be validated; retry it");
+        }
+        for (long oid : reads.oids()) {
+            long last = conflicts.lastSeq(oid);
+            if (last > snapshot) {
+                throw new ConflictException(oid, "serialization failure: object " + oid + " read by transaction " + e.id
+                        + " was changed by a concurrent commit (seq " + last + ")");
+            }
+        }
+        for (Map.Entry<ReadSet.Query, Executor.Materializer> q : reads.queries().entrySet()) {
+            ReadSet.Query query = q.getKey();
+            List<ChangeLog.Change> since = changes.since(query.collection(), snapshot);
+            if (!since.isEmpty() && matches(query, q.getValue(), since)) {
+                throw new ConflictException("serialization failure: a concurrent commit changed the result of a query of transaction "
+                        + e.id + " (" + simple(query.collection()) + " WHERE " + query.cond() + ")");
+            }
+        }
+    }
+
+    /** Whether a before or after version of the changes satisfies the query (errors count as a match). */
+    private boolean matches(ReadSet.Query query, Executor.Materializer materializer, List<ChangeLog.Change> since) {
+        try {
+            MemSegment versions = new MemSegment(0, db.registry().schema().columns(query.collection()));
+            for (ChangeLog.Change c : since) {
+                if (c.before() != null) {
+                    versions.append(c.oid(), 1, 1, c.before(), NO_ROW);
+                }
+                if (c.after() != null) {
+                    versions.append(c.oid(), 1, 1, c.after(), NO_ROW);
+                }
+            }
+            List<SegmentView> views = List.of(versions);
+            ReadView read = new ReadView() {
+                @Override
+                public long seq() {
+                    return 1;
+                }
+
+                @Override
+                public List<SegmentView> views(String collection) {
+                    return views;
+                }
+
+                @Override
+                public void close() {
+                    // nothing to release
+                }
+            };
+            return new Executor(read, query.collection(), query.types(), query.cond(), materializer).count() > 0;
+        } catch (RuntimeException ex) {
+            LOG.debug("cannot evaluate a read predicate; treating it as changed", ex);
+            return true;
+        }
+    }
+
+    private static String simple(String className) {
+        return className.substring(className.lastIndexOf('.') + 1);
     }
 
     /** Turns increments into updates of the latest versions (logged as normal updates: deterministic replay). */
@@ -313,10 +401,18 @@ class Sequencer implements Runnable {
 
     /** Forgets conflict history no open transaction can need; evicts the oldest transaction when it overflows. */
     private void pruneConflicts() {
-        if (conflicts.size() == 0) {
+        if (conflicts.size() == 0 && changes.size() == 0) {
             return;
         }
         TxRegistry registry = db.txRegistry();
+        if (changes.size() > 0) {
+            changes.prune(registry.serializableHorizon(lastSeq));
+            int max = db.config().txConflictTableMax();
+            while (changes.size() > max && registry.evictOldestSerializable("change log full (" + changes.size()
+                    + " entries, kookaburra.tx-conflict-table-max = " + max + ")")) {
+                changes.prune(registry.serializableHorizon(lastSeq));
+            }
+        }
         conflicts.prune(registry.horizon(lastSeq));
         int max = db.config().txConflictTableMax();
         while (conflicts.size() > max && registry.evictOldest("conflict table full (" + conflicts.size()
@@ -400,14 +496,25 @@ class Sequencer implements Runnable {
     private void apply(WriteOp op, long result, long seq) {
         Schema schema = db.registry().schema();
         if (op instanceof WriteOp.Insert ins) {
-            db.active(schema.byId(ins.record().classId()).collection()).append(result, 1, seq, ins.record(), ins.row());
+            String collection = schema.byId(ins.record().classId()).collection();
+            db.active(collection).append(result, 1, seq, ins.record(), ins.row());
+            changes.record(seq, collection, result, null, ins.record());
         } else if (op instanceof WriteOp.Update u) {
-            db.markDeleted(db.locate(u.oid()), seq);
-            db.active(schema.byId(u.record().classId()).collection()).append(u.oid(), result, seq, u.record(), u.row());
+            Database.Location loc = db.locate(u.oid());
+            String collection = schema.byId(u.record().classId()).collection();
+            if (changes.active()) {
+                changes.record(seq, collection, u.oid(), loc.view().record(loc.doc()), u.record());
+            }
+            db.markDeleted(loc, seq);
+            db.active(collection).append(u.oid(), result, seq, u.record(), u.row());
             recordChange(u.oid(), seq);
         } else if (result == 1) {
             long oid = ((WriteOp.Delete) op).oid();
-            db.markDeleted(db.locate(oid), seq);
+            Database.Location loc = db.locate(oid);
+            if (changes.active()) {
+                changes.record(seq, schema.byId(Oids.classId(oid)).collection(), oid, loc.view().record(loc.doc()), null);
+            }
+            db.markDeleted(loc, seq);
             recordChange(oid, seq);
         }
     }

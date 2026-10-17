@@ -3,6 +3,8 @@ package com.github.kookaburra.mapping;
 import com.github.kookaburra.io.ByteSink;
 import com.github.kookaburra.io.ByteSource;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -126,6 +128,10 @@ public class RecordCodec {
                 in.readVarLong();
             }
             case STRING, BYTES, OBJECT -> in.skip(in.readVarInt());
+            case DECIMAL -> {
+                in.readZigZag();
+                in.skip(in.readVarInt());
+            }
             case MULTI -> {
                 int n = in.readVarInt();
                 for (int i = 0; i < n; i++) {
@@ -176,6 +182,11 @@ public class RecordCodec {
             case INT64 -> out.writeZigZag((Long) v);
             case FLOAT64 -> out.writeDouble((Double) v);
             case STRING -> out.writeString((String) v);
+            case DECIMAL -> {
+                BigDecimal d = (BigDecimal) v;
+                out.writeZigZag(d.scale());
+                out.writeBlob(d.unscaledValue().toByteArray());
+            }
             case ENUM -> {
                 int idx = t.constantIndex((String) v);
                 if (idx < 0) {
@@ -248,6 +259,10 @@ public class RecordCodec {
             case INT64 -> in.readZigZag();
             case FLOAT64 -> in.readDouble();
             case STRING -> in.readString();
+            case DECIMAL -> {
+                int scale = (int) in.readZigZag();
+                yield new BigDecimal(new BigInteger(in.readBlob()), scale);
+            }
             case ENUM -> t.constants().get(in.readVarInt());
             case DATE -> LocalDate.ofEpochDay(in.readZigZag());
             case DATETIME -> LocalDateTime.ofEpochSecond(in.readZigZag(), in.readVarInt(), ZoneOffset.UTC);

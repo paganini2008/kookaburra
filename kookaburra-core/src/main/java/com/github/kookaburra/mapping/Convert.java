@@ -10,6 +10,7 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.ObjectStreamClass;
 import java.lang.reflect.Modifier;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -162,6 +163,7 @@ class Convert {
         if (t == short.class || t == Short.class) return ((Number) c).shortValue();
         if (t == byte.class || t == Byte.class) return ((Number) c).byteValue();
         if (t == char.class || t == Character.class) return (char) ((Number) c).intValue();
+        if (t == BigDecimal.class) return c;
         if (t == Ref.class) return Ref.of((Long) c);
         if (t.isEnum()) return Enum.valueOf((Class) t, (String) c);
         if (t == boolean.class || t == Boolean.class || t == String.class || t == LocalDate.class

@@ -1,9 +1,12 @@
 package com.github.kookaburra.mapping;
 
 import com.github.kookaburra.annotation.Embeddable;
+import com.github.kookaburra.annotation.ForeignKey;
 import com.github.kookaburra.annotation.Id;
 import com.github.kookaburra.annotation.Index;
 import com.github.kookaburra.annotation.IndexKind;
+import com.github.kookaburra.annotation.OnDelete;
+import com.github.kookaburra.annotation.Unique;
 import com.github.kookaburra.annotation.Version;
 import com.github.kookaburra.field.Property;
 
@@ -79,7 +82,23 @@ class JavaTypes {
                 }
                 index = ann.value();
             }
-            defs.add(new FieldDef(f.getName(), t, index));
+            boolean unique = f.isAnnotationPresent(Unique.class);
+            if (unique && (!t.kind().isScalar() || t.kind() == ValueType.MULTI)) {
+                throw new SchemaException("@Unique on " + where + " of type " + t + " is not supported (unique scalar fields)");
+            }
+            OnDelete onDelete = null;
+            ForeignKey fk = f.getAnnotation(ForeignKey.class);
+            if (fk != null) {
+                if (t.scalarType().kind() != ValueType.REF) {
+                    throw new SchemaException("@ForeignKey on " + where + " of type " + t
+                            + " is not supported (Ref<T> or a List / Set of Ref<T>)");
+                }
+                onDelete = fk.onDelete();
+            }
+            if ((unique || onDelete != null) && index == null) {
+                index = IndexKind.AUTO;                    // constraints are checked through the index
+            }
+            defs.add(new FieldDef(f.getName(), t, index, unique, onDelete));
         }
         return defs;
     }
@@ -103,7 +122,7 @@ class JavaTypes {
                     return TypeDef.multi(describe(e, e, stack, where), set);
                 }
                 if (e != null && ValueType.of(e) == ValueType.EMBEDDED) {
-                    return TypeDef.embeddedList(describe(e, e, stack, where), set);
+                    return TypeDef.embeddedList(unconstrained(describe(e, e, stack, where), where), set);
                 }
                 return object(raw, where);
             }
@@ -112,7 +131,7 @@ class JavaTypes {
                 Class<?> v = typeArg(generic, 1, 2);
                 if (k != null && v != null && ValueType.of(k).isScalar()
                         && (ValueType.of(v).isScalar() || ValueType.of(v) == ValueType.EMBEDDED)) {
-                    return TypeDef.map(describe(k, k, stack, where), describe(v, v, stack, where));
+                    return TypeDef.map(describe(k, k, stack, where), unconstrained(describe(v, v, stack, where), where));
                 }
                 return object(raw, where);
             }
@@ -132,6 +151,18 @@ class JavaTypes {
             default:
                 return TypeDef.scalar(vt);
         }
+    }
+
+    /** Element types of embedded lists / maps have no column paths, so they cannot carry constraints. */
+    private static TypeDef unconstrained(TypeDef t, String where) {
+        for (FieldDef f : t.fields()) {
+            if (f.unique() || f.onDelete() != null) {
+                throw new SchemaException("@" + (f.unique() ? "Unique" : "ForeignKey") + " on " + t.name() + "." + f.name()
+                        + " is not supported inside a list or map of embedded objects (" + where + ")");
+            }
+            unconstrained(f.type(), where);
+        }
+        return t;
     }
 
     private static TypeDef object(Class<?> raw, String where) {

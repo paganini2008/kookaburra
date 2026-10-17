@@ -1,7 +1,11 @@
 package com.github.kookaburra.segment;
 
+import com.github.kookaburra.io.ByteSink;
+import com.github.kookaburra.io.ByteSource;
 import com.github.kookaburra.mapping.ValueType;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -11,7 +15,8 @@ import java.util.List;
 /**
  * Dictionary key encodings (design §5.2). LONG keys preserve the canonical order under
  * {@link Long#compare}; FIXED128 keys are (epoch second UTC, nano); STRING keys are compared with
- * {@link String#compareTo}.
+ * {@link String#compareTo}; DECIMAL keys are variable-length like STRING ({@link #decimalBytes}) and compared
+ * by numeric value.
  *
  * @Author: Fred Feng
  * @Date: 11/10/2026
@@ -20,7 +25,8 @@ import java.util.List;
 public class Keys {
 
     /** Physical dictionary layout. */
-    public enum Kind { LONG, FIXED128, STRING }
+    public enum Kind { LONG, FIXED128, STRING, DECIMAL }
+
 
     private Keys() {
     }
@@ -28,6 +34,7 @@ public class Keys {
     public static Kind kind(ValueType t) {
         return switch (t) {
             case STRING -> Kind.STRING;
+            case DECIMAL -> Kind.DECIMAL;
             case DATETIME, INSTANT -> Kind.FIXED128;
             default -> Kind.LONG;
         };
@@ -75,6 +82,17 @@ public class Keys {
     public static Object fromFixed(ValueType t, long seconds, long nanos) {
         return t == ValueType.INSTANT ? Instant.ofEpochSecond(seconds, nanos)
                 : LocalDateTime.ofEpochSecond(seconds, (int) nanos, ZoneOffset.UTC);
+    }
+
+    /** Dictionary bytes of a canonical decimal: zig-zag varint scale, then the two's-complement unscaled value. */
+    public static byte[] decimalBytes(BigDecimal d) {
+        return new ByteSink(16).writeZigZag(d.scale()).writeBytes(d.unscaledValue().toByteArray()).toByteArray();
+    }
+
+    public static BigDecimal decimal(byte[] b) {
+        ByteSource in = new ByteSource(b);
+        int scale = (int) in.readZigZag();
+        return new BigDecimal(new BigInteger(in.readBytes(b.length - in.position())), scale);
     }
 
     /** Signed-long encoding of a double whose order equals {@link Double#compare}. */

@@ -133,12 +133,12 @@ footer .sp { margin-left: auto; }
       <img class="logo" src="https://paganini2008.github.io/kookaburra/assets/logo_256.png" alt="Kookaburra logo">
       <div>
         <h1>Kookaburra</h1>
-        <p class="slogan">Query Java objects like a database — bitmaps underneath, streams on top.</p>
+        <p class="slogan">Query Java objects like a database: bitmaps underneath, streams on top.</p>
       </div>
     </div>
     <p class="pos">An <b>embedded object database for Java 17+</b>. Store plain annotated objects and query them with a type-safe,
       Stream-like API or JPQL-style <b>OQL</b>. Filters, sorts and aggregates run on <b>RoaringBitmap</b> indexes over memory-mapped segments,
-      and every write goes through a WAL with crash recovery.</p>
+      with transactions at three isolation levels, unique and foreign-key constraints, exact decimals and online backup.</p>
     <div class="btns">
       <a class="btn primary" href="#start">Get Started</a>
       <a class="btn" href="https://github.com/paganini2008/kookaburra">GitHub</a>
@@ -177,6 +177,10 @@ footer .sp { margin-left: auto; }
       <div class="card pain"><div class="ico">🐢</div><h3>Streams over lists don't scale</h3><p><code>list.stream().filter(...)</code> scans everything, every time, and lives only in the heap.</p></div>
       <div class="card pain"><div class="ico">🔤</div><h3>Stringly-typed queries</h3><p>Field names in strings break silently when you refactor.</p></div>
       <div class="card pain"><div class="ico">🔍</div><h3>No way to look inside</h3><p>Binary stores give you nothing to browse, fix or export data with.</p></div>
+      <div class="card pain"><div class="ico">🧹</div><h3>Integrity by hand</h3><p>Duplicate keys and dangling references slip in when every check lives in application code.</p></div>
+      <div class="card pain"><div class="ico">⚖️</div><h3>Races between checks and writes</h3><p>"Check, then write" breaks under concurrency: two writers both see the old state.</p></div>
+      <div class="card pain"><div class="ico">💸</div><h3>Floating-point money</h3><p><code>0.1 + 0.2</code> is not <code>0.3</code> in a double.</p></div>
+      <div class="card pain"><div class="ico">💾</div><h3>Backing up a live store</h3><p>Copying files while the application writes gives an inconsistent copy.</p></div>
     </div>
   </div>
 </section>
@@ -192,12 +196,17 @@ footer .sp { margin-left: auto; }
       <div class="card"><div class="ico">⚡</div><h3>Bitmap indexes</h3><p>Roaring postings, sorted dictionaries and value-sorted docs: millisecond filters on 10 M objects.</p></div>
       <div class="card"><div class="ico">🔤</div><h3>OQL</h3><p>JPQL-style SELECT / UPDATE / DELETE with the SQL-92 core: CASE, LIKE, DISTINCT, GROUP BY … HAVING.</p></div>
       <div class="card"><div class="ico">🧬</div><h3>Nested objects</h3><p>Inheritance, embedded objects at any depth, lists and maps of them (<code>whereAny</code>, <code>MEMBER OF</code>), references with fetch.</p></div>
-      <div class="card"><div class="ico">🔁</div><h3>Transactions (opt-in)</h3><p>SNAPSHOT isolation, read-your-writes, first committer wins, atomic <code>increment</code>, retries.</p></div>
+      <div class="card"><div class="ico">🔁</div><h3>Transactions</h3><p>READ COMMITTED, SNAPSHOT, SERIALIZABLE; optimistic, never blocking; retries built in.</p></div>
+      <div class="card"><div class="ico">🔑</div><h3>Unique constraints</h3><p><code>@Unique</code> on any scalar field; checked atomically at commit.</p></div>
+      <div class="card"><div class="ico">🔗</div><h3>Foreign keys</h3><p><code>@ForeignKey</code> with RESTRICT, CASCADE or SET_NULL; backlinks with <code>referrers</code>.</p></div>
+      <div class="card"><div class="ico">💰</div><h3>Exact decimals</h3><p><code>BigDecimal</code> fields, indexed and compared by value; exact SUM and arithmetic.</p></div>
+      <div class="card"><div class="ico">🪝</div><h3>Lifecycle callbacks</h3><p><code>@PrePersist</code>, <code>@PostLoad</code> and friends, plus entity listeners.</p></div>
+      <div class="card"><div class="ico">💾</div><h3>Online backup</h3><p>A consistent snapshot while writers keep going; restore = open.</p></div>
       <div class="card"><div class="ico">📦</div><h3>Large values</h3><p>Long texts and binaries such as images, MiB-sized, through flush, compaction and reopen.</p></div>
       <div class="card"><div class="ico">🛡</div><h3>Durable & consistent</h3><p>WAL with group commit, crash recovery, MVCC snapshots, atomic batches, optimistic locks; deleted space is reclaimed.</p></div>
       <div class="card"><div class="ico">🧩</div><h3>Dynamic API</h3><p>A self-describing schema with evolution. Open any database without its classes.</p></div>
-      <div class="card"><div class="ico">🗜</div><h3>Compact & fast restart</h3><p>Zero-copy mmap segments, ~150 B / object, 2.4 ms reopen, 6.4 MiB heap for 10 M objects.</p></div>
-      <div class="card"><div class="ico">🖥</div><h3>Kookaburra Studio</h3><p>Several databases, CRUD in transactions, nested-object inspector, image preview, OQL console, export. One jar for every OS.</p></div>
+      <div class="card"><div class="ico">🗜</div><h3>Compact & fast restart</h3><p>Zero-copy mmap segments, ~150 B / object, 2.0 ms reopen, 6.5 MiB heap for 10 M objects.</p></div>
+      <div class="card"><div class="ico">🖥</div><h3>Kookaburra Studio</h3><p>Several databases, transactions at any level, backlinks, constraints, image preview, OQL console, backup. One jar for every OS.</p></div>
       <div class="card"><div class="ico">💽</div><h3>Tested on disk</h3><p>Every shared suite runs in memory and on disk; ≥ 90% coverage; a 10 M-object stress run.</p></div>
     </div>
   </div>
@@ -208,26 +217,24 @@ footer .sp { margin-left: auto; }
   <div class="wrap">
     <div class="kicker">How it works</div>
     <h2>An LSM store with bitmap-indexed segments</h2>
-    <div class="how">
+    <div class="how" style="grid-template-columns:1fr">
       <div class="diagram">
-        <pre class="mermaid">
-flowchart TB
-  A["Typed API / OQL / Dynamic"] --> P["Planner"] --> X["Executor"]
-  X --> V["MVCC snapshot"]
-  V --> M["MemSegments"]
-  V --> S["Segments (mmap)<br/>dict · ord · postings · sdoc"]
-  W["Writers"] --> Q["Sequencer<br/>group commit"] --> L["WAL"]
-  Q --> M
-  M -- flush --> S
-  S -- compaction --> S
-        </pre>
+        <img class="shot" src="https://paganini2008.github.io/kookaburra/assets/architecture.png" alt="Architecture: query APIs, planner, executor, MVCC snapshot, segments, sequencer, WAL" loading="lazy">
       </div>
       <ul>
         <li>All three APIs compile to the same <b>predicate plan</b>. The planner pushes conditions down to postings and ordinals and orders them by cost.</li>
         <li>Writes are encoded on the caller's thread. A <b>single sequencer</b> logs each group to the WAL with one fsync, applies it to lock-free MemSegments and publishes a new snapshot.</li>
+        <li>Before the WAL, the sequencer checks <b>conflicts</b> (and SERIALIZABLE reads) and <b>constraints</b>; cascades join the same commit.</li>
         <li>MemSegments flush to <b>immutable, memory-mapped segment files</b>, and tiered compaction merges them in the background.</li>
       </ul>
     </div>
+  </div>
+</section>
+
+<!-- write path -->
+<section id="write-path" style="padding-top:0">
+  <div class="wrap">
+    <img class="shot" src="https://paganini2008.github.io/kookaburra/assets/write-path.png" alt="Write path: callbacks, conflicts, read validation, version check, integrity, WAL, publish" loading="lazy">
   </div>
 </section>
 
@@ -317,7 +324,7 @@ db.update(dune);
   .explain();</pre>
         <div class="res">genre = 'SCIFI'  [sorted docs card=3]
 year IN [1950, 1970]  [sorted docs card=6]</div></div>
-      <div class="card"><h3>Transactions</h3><p>Opt-in SNAPSHOT transactions; conflicts are detected at commit.</p>
+      <div class="card"><h3>Transactions</h3><p>Opt-in transactions; conflicts are detected at commit.</p>
 <pre>try (Transaction tx = db.begin(Isolation.SNAPSHOT)) {
   Account a = tx.get(Account.class, from);
   tx.update(a.balance(a.getBalance() - 30));
@@ -337,8 +344,38 @@ db.oql("SELECT s FROM Shipment s " +
     Files.readAllBytes(Path.of("scan.png"))));
 // Base64 in JSON / CSV exports</pre>
         <div class="res">tested to 16 MiB per value</div></div>
+      <div class="card"><h3>Constraints &amp; decimals</h3><p>Unique numbers, cascading foreign keys, exact totals.</p>
+<pre>@Unique String number;
+@ForeignKey(onDelete = OnDelete.CASCADE)
+Ref&lt;Customer&gt; customer;
+@Index BigDecimal total;
+
+db.query(Order.class).sum(where(Order::getTotal));</pre>
+        <div class="res">duplicate 'A-1' → ConstraintViolationException
+sum of 19.90 + 10.15 → 30.05</div></div>
+      <div class="card"><h3>SERIALIZABLE</h3><p>Two on-call doctors both try to go off call.</p>
+<pre>db.inTransaction(TxOptions.defaults()
+    .isolation(Isolation.SERIALIZABLE), tx -&gt; {
+  if (tx.query(Doctor.class).where(Doctor::isOnCall)
+        .eq(true).count() &gt; 1)
+    tx.update(tx.get(Doctor.class, me).offCall());
+});</pre>
+        <div class="res">second commit: serialization failure, retried
+one doctor stays on call</div></div>
+      <div class="card"><h3>Online backup</h3><p>Back up while writing; open the copy to restore.</p>
+<pre>BackupInfo info = db.backup(
+    Path.of("backups/2026-10-17"));
+try (ObjectDB copy = ObjectDB.open(info.path())) {
+  …
+}</pre>
+        <div class="res">consistent snapshot, compacted segments</div></div>
     </div>
-    <img class="shot" src="https://paganini2008.github.io/kookaburra/assets/studio-query.png" alt="Kookaburra Studio: OQL console" width="1320" height="820">
+    <div class="grid shots" style="grid-template-columns:1fr">
+      <figure><img src="https://paganini2008.github.io/kookaburra/assets/isolation.png" alt="Isolation levels" loading="lazy"><figcaption>Three isolation levels and the anomalies each one prevents.</figcaption></figure>
+      <figure><img src="https://paganini2008.github.io/kookaburra/assets/foreign-keys.png" alt="Constraints" loading="lazy"><figcaption>@Unique and @ForeignKey with ON DELETE actions.</figcaption></figure>
+      <figure><img src="https://paganini2008.github.io/kookaburra/assets/backup.png" alt="Online backup" loading="lazy"><figcaption>Online backup from one MVCC snapshot.</figcaption></figure>
+      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-query.png" alt="Studio OQL console" loading="lazy"><figcaption>OQL console with completion and transaction scripts.</figcaption></figure>
+    </div>
   </div>
 </section>
 
@@ -347,9 +384,11 @@ db.oql("SELECT s FROM Shipment s " +
   <div class="wrap">
     <div class="kicker">Kookaburra Studio</div>
     <h2>See inside every database</h2>
-    <p class="lead">A standalone desktop tool: several databases side by side, transactions, nested objects and binaries, an OQL console.</p>
+    <p class="lead">A standalone desktop tool: several databases side by side, transactions, constraints and backlinks, nested objects and binaries, an OQL console, backups.</p>
     <div class="grid g2 shots">
-      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-transaction.png" alt="Studio transaction" loading="lazy"><figcaption>Begin / Commit / Rollback per database; the status bar counts pending changes.</figcaption></figure>
+      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-transaction.png" alt="Studio transaction" loading="lazy"><figcaption>Begin (pick the isolation level), Commit, Rollback per database, or <code>BEGIN ISOLATION LEVEL …; COMMIT</code> in the console.</figcaption></figure>
+      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-backlinks.png" alt="Studio backlinks" loading="lazy"><figcaption>"Referenced by": the objects pointing at the selected one; double-click opens one.</figcaption></figure>
+      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-constraints.png" alt="Studio constraints" loading="lazy"><figcaption>Constraint column: <code>UNIQUE</code>, <code>FK → Customer · CASCADE</code>.</figcaption></figure>
       <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-nested.png" alt="Studio nested inspector" loading="lazy"><figcaption>Lists of embedded objects as <code>[ n elements ]</code>; the Key / Value / Type inspector expands every level.</figcaption></figure>
       <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-nested-editor.png" alt="Studio element editor" loading="lazy"><figcaption>Element tables for lists and maps: add, remove, reorder.</figcaption></figure>
       <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-binary.png" alt="Studio binary field" loading="lazy"><figcaption>Binary fields: format, size, image preview, load / save.</figcaption></figure>
@@ -366,27 +405,29 @@ db.oql("SELECT s FROM Shipment s " +
     <div class="perf">
       <div class="card bars">
         <h3>Query latency (lower is better, log scale)</h3>
-        <div class="row"><span>get(oid)</span><div class="bar"><span style="width:6%"></span></div><span class="v">0.75 µs</span></div>
-        <div class="row"><span>unique key (OQL)</span><div class="bar"><span style="width:28%"></span></div><span class="v">0.11 ms</span></div>
+        <div class="row"><span>get(oid)</span><div class="bar"><span style="width:6%"></span></div><span class="v">0.6 µs</span></div>
+        <div class="row"><span>unique key (OQL)</span><div class="bar"><span style="width:28%"></span></div><span class="v">0.12 ms</span></div>
         <div class="row"><span>eq + range + limit</span><div class="bar"><span style="width:32%"></span></div><span class="v">0.2 ms</span></div>
         <div class="row"><span>count(city = ?)</span><div class="bar"><span style="width:35%"></span></div><span class="v">0.24 ms</span></div>
-        <div class="row"><span>top-10 of 2.3 M</span><div class="bar"><span style="width:38%"></span></div><span class="v">0.40 ms</span></div>
-        <div class="row"><span>GROUP BY count</span><div class="bar"><span style="width:52%"></span></div><span class="v">4.1 ms</span></div>
-        <div class="row"><span>OQL GROUP BY + AVG</span><div class="bar"><span style="width:80%"></span></div><span class="v">246 ms</span></div>
-        <div class="row"><span>unindexed full scan</span><div class="bar"><span style="width:95%"></span></div><span class="v">0.76 s</span></div>
+        <div class="row"><span>top-10 of 2.3 M</span><div class="bar"><span style="width:38%"></span></div><span class="v">0.39 ms</span></div>
+        <div class="row"><span>GROUP BY count</span><div class="bar"><span style="width:52%"></span></div><span class="v">4.0 ms</span></div>
+        <div class="row"><span>OQL GROUP BY + AVG</span><div class="bar"><span style="width:80%"></span></div><span class="v">244 ms</span></div>
+        <div class="row"><span>unindexed full scan</span><div class="bar"><span style="width:95%"></span></div><span class="v">0.81 s</span></div>
       </div>
       <div class="card">
         <h3>Writes, storage, recovery</h3>
         <table>
           <tr><th>Metric</th><th>Result</th></tr>
-          <tr><td>bulk insert, batches of 100 (ASYNC)</td><td class="n">632 k/s</td></tr>
-          <tr><td>durable inserts, 16 / 128 threads (SYNC)</td><td class="n">3.7 / 27.8 k/s</td></tr>
-          <tr><td>compact 10 M objects (1.4 GB)</td><td class="n">11.4 s</td></tr>
-          <tr><td>transactions: transfers, 16 threads</td><td class="n">135 k/s</td></tr>
-          <tr><td>atomic increments on one hot counter</td><td class="n">251 k/s</td></tr>
-          <tr><td>OQL DELETE of 10.6 M objects → disk after compact</td><td class="n">1.16 M/s → 0 B</td></tr>
-          <tr><td>reopen</td><td class="n">2.4 ms</td></tr>
-          <tr><td>heap after reopen</td><td class="n">6.4 MiB</td></tr>
+          <tr><td>bulk insert, batches of 100 (ASYNC)</td><td class="n">696 k/s</td></tr>
+          <tr><td>durable inserts, 16 / 128 threads (SYNC)</td><td class="n">3.2 / 21.2 k/s</td></tr>
+          <tr><td>compact 10 M objects (1.4 GB)</td><td class="n">10.4 s</td></tr>
+          <tr><td>online backup of 10.5 M objects, writers running</td><td class="n">25.4 s</td></tr>
+          <tr><td>transfers, 16 threads: SNAPSHOT / RC / SERIALIZABLE</td><td class="n">136 / 142 / 140 k/s</td></tr>
+          <tr><td>insert with @Unique / without</td><td class="n">235 / 258 k/s</td></tr>
+          <tr><td>atomic increments on one hot counter</td><td class="n">265 k/s</td></tr>
+          <tr><td>OQL DELETE of 10.5 M objects, disk after compact</td><td class="n">1.32 M/s, 0 B</td></tr>
+          <tr><td>reopen</td><td class="n">2.0 ms</td></tr>
+          <tr><td>heap after reopen</td><td class="n">6.5 MiB</td></tr>
           <tr><td>disk footprint</td><td class="n">148 B / obj</td></tr>
         </table>
         <p class="env">Apple M2 Max · 32 GB · SSD (fsync ≈ 4 ms) · JDK 17 · -Xmx8g. Durable single writes scale with concurrency: one fsync per commit group.
@@ -404,11 +445,11 @@ db.oql("SELECT s FROM Shipment s " +
     <div class="grid g4" style="margin-top:24px">
       <a class="card" href="#tutorial"><div class="ico">🎬</div><h3>Video tutorial</h3><p>Three minutes from entity to Studio.</p></a>
       <a class="card" href="#start"><div class="ico">🚀</div><h3>Getting Started</h3><p>Dependency, first entity, first query.</p></a>
-      <a class="card" href="https://github.com/paganini2008/kookaburra#examples"><div class="ico">🧪</div><h3>Examples</h3><p>Typed API, OQL, grouping, dynamic access.</p></a>
+      <a class="card" href="https://github.com/paganini2008/kookaburra#examples"><div class="ico">🧪</div><h3>Examples</h3><p>Typed API, OQL, constraints, isolation, backup.</p></a>
       <a class="card" href="https://github.com/paganini2008/kookaburra#configuration"><div class="ico">⚙️</div><h3>Configuration</h3><p>One <code>kookaburra.properties</code> for every setting.</p></a>
       <a class="card" href="design.html"><div class="ico">📘</div><h3>API Reference</h3><p>QueryStream, fields, OQL grammar, dynamic API.</p></a>
       <a class="card" href="design.html"><div class="ico">🏗</div><h3>Architecture</h3><p>Segment format, execution, MVCC, recovery.</p></a>
-      <a class="card" href="https://github.com/paganini2008/kookaburra/blob/main/docs/transaction-design.md"><div class="ico">🔁</div><h3>Transactions</h3><p>SNAPSHOT + OCC design, decisions T1–T12.</p></a>
+      <a class="card" href="https://github.com/paganini2008/kookaburra/blob/main/docs/transaction-design.md"><div class="ico">🔁</div><h3>Transactions</h3><p>Three isolation levels with OCC, decisions T1 to T17.</p></a>
     </div>
   </div>
 </section>
@@ -438,11 +479,7 @@ db.oql("SELECT s FROM Shipment s " +
   </div>
 </footer>
 
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
 <script>
-  mermaid.initialize({ startOnLoad: true, theme: "dark", themeVariables: {
-    background: "#11151F", primaryColor: "#1A2030", primaryTextColor: "#E6EDF7", primaryBorderColor: "#00E5FF",
-    lineColor: "#7A8BA8", fontFamily: "Inter, sans-serif" } });
   document.querySelectorAll(".copy").forEach(b => b.addEventListener("click", () => {
     const text = b.parentElement.querySelector("pre").innerText;
     const done = () => { b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy", 1400); };

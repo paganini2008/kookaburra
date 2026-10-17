@@ -1,6 +1,7 @@
 package com.github.kookaburra.mapping;
 
 import com.github.kookaburra.annotation.IndexKind;
+import com.github.kookaburra.annotation.OnDelete;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -20,7 +21,10 @@ import java.util.zip.CRC32C;
  */
 public class SchemaIO {
 
-    private static final long MAGIC = 0x4B4B4253_43483031L;   // "KKBSCH01"
+    /** Format 1: fields without constraints. */
+    private static final long MAGIC_V1 = 0x4B4B4253_43483031L;   // "KKBSCH01"
+    /** Format 2 (2026-10-16): every field also stores {@code unique} and its {@code @ForeignKey} action. */
+    private static final long MAGIC = 0x4B4B4253_43483032L;      // "KKBSCH02"
 
     private SchemaIO() {
     }
@@ -66,9 +70,11 @@ public class SchemaIO {
         }
         try {
             DataInputStream head = new DataInputStream(new ByteArrayInputStream(file));
-            if (head.readLong() != MAGIC) {
+            long magic = head.readLong();
+            if (magic != MAGIC && magic != MAGIC_V1) {
                 throw new SchemaException("not a schema file");
             }
+            boolean v2 = magic == MAGIC;
             CRC32C crc = new CRC32C();
             crc.update(file, 8, file.length - 12);
             int stored = new DataInputStream(new ByteArrayInputStream(file, file.length - 4, 4)).readInt();
@@ -89,7 +95,7 @@ public class SchemaIO {
                 int nl = in.readInt();
                 List<Layout> layouts = new ArrayList<>(nl);
                 for (int j = 0; j < nl; j++) {
-                    layouts.add(new Layout(in.readInt(), readFields(in)));
+                    layouts.add(new Layout(in.readInt(), readFields(in, v2)));
                 }
                 classes.add(new ClassDef(id, name, parent, collection, idField, versionField, layouts));
             }
@@ -104,17 +110,22 @@ public class SchemaIO {
         for (FieldDef f : fields) {
             out.writeUTF(f.name());
             writeNullable(out, f.index() == null ? null : f.index().name());
+            out.writeBoolean(f.unique());
+            writeNullable(out, f.onDelete() == null ? null : f.onDelete().name());
             writeType(out, f.type());
         }
     }
 
-    private static List<FieldDef> readFields(DataInputStream in) throws IOException {
+    private static List<FieldDef> readFields(DataInputStream in, boolean v2) throws IOException {
         int n = in.readInt();
         List<FieldDef> fields = new ArrayList<>(n);
         for (int i = 0; i < n; i++) {
             String name = in.readUTF();
             String index = readNullable(in);
-            fields.add(new FieldDef(name, readType(in), index == null ? null : IndexKind.valueOf(index)));
+            boolean unique = v2 && in.readBoolean();
+            String onDelete = v2 ? readNullable(in) : null;
+            fields.add(new FieldDef(name, readType(in, v2), index == null ? null : IndexKind.valueOf(index), unique,
+                    onDelete == null ? null : OnDelete.valueOf(onDelete)));
         }
         return fields;
     }
@@ -138,7 +149,7 @@ public class SchemaIO {
         out.writeBoolean(t.set());
     }
 
-    private static TypeDef readType(DataInputStream in) throws IOException {
+    private static TypeDef readType(DataInputStream in, boolean v2) throws IOException {
         ValueType kind = ValueType.valueOf(in.readUTF());
         String name = readNullable(in);
         int nc = in.readInt();
@@ -146,9 +157,9 @@ public class SchemaIO {
         for (int i = 0; i < nc; i++) {
             constants.add(in.readUTF());
         }
-        TypeDef element = in.readBoolean() ? readType(in) : null;
-        TypeDef key = in.readBoolean() ? readType(in) : null;
-        List<FieldDef> fields = readFields(in);
+        TypeDef element = in.readBoolean() ? readType(in, v2) : null;
+        TypeDef key = in.readBoolean() ? readType(in, v2) : null;
+        List<FieldDef> fields = readFields(in, v2);
         return new TypeDef(kind, name, constants, element, key, fields, in.readBoolean());
     }
 

@@ -1,6 +1,8 @@
 package com.github.kookaburra.engine;
 
+import com.github.kookaburra.BackupInfo;
 import com.github.kookaburra.ConflictException;
+import com.github.kookaburra.EntityListener;
 import com.github.kookaburra.Isolation;
 import com.github.kookaburra.KookaburraException;
 import com.github.kookaburra.ObjectDB;
@@ -14,6 +16,8 @@ import com.github.kookaburra.TxWork;
 import com.github.kookaburra.WriteBatch;
 import com.github.kookaburra.dynamic.DynamicCollection;
 import com.github.kookaburra.dynamic.DynamicObject;
+import com.github.kookaburra.exec.Cond;
+import com.github.kookaburra.exec.Executor;
 import com.github.kookaburra.exec.ReadView;
 import com.github.kookaburra.exec.SegmentView;
 import com.github.kookaburra.mapping.ClassDef;
@@ -39,8 +43,9 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * A SNAPSHOT transaction (docs/transaction-design.md): private write set, an overlay {@link MemSegment} per
- * collection for read-your-writes, masked snapshot views, optimistic commit through the sequencer.
+ * A transaction (docs/transaction-design.md): private write set, an overlay {@link MemSegment} per collection for
+ * read-your-writes, masked snapshot views, optimistic commit through the sequencer. READ COMMITTED takes a fresh
+ * snapshot per statement; SERIALIZABLE records what it reads ({@link ReadSet}) for validation at commit.
  *
  * @Author: Fred Feng
  * @Date: 15/10/2026
@@ -65,6 +70,8 @@ class TransactionImpl implements Transaction {
         byte[] row;
         Map<String, Number> deltas;
         int overlayRow = -1;
+        /** Sequence number of the read the write is based on: a commit after it conflicts. */
+        long since;
 
         Entry(long oid, String collection) {
             this.oid = oid;
@@ -82,6 +89,7 @@ class TransactionImpl implements Transaction {
             e.row = row;
             e.deltas = deltas == null ? null : new LinkedHashMap<>(deltas);
             e.overlayRow = overlayRow;
+            e.since = since;
             return e;
         }
 
@@ -97,8 +105,12 @@ class TransactionImpl implements Transaction {
     private final Database db;
     private final TxRegistry.Entry reg;
     private final TxOptions options;
-    private final ReadView base;
+    /** Committed state the transaction reads: fixed for SNAPSHOT / SERIALIZABLE, renewed per statement for READ COMMITTED. */
+    private ReadView base;
     private final long snapshot;
+    /** SERIALIZABLE: OIDs read by lookup and query conditions. */
+    private final Set<Long> readOids = new HashSet<>();
+    private final Map<ReadSet.Query, Executor.Materializer> readQueries = new LinkedHashMap<>();
     private final Map<Long, Entry> writes = new LinkedHashMap<>();
     private final Map<String, MemSegment> overlays = new HashMap<>();
     private final Map<String, Set<Long>> hidden = new HashMap<>();
@@ -115,7 +127,7 @@ class TransactionImpl implements Transaction {
         Duration timeout = options.timeout();
         long timeoutNanos = timeout == null ? db.config().txTimeoutMillis() * 1_000_000L : timeout.toNanos();
         // register before taking the snapshot: every later commit is then kept for this transaction (§11.2)
-        this.reg = db.txRegistry().register(timeoutNanos);
+        this.reg = db.txRegistry().register(timeoutNanos, options.isolation());
         this.base = db.openRead();
         this.snapshot = base.seq();
         reg.snapshot = snapshot;
@@ -165,6 +177,32 @@ class TransactionImpl implements Transaction {
         }
     }
 
+    /** READ COMMITTED: the next statement reads the latest committed state (plus this transaction's writes). */
+    private void statement() {
+        if (options.isolation() != Isolation.READ_COMMITTED) {
+            return;
+        }
+        ReadView fresh = db.openRead();
+        if (fresh.seq() == base.seq()) {
+            fresh.close();
+            return;
+        }
+        base.close();
+        base = fresh;
+        viewCache.clear();
+        long oldest = base.seq();
+        for (Entry e : writes.values()) {
+            if (!e.fresh) {
+                oldest = Math.min(oldest, e.since);
+            }
+        }
+        reg.snapshot = oldest;                         // conflicts after the oldest read still matter
+    }
+
+    private boolean serializable() {
+        return options.isolation() == Isolation.SERIALIZABLE;
+    }
+
     private void checkWritable() {
         checkActive();
         if (options.isReadOnly()) {
@@ -177,18 +215,21 @@ class TransactionImpl implements Transaction {
     @Override
     public <T> T get(Class<T> type, long oid) {
         checkActive();
+        statement();
         return db.get(view, type, oid);
     }
 
     @Override
     public Object get(long oid) {
         checkActive();
+        statement();
         return db.getAny(view, oid);
     }
 
     @Override
     public <T> Map<Long, T> getAll(Class<T> type, Collection<Long> oids) {
         checkActive();
+        statement();
         return db.getAll(view, type, oids);
     }
 
@@ -215,6 +256,20 @@ class TransactionImpl implements Transaction {
     public DynamicCollection dynamic(String className) {
         checkActive();
         return new DynamicCollection(dynamicBackend, db.storedClass(className));
+    }
+
+    @Override
+    public List<DynamicObject> referrers(long oid) {
+        checkActive();
+        statement();
+        return db.referrers(view, oid, null);
+    }
+
+    @Override
+    public <T> List<T> referrers(Class<T> type, long oid) {
+        checkActive();
+        statement();
+        return db.referrers(view, oid, type);
     }
 
     // ---------------------------------------------------------------- writes
@@ -264,6 +319,7 @@ class TransactionImpl implements Transaction {
      */
     long[] applyAll(List<WriteOp> ops) {
         checkWritable();
+        statement();
         Map<Long, Entry> staged = new LinkedHashMap<>();
         long[] out = new long[ops.size()];
         long added = 0;
@@ -345,6 +401,7 @@ class TransactionImpl implements Transaction {
             e = new Entry(u.oid(), collectionOf(u.oid()));
             e.kind = Kind.UPDATE;
             e.version = f.version();
+            e.since = base.seq();
         }
         stale(u.oid(), u.expected(), e.version);
         e.type = u.type();
@@ -368,6 +425,7 @@ class TransactionImpl implements Transaction {
         } else {
             e = new Entry(d.oid(), collectionOf(d.oid()));
             e.version = found(d.oid()).version();
+            e.since = base.seq();
         }
         stale(d.oid(), d.expected(), e.version);
         e.kind = Kind.DELETE;
@@ -391,6 +449,7 @@ class TransactionImpl implements Transaction {
             e = new Entry(inc.oid(), collectionOf(inc.oid()));
             e.kind = Kind.INCREMENT;
             e.version = f.version();
+            e.since = base.seq();
             e.record = f.record();
             e.deltas = new LinkedHashMap<>();
         }
@@ -457,7 +516,7 @@ class TransactionImpl implements Transaction {
             return null;
         }
         for (SegmentView v : base.views(collection)) {
-            int d = v.find(oid, snapshot);
+            int d = v.find(oid, base.seq());
             if (d == SegmentView.DELETED) {
                 return null;
             }
@@ -481,17 +540,23 @@ class TransactionImpl implements Transaction {
         }
         List<WriteOp> ops = new ArrayList<>();
         List<Long> check = new ArrayList<>();
+        List<Long> checkSeqs = new ArrayList<>();
+        List<Long> vanished = new ArrayList<>();
         for (Entry e : writes.values()) {
             switch (e.kind) {
                 case INSERT -> ops.add(new WriteOp.Insert(e.type, e.entity, e.oid, e.record, e.row));
                 case UPDATE -> {
                     ops.add(new WriteOp.Update(e.type, e.entity, e.oid, WriteOp.ANY, e.record, e.row));
                     check.add(e.oid);
+                    checkSeqs.add(e.since);
                 }
                 case DELETE -> {
                     if (!e.fresh) {
                         ops.add(new WriteOp.Delete(e.oid, WriteOp.ANY, e.type, e.entity));
                         check.add(e.oid);
+                        checkSeqs.add(e.since);
+                    } else {
+                        vanished.add(e.oid);
                     }
                 }
                 case INCREMENT -> ops.add(new WriteOp.Increment(e.oid, Map.copyOf(e.deltas)));
@@ -502,14 +567,21 @@ class TransactionImpl implements Transaction {
             return;
         }
         try {
-            long[] res = db.commitTransaction(ops, new Sequencer.TxCommit(reg, snapshot,
-                    check.stream().mapToLong(Long::longValue).toArray()));
+            ReadSet reads = serializable() ? new ReadSet(Set.copyOf(readOids), new LinkedHashMap<>(readQueries))
+                    : null;
+            long[] res = db.commitTransaction(ops, new Sequencer.TxCommit(reg, snapshot, longs(check), longs(checkSeqs),
+                    longs(vanished), reads));
             db.writeBack(ops, res);
             finish(State.COMMITTED);
+            db.firePost(ops, res);
         } catch (RuntimeException e) {
             finish(State.ROLLED_BACK);
             throw e;
         }
+    }
+
+    private static long[] longs(List<Long> list) {
+        return list.stream().mapToLong(Long::longValue).toArray();
     }
 
     @Override
@@ -532,6 +604,8 @@ class TransactionImpl implements Transaction {
         overlays.clear();
         hidden.clear();
         viewCache.clear();
+        readOids.clear();
+        readQueries.clear();
     }
 
     /** The {@link ObjectDB} that queries and OQL inside this transaction write through. */
@@ -551,11 +625,34 @@ class TransactionImpl implements Transaction {
 
         @Override
         public long seq() {
-            return snapshot;
+            return base.seq();
         }
 
         @Override
         public List<SegmentView> views(String collection) {
+            if (serializable()) {
+                readQueries.putIfAbsent(new ReadSet.Query(collection, null, new Cond.Const(true)), null);   // whole collection
+            }
+            return cached(collection);
+        }
+
+        @Override
+        public List<SegmentView> queryViews(String collection, Set<Integer> types, Cond cond, Executor.Materializer materializer) {
+            if (serializable()) {
+                readQueries.putIfAbsent(new ReadSet.Query(collection, types, cond), materializer);
+            }
+            return cached(collection);
+        }
+
+        @Override
+        public List<SegmentView> pointViews(String collection, long oid) {
+            if (serializable()) {
+                readOids.add(oid);
+            }
+            return cached(collection);
+        }
+
+        private List<SegmentView> cached(String collection) {
             return viewCache.computeIfAbsent(collection, c -> {
                 List<SegmentView> out = new ArrayList<>();
                 MemSegment overlay = overlays.get(c);
@@ -565,7 +662,7 @@ class TransactionImpl implements Transaction {
                 Set<Long> h = hidden.get(c);
                 Set<Long> fixed = h == null || h.isEmpty() ? null : Set.copyOf(h);
                 for (SegmentView v : base.views(c)) {
-                    out.add(fixed == null ? v : new MaskedView(v, fixed, snapshot));
+                    out.add(fixed == null ? v : new MaskedView(v, fixed, base.seq()));
                 }
                 return List.copyOf(out);
             });
@@ -588,6 +685,7 @@ class TransactionImpl implements Transaction {
         @Override
         public ReadView openRead() {
             checkActive();
+            statement();
             return view;
         }
 
@@ -642,6 +740,7 @@ class TransactionImpl implements Transaction {
         @Override
         public DynamicObject get(ClassDef def, long oid) {
             checkActive();
+            statement();
             if (!db.registry().schema().subclassIds(def.name()).contains(Oids.classId(oid))) {
                 return null;
             }
@@ -729,8 +828,28 @@ class TransactionImpl implements Transaction {
         }
 
         @Override
+        public void inTransaction(TxOptions o, TxWork work) {
+            db.inTransaction(o, work);
+        }
+
+        @Override
+        public <R> R inTransactionResult(TxOptions o, TxFunction<R> work) {
+            return db.inTransactionResult(o, work);
+        }
+
+        @Override
         public int activeTransactions() {
             return db.activeTransactions();
+        }
+
+        @Override
+        public <T> void addListener(Class<T> type, EntityListener<? super T> listener) {
+            db.addListener(type, listener);
+        }
+
+        @Override
+        public <T> boolean removeListener(Class<T> type, EntityListener<? super T> listener) {
+            return db.removeListener(type, listener);
         }
 
         @Override
@@ -751,6 +870,16 @@ class TransactionImpl implements Transaction {
         @Override
         public <T> QueryStream<T> from(Class<T> type) {
             return TransactionImpl.this.from(type);
+        }
+
+        @Override
+        public List<DynamicObject> referrers(long oid) {
+            return TransactionImpl.this.referrers(oid);
+        }
+
+        @Override
+        public <T> List<T> referrers(Class<T> type, long oid) {
+            return TransactionImpl.this.referrers(type, oid);
         }
 
         @Override
@@ -776,6 +905,11 @@ class TransactionImpl implements Transaction {
         @Override
         public void flush() {
             db.flush();
+        }
+
+        @Override
+        public BackupInfo backup(Path target) {
+            return db.backup(target);
         }
 
         @Override

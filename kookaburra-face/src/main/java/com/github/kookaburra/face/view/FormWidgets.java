@@ -23,6 +23,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
@@ -224,6 +225,7 @@ class FormWidgets {
         return switch (t.kind()) {
             case INT32, INT64 -> "integer";
             case FLOAT64 -> "number";
+            case DECIMAL -> "decimal (exact)";
             case DATETIME -> "yyyy-MM-ddTHH:mm:ss (UTC)";
             case INSTANT -> "yyyy-MM-ddTHH:mm:ssZ";
             case REF -> "OID of " + t.name().substring(t.name().lastIndexOf('.') + 1);
@@ -241,6 +243,7 @@ class FormWidgets {
             return switch (t.kind()) {
                 case INT32, INT64 -> Long.parseLong(s);
                 case FLOAT64 -> Double.parseDouble(s);
+                case DECIMAL -> new BigDecimal(s);
                 case REF -> Ref.of(Long.parseLong(s));
                 case BOOL -> switch (s.toLowerCase()) {
                     case "true" -> Boolean.TRUE;

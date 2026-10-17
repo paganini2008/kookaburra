@@ -361,9 +361,9 @@ class TutorialRecorder {
         logoView.setFitHeight(180);
         logoView.setPreserveRatio(true);
 
-        slide("title", 6, "Kookaburra — an embedded object database for Java 17+, with bitmap indexes and a desktop Studio",
+        slide("title", 6, "Kookaburra: an embedded object database for Java 17+, with bitmap indexes and a desktop Studio",
                 "TUTORIAL", "Kookaburra in three minutes", null, logoView,
-                text("Query Java objects like a database — bitmaps underneath, streams on top.", 34, FontWeight.NORMAL, "#7A8BA8"));
+                text("Query Java objects like a database: bitmaps underneath, streams on top.", 34, FontWeight.NORMAL, "#7A8BA8"));
         slide("entity", 7, "Step 1: annotate a plain class with @Entity, and add @Index to the fields you filter or sort on",
                 "1 · DECLARE", "A plain class is the schema", """
                         @Entity
@@ -420,7 +420,7 @@ class TutorialRecorder {
         Window splash = Window.getWindows().stream().filter(w -> w.getScene() != null && w.getScene().lookup("#splash-version") != null)
                 .findFirst().orElseThrow();
         write("splash", compose(snap(splash.getScene().getRoot(), HI_DPI * 1.6), null), 4,
-                "Kookaburra Studio: a desktop admin tool — one jar for Windows, Linux and macOS");
+                "Kookaburra Studio: a desktop admin tool, one jar for Windows, Linux and macOS");
         Platform.runLater(() -> StudioApplicationAccess.stop(app, main[0]));
         WaitForAsyncUtils.sleep(1500, TimeUnit.MILLISECONDS);
         Platform.runLater(() -> Window.getWindows().stream().filter(w -> w != stage).toList().forEach(w -> ((Stage) w).close()));
@@ -471,7 +471,7 @@ class TutorialRecorder {
             ((TextField) StudioNestedTest.byId(table, "field-lines[" + n + "].price.currency")).setText("AUD");
         });
         settle();
-        shot("editor-form", 7, "Double-click to edit: lists of embedded objects get an element table — add, remove, reorder",
+        shot("editor-form", 7, "Double-click to edit: lists of embedded objects get an element table to add, remove and reorder",
                 editorPane.getScene().getWindow());
         Platform.runLater(() -> editor.tabs.getSelectionModel().select(1));
         settle();
@@ -511,7 +511,7 @@ class TutorialRecorder {
 
         // console
         console("SELECT c.tier, COUNT(*) AS customers, AVG(c.age) AS avgAge\nFROM Customer c\nGROUP BY c.tier\nORDER BY customers DESC", false);
-        shot("console", 7, "The Query tab: an OQL console with highlighting, completion and paging — Ctrl+Enter runs");
+        shot("console", 7, "The Query tab: an OQL console with highlighting, completion and paging; Ctrl+Enter runs");
         console("SELECT p.oid, p.quantity, p.lines\nFROM Purchase p\nWHERE 'SKU-1007' MEMBER OF p.lines.sku", false);
         shot("console-nested", 6, "Query nested paths: MEMBER OF matches any element of a list");
         console("SELECT c FROM Customer c WHERE c.tier = 'GOLD' AND c.age BETWEEN 30 AND 40 ORDER BY c.age DESC", true);
@@ -544,11 +544,11 @@ class TutorialRecorder {
         }
         slide("performance", 8, "On 10 million objects: get in 0.75 µs, bitmap counts in 0.24 ms, 135 k transactions per second",
                 "PERFORMANCE", "10 million objects, milliseconds", null, null, centred(36, perf,
-                        text("Apple M2 Max · SSD · JDK 17 — full report in docs/benchmark-10m.md", 28, FontWeight.NORMAL, "#7A8BA8")));
+                        text("Apple M2 Max · SSD · JDK 17 · full report in docs/benchmark-10m.md", 28, FontWeight.NORMAL, "#7A8BA8")));
         ImageView endLogo = new ImageView(logo);
         endLogo.setFitHeight(150);
         endLogo.setPreserveRatio(true);
-        slide("outro", 6, "Apache-2.0 licensed — documentation, source and this video at github.com/paganini2008/kookaburra",
+        slide("outro", 6, "Apache-2.0 licensed: documentation, source and this video at github.com/paganini2008/kookaburra",
                 "GET STARTED", "github.com/paganini2008/kookaburra", null, endLogo,
                 text("com.github.paganini2008 : kookaburra-core  ·  paganini2008.github.io/kookaburra", 34, FontWeight.NORMAL, "#39FF88"));
 

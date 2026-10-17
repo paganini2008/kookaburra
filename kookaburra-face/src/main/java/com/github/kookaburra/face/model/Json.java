@@ -1,5 +1,6 @@
 package com.github.kookaburra.face.model;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -7,7 +8,7 @@ import java.util.Map;
 
 /**
  * Minimal JSON writer / parser for the object editor (objects, arrays, strings, numbers, booleans, null).
- * Integers parse as {@link Long}, other numbers as {@link Double}.
+ * Integers parse as {@link Long}, other numbers as {@link BigDecimal} (exact: decimals keep every digit).
  *
  * @Author: Fred Feng
  * @Date: 11/10/2026
@@ -82,6 +83,8 @@ public class Json {
             sb.append("null");
         } else if (v instanceof String s) {
             quote(sb, s);
+        } else if (v instanceof BigDecimal d) {
+            sb.append(d.toPlainString());
         } else if (v instanceof Number || v instanceof Boolean) {
             sb.append(v);
         } else if (v instanceof Map<?, ?> m) {
@@ -326,7 +329,7 @@ public class Json {
             }
             String n = s.substring(start, pos);
             try {
-                return floating ? (Object) Double.parseDouble(n) : (Object) Long.parseLong(n);
+                return floating ? (Object) new BigDecimal(n) : (Object) Long.parseLong(n);
             } catch (NumberFormatException e) {
                 pos = start;
                 throw error("bad number '" + n + "'");
