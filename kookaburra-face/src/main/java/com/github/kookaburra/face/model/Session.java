@@ -2,6 +2,7 @@ package com.github.kookaburra.face.model;
 
 import com.github.kookaburra.BackupInfo;
 import com.github.kookaburra.Config;
+import com.github.kookaburra.DatabaseStats;
 import com.github.kookaburra.Isolation;
 import com.github.kookaburra.ObjectDB;
 import com.github.kookaburra.Snapshot;
@@ -207,6 +208,11 @@ public class Session implements AutoCloseable {
     }
 
     /** Snapshot sequence number of the latest committed write. */
+    /** Statistics of the database (objects, storage, counters since it was opened). */
+    public DatabaseStats stats() {
+        return db.stats();
+    }
+
     public long seq() {
         try (Snapshot s = db.snapshot()) {
             return s.seq();

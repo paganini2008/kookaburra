@@ -37,7 +37,7 @@ class MemSegment implements SegmentView {
     private final Map<String, MemIndex> indexes = new ConcurrentHashMap<>();
     private volatile int size;
     private volatile int deletedCount;
-    private long bytes;
+    private volatile long bytes;
     private long maxSeq;
     /** Set by the sequencer when no more rows may be appended. */
     boolean frozen;

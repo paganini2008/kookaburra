@@ -15,7 +15,7 @@
   <a href="https://paganini2008.github.io/kookaburra/"><img src="https://img.shields.io/badge/docs-GitHub%20Pages-00E5FF" alt="Docs"></a>
 </p>
 
-Kookaburra is an **embedded object database for Java 17+**. You store plain annotated objects. Then you query them with a type-safe, chained API (`query(Book.class).where(Book::getYear).ge(1960).list()`) or with **OQL**, a JPQL-style query language. Indexed filters, sorts and aggregates answer in milliseconds on millions of objects. Data is crash-safe on disk, with optional **transactions** (READ COMMITTED, SNAPSHOT, SERIALIZABLE), **unique and foreign-key constraints** and online backup. **Kookaburra Studio** is a desktop admin tool for browsing, editing and querying any database.
+Kookaburra is an **embedded object database for Java 17+**. You store plain annotated objects. Then you query them with a type-safe, chained API (`query(Book.class).where(Book::getYear).ge(1960).list()`) or with **SQL-style OQL**. Indexed filters, sorts and aggregates answer in milliseconds on millions of objects. Data is crash-safe on disk, with optional **transactions** (READ COMMITTED, SNAPSHOT, SERIALIZABLE), **unique and foreign-key constraints** and online backup. **Kookaburra Studio** is a desktop admin tool for browsing, editing and querying any database.
 
 <p align="center">
   <img src="https://paganini2008.github.io/kookaburra/assets/studio-data.png" width="860" alt="Kookaburra Studio">
@@ -36,7 +36,7 @@ Kookaburra is an **embedded object database for Java 17+**. You store plain anno
 |---|---|---|
 | 🧭 | **Type-safe chained queries** from method references or a generated metamodel | Refactoring-safe filters, no SQL mapping layer |
 | ⚡ | **Indexes** on the fields you filter, sort and group by | Filter, count, top-N and group 10 M objects in milliseconds |
-| 🔤 | **OQL**: JPQL-style `SELECT / UPDATE / DELETE` with SQL-92 core | Text queries for tools, configs and ad-hoc analysis |
+| 🔤 | **OQL**: `SELECT / UPDATE / DELETE` with SQL-92 core | Text queries for tools, configs and ad-hoc analysis |
 | 🧩 | **Dynamic API** on a self-describing schema | Open any database without its classes |
 
 ### Data model
@@ -64,6 +64,7 @@ Kookaburra is an **embedded object database for Java 17+**. You store plain anno
 | 🛡 | **Crash-safe and consistent**: committed data survives crashes, readers see consistent snapshots | Safe local persistence, no server |
 | 🗜 | **Compact**: about 150 B per object on disk, deleted space reclaimed | Small heap, opens in milliseconds |
 | 💾 | **Online backup** of a consistent snapshot | Back up while writing; restore = open |
+| 📈 | **Statistics** with `db.stats()` | Feed your own monitoring (Micrometer, JMX, logs) |
 | 🖥 | **Kookaburra Studio** desktop tool | Browse, edit, query and back up visually |
 
 ### Supported data types
@@ -325,6 +326,18 @@ BackupInfo[path=/…/backups/2026-10-17, …, objects=2, …]
   <img src="https://paganini2008.github.io/kookaburra/assets/backup-overview.png" width="760" alt="Online backup">
 </p>
 
+### Statistics
+
+```java
+DatabaseStats s = db.stats();          // cheap: poll it and export to your monitoring
+s.objects();                           // live objects
+s.writes().batches();                  // commits since open
+s.transactions().total().conflicts();  // failed commits that a retry may fix
+s.constraints().uniqueViolations();
+```
+
+Per collection: objects and disk size. Counters since open: writes, transactions per isolation level, constraint violations, background work and backups. Studio shows the same numbers on its **Stats** tab.
+
 ### Nested objects
 
 ```java
@@ -338,7 +351,7 @@ db.query(Shipment.class).whereAny(Shipment::getItems, Item::getSku).contains("pe
 db.oql("SELECT s.code FROM Shipment s WHERE 'kiwi' MEMBER OF s.items.sku").list();          // [S-2]
 ```
 
-Paths through lists of embedded objects mean "any element" (like JPQL `MEMBER OF` and MongoDB dotted paths) and are evaluated by scanning.
+Paths through lists of embedded objects mean "any element" (like MongoDB dotted paths) and are evaluated by scanning.
 
 ### Large values (texts, images)
 
@@ -435,6 +448,8 @@ Memory, file size and background-work tuning keys are listed with comments in [`
 | Getting Started | [Quick Start](#quick-start) |
 | Design notes (for contributors) | [docs/design.md](docs/design.md) |
 | Transactions | [docs/transaction-design.md](docs/transaction-design.md): three isolation levels with OCC, decisions T1 to T17 |
+| Storage design | [docs/storage-design.md](docs/storage-design.md): files, write path, compaction, recovery, backup |
+| Developer guide | [docs/developer-guide.md](docs/developer-guide.md): build, test, conventions, docs tooling |
 | Examples | [Examples](#examples) · tests under `kookaburra-core/src/test` |
 | Configuration | [Configuration](#configuration) · [`kookaburra.properties`](kookaburra.properties) |
 | Benchmarks | [docs/benchmark-10m.md](docs/benchmark-10m.md) |

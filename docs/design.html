@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kookaburra Design</title>
-<meta name="description" content="Kookaburra — embedded Java object database on RoaringBitmap: design document.">
+<meta name="description" content="Kookaburra: embedded Java object database on RoaringBitmap, design document.">
 <link rel="icon" type="image/png" href="assets/logo_64.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -167,7 +167,7 @@
   </main>
 </div>
 
-<footer>Rendered from <a href="design.md">design.md</a> — the single source of truth.</footer>
+<footer>Rendered from <a href="design.md">design.md</a>, the single source of truth. Also: <a href="https://github.com/paganini2008/kookaburra/blob/main/docs/storage-design.md">storage design</a> · <a href="https://github.com/paganini2008/kookaburra/blob/main/docs/transaction-design.md">transaction design</a> · <a href="https://github.com/paganini2008/kookaburra/blob/main/docs/developer-guide.md">developer guide</a></footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -241,6 +241,12 @@
 
   async function render(md) {
     content.innerHTML = marked.parse(md);
+
+    // Sibling docs (storage-design.md, ...) are shown rendered on GitHub, not as raw text on Pages.
+    content.querySelectorAll('a[href]').forEach(a => {
+      const m = a.getAttribute('href').match(/^([\w-]+\.md)(#.*)?$/);
+      if (m && m[1] !== 'design.md') a.href = 'https://github.com/paganini2008/kookaburra/blob/main/docs/' + m[1] + (m[2] || '');
+    });
 
     // Code: mermaid → diagrams, everything else → highlight + copy button.
     content.querySelectorAll('pre > code').forEach(code => {

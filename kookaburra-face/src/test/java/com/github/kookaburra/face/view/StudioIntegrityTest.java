@@ -1,5 +1,6 @@
 package com.github.kookaburra.face.view;
 
+import com.github.kookaburra.ConstraintViolationException;
 import com.github.kookaburra.Isolation;
 import com.github.kookaburra.dynamic.DynamicObject;
 import com.github.kookaburra.face.StudioApplication;
@@ -7,6 +8,7 @@ import com.github.kookaburra.face.demo.DemoData;
 import com.github.kookaburra.face.model.ClassMeta;
 import com.github.kookaburra.face.model.Display;
 import com.github.kookaburra.face.model.Session;
+import com.github.kookaburra.face.model.StatsRows;
 import javafx.application.Platform;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
@@ -35,6 +37,7 @@ import java.util.function.BooleanSupplier;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Studio with constraints, decimals, isolation levels, backlinks and backups, in memory and on disk: unique
@@ -126,6 +129,43 @@ class StudioIntegrityTest {
 
     private long count(Session s, String oql) {
         return (Long) s.db().oql(oql).list().get(0);
+    }
+
+    @ParameterizedTest(name = "on disk = {0}")
+    @ValueSource(booleans = {false, true})
+    void statsTab(boolean onDisk, FxRobot robot, @TempDir Path tmp) {
+        Session s = open(robot, onDisk, tmp);
+        robot.interact(() -> view.tabs.getSelectionModel().select(3));
+        settle();
+        assertThat(view.tabs.getSelectionModel().getSelectedItem().getText()).isEqualTo("Stats");
+        assertThat(view.stats.collections.getItems()).extracting(StatsRows.Collection::name)
+                .containsExactly("Customer", "Product", "Purchase");
+        assertThat(view.stats.summary.getText()).contains("objects in 3 collections");
+        StatsRows.Collection customers = view.stats.collections.getItems().get(0);
+        assertThat(customers.segments()).isEqualTo("1");
+        assertThat(customers.unflushed()).isEqualTo("0");
+
+        String email = (String) s.db().oql("SELECT c.email FROM Customer c LIMIT 1").list().get(0);
+        DynamicObject dup = new DynamicObject("com.github.kookaburra.face.demo.Customer").set("name", "Dup").set("email", email);
+        assertThatThrownBy(() -> s.db().dynamic("Customer").insert(dup)).isInstanceOf(ConstraintViolationException.class);
+        s.db().dynamic("Customer").insert(new DynamicObject("com.github.kookaburra.face.demo.Customer").set("name", "New")
+                .set("email", "new.stats@example.com"));
+        robot.interact(() -> view.refresh());
+        settle();
+        assertThat(view.stats.collections.getItems().get(0).unflushed()).isEqualTo("1");
+        robot.clickOn("#flush");
+        settle();
+        robot.interact(() -> view.refresh());
+        settle();
+        assertThat(metric("unique violations")).isEqualTo("1");
+        assertThat(metric("batches rejected")).isEqualTo("1");
+        assertThat(metric("flushes")).doesNotStartWith("0 (");          // the demo data itself was flushed in memory
+        assertThat(view.stats.collections.getItems().get(0).unflushed()).isEqualTo("0");
+        Shots.save(view.getScene(), "stats-" + (onDisk ? "disk" : "memory"));
+    }
+
+    private String metric(String name) {
+        return view.stats.metrics.getItems().stream().filter(m -> m.name().equals(name)).findFirst().orElseThrow().value();
     }
 
     @ParameterizedTest(name = "on disk = {0}")

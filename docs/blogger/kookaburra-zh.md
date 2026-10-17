@@ -6,7 +6,7 @@
 
 **Kookaburra**：*像数据库一样查询 Java 对象，就在你的应用里。*
 
-面向 **Java 17+ 的嵌入式对象数据库**。存入的是普通的注解类，查询用类型安全的链式 API 或类 JPQL 的 **OQL**，由索引直接回答，毫秒级返回。支持三种隔离级别的事务、唯一约束和外键、精确小数、在线备份，并配有桌面工具 **Kookaburra Studio**。
+面向 **Java 17+ 的嵌入式对象数据库**。存入的是普通的注解类，查询用类型安全的链式 API 或 SQL 风格的 **OQL**，由索引直接回答，毫秒级返回。支持三种隔离级别的事务、唯一约束和外键、精确小数、在线备份，并配有桌面工具 **Kookaburra Studio**。
 
 ![Kookaburra Studio](https://paganini2008.github.io/kookaburra/assets/studio-data.png)
 

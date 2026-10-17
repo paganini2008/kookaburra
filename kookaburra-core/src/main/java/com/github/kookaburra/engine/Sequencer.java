@@ -1,6 +1,7 @@
 package com.github.kookaburra.engine;
 
 import com.github.kookaburra.ConflictException;
+import com.github.kookaburra.ConstraintViolationException;
 import com.github.kookaburra.Durability;
 import com.github.kookaburra.KookaburraException;
 import com.github.kookaburra.OptimisticLockException;
@@ -231,6 +232,9 @@ class Sequencer implements Runnable {
                     results.add(process(r));
                 }
                 wal.sync();
+                if (group.stream().anyMatch(r -> r.ops() != null)) {
+                    db.metrics.groupCommits.increment();
+                }
                 db.publish(lastSeq);
                 db.afterPublish();
                 pruneConflicts();
@@ -276,12 +280,19 @@ class Sequencer implements Runnable {
             ops = resolveIncrements(req.ops());
             out = validate(ops);
             Integrity.Result checked = Integrity.check(db, lastSeq, ops, out, req.tx() == null ? null : req.tx().vanished());
+            countAppended(checked.ops(), ops.size());
             ops = checked.ops();
             out = checked.out();
         } catch (KookaburraException | IllegalArgumentException | ArithmeticException e) {
+            db.metrics.rejected.increment();
+            if (e instanceof ConstraintViolationException cv) {
+                (cv.kind() == ConstraintViolationException.Kind.UNIQUE ? db.metrics.uniqueViolations
+                        : db.metrics.foreignKeyViolations).increment();
+            }
             req.done().completeExceptionally(e);
             return null;
         }
+        db.metrics.batches.increment();
         long seq = ++lastSeq;
         wal.append(seq, ops, out);
         for (int i = 0; i < ops.size(); i++) {
@@ -289,6 +300,13 @@ class Sequencer implements Runnable {
         }
         db.maybeFreeze();
         return out;
+    }
+
+    /** Ops the constraint checks appended after the caller's {@code given} ones: cascades and SET_NULL rewrites. */
+    private void countAppended(List<WriteOp> ops, int given) {
+        for (int i = given; i < ops.size(); i++) {
+            (ops.get(i) instanceof WriteOp.Delete ? db.metrics.cascadeDeletes : db.metrics.setNulls).increment();
+        }
     }
 
     /** First committer wins: an object changed by a commit after the snapshot fails the transaction (§11.1). */
@@ -499,6 +517,7 @@ class Sequencer implements Runnable {
             String collection = schema.byId(ins.record().classId()).collection();
             db.active(collection).append(result, 1, seq, ins.record(), ins.row());
             changes.record(seq, collection, result, null, ins.record());
+            db.metrics.inserts.increment();
         } else if (op instanceof WriteOp.Update u) {
             Database.Location loc = db.locate(u.oid());
             String collection = schema.byId(u.record().classId()).collection();
@@ -508,6 +527,7 @@ class Sequencer implements Runnable {
             db.markDeleted(loc, seq);
             db.active(collection).append(u.oid(), result, seq, u.record(), u.row());
             recordChange(u.oid(), seq);
+            db.metrics.updates.increment();
         } else if (result == 1) {
             long oid = ((WriteOp.Delete) op).oid();
             Database.Location loc = db.locate(oid);
@@ -516,6 +536,7 @@ class Sequencer implements Runnable {
             }
             db.markDeleted(loc, seq);
             recordChange(oid, seq);
+            db.metrics.deletes.increment();
         }
     }
 

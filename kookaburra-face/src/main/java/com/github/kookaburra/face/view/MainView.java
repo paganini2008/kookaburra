@@ -2,6 +2,7 @@ package com.github.kookaburra.face.view;
 
 import com.github.kookaburra.ConflictException;
 import com.github.kookaburra.ConstraintViolationException;
+import com.github.kookaburra.DatabaseStats;
 import com.github.kookaburra.Isolation;
 import com.github.kookaburra.OptimisticLockException;
 import com.github.kookaburra.dynamic.DynamicObject;
@@ -71,6 +72,7 @@ public class MainView extends BorderPane {
     final DataView data;
     final QueryView query;
     final SchemaView schema = new SchemaView();
+    final StatsView stats = new StatsView();
     final TabPane tabs = new TabPane();
     final Label status = new Label("No database open");
     final Label seq = new Label();
@@ -277,7 +279,12 @@ public class MainView extends BorderPane {
         treePane.getStyleClass().add("k-sidebar");
 
         tabs.getTabs().addAll(tab("Data", "mdi2t-table-large", data), tab("Query", "mdi2c-console", query),
-                tab("Schema", "mdi2f-file-tree-outline", schema));
+                tab("Schema", "mdi2f-file-tree-outline", schema), tab("Stats", "mdi2c-chart-box-outline", stats));
+        tabs.getSelectionModel().selectedItemProperty().addListener((o, a, b) -> {
+            if (b != null && b.getContent() == stats) {
+                showStats();
+            }
+        });
         tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
         workspace = new SplitPane(treePane, tabs);
         workspace.setDividerPositions(0.22);
@@ -473,7 +480,7 @@ public class MainView extends BorderPane {
             for (Session s : all) {
                 trees.put(s, new Object[]{s.classes(), s.txLabel()});
             }
-            return new Object[]{trees, current.schemaText(), current.seq(), current.segments()};
+            return new Object[]{trees, current.schemaText(), current.seq(), current.segments(), current.stats()};
         }, r -> {
             @SuppressWarnings("unchecked")
             Map<Session, Object[]> trees = (Map<Session, Object[]>) r[0];
@@ -509,11 +516,24 @@ public class MainView extends BorderPane {
             showTransaction(txLabels.get(current));
             @SuppressWarnings("unchecked") List<SegmentInfo> segs = (List<SegmentInfo>) r[3];
             schema.show(segs, (String) r[1]);
+            stats.show((DatabaseStats) r[4]);
             seq.setText("snapshot seq " + r[2]);
             if (toSelect != null) {
                 tree.getSelectionModel().select(toSelect);
             }
         }, this::error);
+    }
+
+    /** Reloads the Stats tab of the current database. */
+    void showStats() {
+        Session s = session;
+        if (s != null) {
+            tasks.run(s::stats, st -> {
+                if (s == session) {
+                    stats.show(st);
+                }
+            }, this::error);
+        }
     }
 
     private static TreeItem<NavNode> item(Session s, ClassInfo c) {
