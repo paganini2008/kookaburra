@@ -6,7 +6,7 @@ import com.github.kookaburra.exec.SegmentView;
 import java.util.List;
 
 /**
- * A (version, sequence) pair taken consistently (design §7).
+ * A (version, sequence) pair taken consistently (storage-design §7).
  *
  * @Author: Fred Feng
  * @Date: 11/10/2026

@@ -1,4 +1,4 @@
-# Kookaburra: Query Java Objects with Streams, Accelerated by RoaringBitmap
+# Kookaburra: an Embedded Object Database for Java, with Type-Safe Queries
 
 *An embedded object database for Java 17+: write queries like streams, and they execute like a database.*
 
@@ -6,13 +6,13 @@
 
 ## 1. Overview
 
-**Kookaburra**: *query Java objects like a database: bitmaps underneath, streams on top.*
+**Kookaburra**: *query Java objects like a database, right inside your application.*
 
-An embedded object database for Java 17+. Annotated classes in, type-safe chained queries or JPQL-style OQL out, executed on RoaringBitmap indexes over memory-mapped files. Transactions at three isolation levels, unique and foreign-key constraints, exact decimals, online backup, and a desktop tool, Kookaburra Studio.
+An embedded object database for Java 17+. Annotated classes in, type-safe chained queries or JPQL-style OQL out, answered from indexes in milliseconds. Transactions at three isolation levels, unique and foreign-key constraints, exact decimals, online backup, and a desktop tool, Kookaburra Studio.
 
 ![Kookaburra Studio, the desktop admin tool](https://paganini2008.github.io/kookaburra/assets/studio-data.png)
 
-**Watch the 2:33 video tutorial** (English subtitles):
+**Watch the 2:57 video tutorial** (English subtitles):
 
 [![Watch the tutorial](https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial-poster.jpg)](https://paganini2008.github.io/kookaburra/#tutorial)
 
@@ -23,9 +23,9 @@ An embedded object database for Java 17+. Annotated classes in, type-safe chaine
 Keeping your own objects usually means an ORM plus a relational database; the light alternative, `stream().filter()`, scans everything on every query. Kookaburra sits in between:
 
 - **No mapping layer**: annotated objects are stored directly
-- **No full scans**: bitmap and ordinal indexes, milliseconds on 10 million objects
+- **No full scans**: indexes answer in milliseconds on 10 million objects
 - **No string field names**: `where(Book::getYear)` or a generated `Book_` metamodel
-- **No duplicates or dangling references**: `@Unique`, `@ForeignKey` with RESTRICT, CASCADE or SET_NULL
+- **No duplicates or dangling references**: `@Unique` on a field or a combination of fields, `@ForeignKey` with RESTRICT, CASCADE or SET_NULL
 - **Safe multi-object changes**: READ COMMITTED, SNAPSHOT and SERIALIZABLE transactions
 - **Exact money**: `BigDecimal` fields, compared by value
 - **Backups while writing**: `db.backup(dir)`
@@ -79,16 +79,12 @@ Output:
 
 ## 5. How It Works
 
-![Architecture](https://paganini2008.github.io/kookaburra/assets/architecture.png)
+![How Kookaburra fits into an application](https://paganini2008.github.io/kookaburra/assets/how-it-fits.png)
 
-Every write passes one sequencer thread, which checks conflicts and constraints before the WAL:
-
-![Write path](https://paganini2008.github.io/kookaburra/assets/write-path.png)
-
-- **Query APIs**: typed fields, OQL and dynamic access compile to one predicate plan.
-- **Executor**: conditions on Roaring postings and sorted ordinals; index-order top-N.
-- **Write path**: callbacks, conflicts, constraints, then the WAL with one fsync per group.
-- **Storage**: immutable memory-mapped segments merged by tiered compaction.
+- **You annotate plain classes**; Kookaburra stores them in a data directory (or in memory). No server, no schema scripts.
+- **You query** with method references or OQL; indexes answer, and `explain()` shows which one.
+- **You write** objects, batches or transactions; commits are atomic and durable, constraints are checked at commit.
+- **You open the directory in Studio**, or call `db.backup(dir)` for a consistent copy while running.
 
 ## 6. Code Examples
 
@@ -174,7 +170,7 @@ BackupInfo info = db.backup(Path.of("backups/2026-10-17"));   // writers keep go
 try (ObjectDB copy = ObjectDB.open(info.path())) { … }        // restore = open
 ```
 
-![Online backup](https://paganini2008.github.io/kookaburra/assets/backup.png)
+![Online backup](https://paganini2008.github.io/kookaburra/assets/backup-overview.png)
 
 **Example 6: nested objects and large values**
 
@@ -195,20 +191,18 @@ In Studio: the objects referencing the selected one, the constraints of every fi
 All settings live in one file, `kookaburra.properties`:
 
 ```properties
-kookaburra.mem-segment-bytes=64MB        # in-memory segment size before flush
-kookaburra.segment-max-bytes=512MB       # compaction output limit
-kookaburra.durability=SYNC               # SYNC = fsync per commit group, ASYNC = page cache
-kookaburra.group-commit-micros=200       # wait to batch more commits into one fsync
-kookaburra.compaction-garbage-ratio=0.3  # rewrite a segment at this share of deleted rows
+kookaburra.durability=SYNC               # SYNC = on disk before a write returns, ASYNC = faster
 kookaburra.transactions=false            # true enables db.begin() / db.inTransaction()
 kookaburra.tx-isolation=SNAPSHOT         # READ_COMMITTED, SNAPSHOT or SERIALIZABLE
 kookaburra.tx-timeout=60s                # open transactions older than this are rolled back
 kookaburra.data=                         # Studio: default database (empty = data/ next to the jar)
 ```
 
+Tuning keys (memory, file sizes, background work) are commented in the file; the defaults suit most applications.
+
 ## 8. Performance
 
-Environment: Apple M2 Max (12 cores), 32 GB, internal SSD (fsync about 4 ms), JDK 17, `-Xmx8g`, **10 million objects**, measured with the `kookaburra-bench` harness (warm-up, p50, consistency checks after every phase).
+Environment: Apple M2 Max (12 cores), 32 GB, internal SSD, JDK 17, `-Xmx8g`, **10 million objects**, measured with the `kookaburra-bench` harness (warm-up, p50, consistency checks after every phase).
 
 ```text
 Operation (10 M objects)                           p50
@@ -216,7 +210,7 @@ Operation (10 M objects)                           p50
 bulk insert, batches of 100 (ASYNC)                696 k objects/s
 durable single inserts, 16 / 128 threads (SYNC)    3.2 k/s / 21.2 k/s
 get(oid)                                           0.6 to 1.1 µs
-bitmap equality count                              0.24 ms
+count with an indexed filter                       0.24 ms
 equality + range + limit 100                       0.21 ms
 top-10 by indexed column, 2.3 M matches            0.39 ms
 GROUP BY city COUNT(*)                             4.0 ms
@@ -226,16 +220,15 @@ transfers, 16 threads: SNAPSHOT / RC / SERIAL.     136 / 142 / 140 k/s
 atomic increment of one hot counter, 16 threads    265 k/s, no lost updates
 insert with @Unique / without (in memory)          235 / 258 k/s
 online backup of 10.5 M objects                    25.4 s, writers not blocked
-OQL DELETE of all objects / disk afterwards        1.32 M/s / 0 B after compact()
+OQL DELETE of all objects / disk afterwards        1.32 M/s / 0 B left
 reopen / heap after reopen                         2.0 ms / 6.5 MiB
 ```
 
 ## 9. Limitations & Trade-offs
 
-- Durable single writes are bound by fsync; batch or use `ASYNC` for bulk loads.
+- Each durable single write waits for the disk; batch or use `ASYNC` for bulk loads.
 - Single-collection queries only, no joins: use references with `fetch`, or the semi-join `in(...)`.
 - Optimistic transactions: conflicts surface at commit and are retried, never blocked.
-- Constraints are single-field (no composite unique keys yet).
 - Not a fit for several processes writing one directory, for the SQL / JDBC / BI ecosystem, or for terabyte-scale data.
 
 ## 10. Summary

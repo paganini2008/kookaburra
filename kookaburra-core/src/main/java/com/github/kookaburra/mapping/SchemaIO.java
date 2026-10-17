@@ -24,7 +24,9 @@ public class SchemaIO {
     /** Format 1: fields without constraints. */
     private static final long MAGIC_V1 = 0x4B4B4253_43483031L;   // "KKBSCH01"
     /** Format 2 (2026-10-16): every field also stores {@code unique} and its {@code @ForeignKey} action. */
-    private static final long MAGIC = 0x4B4B4253_43483032L;      // "KKBSCH02"
+    private static final long MAGIC_V2 = 0x4B4B4253_43483032L;   // "KKBSCH02"
+    /** Format 3 (2026-10-17): every class also stores its class-level unique constraints (field combinations). */
+    private static final long MAGIC = 0x4B4B4253_43483033L;      // "KKBSCH03"
 
     private SchemaIO() {
     }
@@ -46,6 +48,14 @@ public class SchemaIO {
                 for (Layout l : c.layouts()) {
                     out.writeInt(l.id());
                     writeFields(out, l.fields());
+                }
+                out.writeInt(c.uniques().size());
+                for (UniqueDef u : c.uniques()) {
+                    out.writeUTF(u.name());
+                    out.writeInt(u.paths().size());
+                    for (String path : u.paths()) {
+                        out.writeUTF(path);
+                    }
                 }
             }
             out.flush();
@@ -71,10 +81,11 @@ public class SchemaIO {
         try {
             DataInputStream head = new DataInputStream(new ByteArrayInputStream(file));
             long magic = head.readLong();
-            if (magic != MAGIC && magic != MAGIC_V1) {
+            if (magic != MAGIC && magic != MAGIC_V2 && magic != MAGIC_V1) {
                 throw new SchemaException("not a schema file");
             }
-            boolean v2 = magic == MAGIC;
+            boolean v2 = magic != MAGIC_V1;
+            boolean v3 = magic == MAGIC;
             CRC32C crc = new CRC32C();
             crc.update(file, 8, file.length - 12);
             int stored = new DataInputStream(new ByteArrayInputStream(file, file.length - 4, 4)).readInt();
@@ -97,7 +108,18 @@ public class SchemaIO {
                 for (int j = 0; j < nl; j++) {
                     layouts.add(new Layout(in.readInt(), readFields(in, v2)));
                 }
-                classes.add(new ClassDef(id, name, parent, collection, idField, versionField, layouts));
+                List<UniqueDef> uniques = new ArrayList<>();
+                int nu = v3 ? in.readInt() : 0;
+                for (int j = 0; j < nu; j++) {
+                    String uname = in.readUTF();
+                    int np = in.readInt();
+                    List<String> paths = new ArrayList<>(np);
+                    for (int k = 0; k < np; k++) {
+                        paths.add(in.readUTF());
+                    }
+                    uniques.add(new UniqueDef(uname, paths));
+                }
+                classes.add(new ClassDef(id, name, parent, collection, idField, versionField, layouts, uniques));
             }
             return new Schema(version, classes);
         } catch (IOException e) {

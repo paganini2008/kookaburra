@@ -3,7 +3,7 @@ package com.github.kookaburra.segment;
 import com.github.kookaburra.io.MappedFile;
 
 /**
- * Bloom filter over OIDs (design §5.1), double hashing on a 64-bit mix.
+ * Bloom filter over OIDs (storage-design §4.1), double hashing on a 64-bit mix.
  *
  * @Author: Fred Feng
  * @Date: 11/10/2026

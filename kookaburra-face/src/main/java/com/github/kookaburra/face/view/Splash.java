@@ -54,7 +54,7 @@ public class Splash {
         bar.setPrefWidth(260);
         bar.getStyleClass().add("k-splash-bar");
         status.getStyleClass().add("k-splash-status");
-        Label tagline = new Label("Embedded object database on RoaringBitmap");
+        Label tagline = new Label("Embedded object database for Java");
         tagline.getStyleClass().add("k-splash-status");
         VBox box = new VBox(10, logo, name, version, tagline, bar, status);
         box.setAlignment(Pos.CENTER);

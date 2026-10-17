@@ -29,7 +29,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Database directory layout (design §4):
+ * Database directory layout (storage-design §3):
  * <pre>
  * LOCK · CURRENT · commit_N · schema/schema_V · wal/wal_&lt;firstSeq&gt;.log
  * col/&lt;collection&gt;/seg_&lt;id&gt;.odbf · col/&lt;collection&gt;/seg_&lt;id&gt;_&lt;gen&gt;.del

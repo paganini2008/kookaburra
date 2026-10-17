@@ -9,11 +9,14 @@ import com.github.kookaburra.Transaction;
 import com.github.kookaburra.WriteBatch;
 import com.github.kookaburra.dynamic.DynamicObject;
 import com.github.kookaburra.mapping.SchemaException;
+import com.github.kookaburra.mapping.UniqueDef;
 import com.github.kookaburra.model.Contact;
 import com.github.kookaburra.model.Desk;
+import com.github.kookaburra.model.Listing;
 import com.github.kookaburra.model.Member;
 import com.github.kookaburra.model.Membership;
 import com.github.kookaburra.model.Note;
+import com.github.kookaburra.model.PromoListing;
 import com.github.kookaburra.model.Task;
 import com.github.kookaburra.model.Team;
 import com.github.kookaburra.model.VipMember;
@@ -302,5 +305,88 @@ class ConstraintTest {
         assertThat(db.schema().toString()).contains("email STRING @AUTO UNIQUE");
         db.insert(new Membership(db.from(Member.class).first().orElseThrow().getOid(), db.insert(new Team("t")), "r"));
         assertThat(db.schema().toString()).contains("member REF(Member) @AUTO FOREIGN KEY ON DELETE CASCADE");
+    }
+
+    @Test
+    void compositeUniqueConstraints() {
+        long ann = db.insert(new Member("ann", "ann@x.io"));
+        long a1 = db.insert(new Listing("acme", "A-1").seller(ann, "2026-10-17").place("Perth", "1 Main St").price("9.90"));
+        db.insert(new Listing("other", "A-1"));                                  // same code, other tenant
+        db.insert(new Listing(null, "A-1"));                                     // a null: not compared
+        db.insert(new Listing(null, "A-1"));
+        db.insert(new Listing("acme", null));
+        db.insert(new Listing("acme", null));
+        checkpoint();
+
+        assertThatThrownBy(() -> db.insert(new Listing("acme", "A-1")))
+                .isInstanceOf(ConstraintViolationException.class)
+                .hasMessage("duplicate value ('acme', 'A-1') for unique Listing(tenant, code) (already used by object " + a1 + ")")
+                .satisfies(t -> {
+                    ConstraintViolationException e = (ConstraintViolationException) t;
+                    assertThat(e.kind()).isEqualTo(ConstraintViolationException.Kind.UNIQUE);
+                    assertThat(e.field()).isEqualTo("tenant, code");
+                    assertThat(e.oid()).isEqualTo(a1);
+                });
+        assertThatThrownBy(() -> db.insert(new Listing("acme", "B-1").seller(ann, "2026-10-17")))
+                .hasMessageContaining("for unique one_per_day: Listing(seller, day)");
+        db.insert(new Listing("acme", "B-2").seller(ann, "2026-10-18"));         // another day
+        assertThatThrownBy(() -> db.insert(new Listing("x", "C-1").place("Perth", "1 Main St")))   // embedded paths
+                .hasMessageContaining("Listing(place.city, place.street)");
+        db.insert(new Listing("x", "C-2").place("Hobart", "1 Main St"));
+        assertThatThrownBy(() -> db.insert(new Listing("acme", "D-1").price("9.9000")))           // decimals by value
+                .hasMessageContaining("Listing(tenant, price)");
+        assertThatThrownBy(() -> db.insert(new PromoListing("acme", "A-1")))                       // subclasses share it
+                .isInstanceOf(ConstraintViolationException.class);
+
+        // update into a duplicate; swap inside one batch; duplicates inside one batch
+        Listing other = db.from(Listing.class).where(Listing::getTenant).eq("other").first().orElseThrow();
+        assertThatThrownBy(() -> db.update(other.tenant("acme"))).isInstanceOf(ConstraintViolationException.class);
+        Listing first = db.get(Listing.class, a1);
+        Listing again = db.from(Listing.class).where(Listing::getTenant).eq("other").first().orElseThrow();
+        try (WriteBatch batch = db.batch()) {
+            batch.update(first.tenant("other")).update(again.tenant("acme")).commit();
+        }
+        try (WriteBatch batch = db.batch()) {
+            batch.insert(new Listing("t", "Z")).insert(new Listing("t", "Z"));
+            assertThatThrownBy(batch::commit).isInstanceOf(ConstraintViolationException.class);
+        }
+        reopen();
+        assertThat(db.from(Listing.class).where(Listing::getTenant).eq("t").count()).isZero();
+
+        // transactions: deferred to commit, first committer wins
+        try (Transaction t1 = db.begin(); Transaction t2 = db.begin()) {
+            t1.insert(new Listing("tx", "T-1"));
+            t2.insert(new Listing("tx", "T-1"));
+            t1.commit();
+            assertThatThrownBy(t2::commit).isInstanceOf(ConstraintViolationException.class);
+        }
+        // OQL bulk updates and dynamic writes are checked too
+        assertThatThrownBy(() -> db.oql("UPDATE Listing l SET l.code = 'A-1' WHERE l.tenant = 'acme'").execute())
+                .isInstanceOf(ConstraintViolationException.class);
+        DynamicObject dyn = db.dynamic("Listing").newObject();
+        dyn.set("tenant", "tx");
+        dyn.set("code", "T-1");
+        assertThatThrownBy(() -> db.dynamic("Listing").insert(dyn)).isInstanceOf(ConstraintViolationException.class);
+        checkpoint();
+
+        // schema: the first field is indexed when none was; constraints are listed
+        assertThat(db.schema().toString()).contains("tenant STRING @AUTO", "UNIQUE (tenant, code)",
+                "one_per_day UNIQUE (seller, day)", "UNIQUE (place.city, place.street)");
+        assertThat(db.schema().compositeUniques()).extracting(Object::toString)
+                .containsExactly("Listing(tenant, code)", "one_per_day: Listing(seller, day)",
+                        "Listing(place.city, place.street)", "Listing(tenant, price)");
+        assertThatThrownBy(() -> db.insert(new Listing("acme", "B-2"))).isInstanceOf(ConstraintViolationException.class);
+    }
+
+    @Test
+    void compositeSchemaRules() {
+        assertThatThrownBy(() -> db.insert(new Bad.ClassWithoutFields())).isInstanceOf(SchemaException.class)
+                .hasMessageContaining("needs fields = {...}");
+        assertThatThrownBy(() -> db.insert(new Bad.UnknownField())).hasMessageContaining("no field 'missing'");
+        assertThatThrownBy(() -> db.insert(new Bad.ListInCombination())).hasMessageContaining("scalar fields only");
+        assertThatThrownBy(() -> db.insert(new Bad.Twice())).hasMessageContaining("listed twice");
+        assertThatThrownBy(() -> db.insert(new Bad.FieldsOnField())).hasMessageContaining("belongs on the class");
+        assertThatThrownBy(() -> new UniqueDef("x", List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Immutable set of segment views per collection, newest first (design §7). Replaced, never modified.
+ * Immutable set of segment views per collection, newest first (storage-design §7). Replaced, never modified.
  *
  * @Author: Fred Feng
  * @Date: 11/10/2026

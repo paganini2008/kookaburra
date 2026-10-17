@@ -5,7 +5,7 @@ import org.roaringbitmap.RoaringBitmap;
 import java.util.Arrays;
 
 /**
- * Deleted documents of one segment (design §6.3): a persisted base bitmap plus an append-only log of
+ * Deleted documents of one segment (storage-design §6.3): a persisted base bitmap plus an append-only log of
  * {@code (seq, docid)} written by the sequencer. Readers ask for the deletions visible at a snapshot;
  * the result for the latest prefix is cached and extended incrementally.
  *

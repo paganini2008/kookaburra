@@ -10,7 +10,7 @@ import java.util.Map;
 import java.util.zip.CRC32C;
 
 /**
- * Contents of a {@code commit_N} file (design §4, §6.4): which segments (with which delete
+ * Contents of a {@code commit_N} file (storage-design §3, §6.4): which segments (with which delete
  * generation) make up each collection, where WAL replay starts per collection, and OID high-water marks.
  *
  * @param id            commit number N

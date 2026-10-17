@@ -202,8 +202,35 @@ public class Database implements ObjectDB, OqlHost {
                     validateExisting(next, c);
                 }
             }
+            for (Schema.CompositeUnique c : next.compositeUniques()) {
+                if (!current.compositeUniques().contains(c)) {
+                    validateExisting(next, c);
+                }
+            }
         }
         storage.saveSchema(next);
+    }
+
+    private void validateExisting(Schema schema, Schema.CompositeUnique c) {
+        Set<Integer> types = schema.subclassIds(c.owner());
+        if (types.isEmpty()) {
+            return;
+        }
+        try (ReadView rv = openRead()) {
+            Map<List<Object>, Long> seen = new HashMap<>();
+            new Executor(rv, c.collection(), types, new Cond.Const(true), null).forEach(h -> {
+                List<Object> key = new ArrayList<>();
+                for (String p : c.def().paths()) {
+                    key.add(Executor.value(h, p));
+                }
+                long oid = h.view().oid(h.doc());
+                Long other = key.contains(null) ? null : seen.putIfAbsent(key, oid);
+                if (other != null) {
+                    throw new SchemaException("cannot add @Unique " + c + ": objects " + other + " and " + oid + " both have " + key);
+                }
+                return true;
+            });
+        }
     }
 
     private void validateExisting(Schema schema, Schema.Constraint c) {
@@ -696,7 +723,7 @@ public class Database implements ObjectDB, OqlHost {
         maybeCompact(job.collection(), false);
     }
 
-    // ---------------------------------------------------------------- compaction (design §13)
+    // ---------------------------------------------------------------- compaction (storage-design §10)
 
     /** Size tier of a segment: segments within a factor of {@code fanIn} share a tier. */
     private int tier(Segment s) {
@@ -882,7 +909,7 @@ public class Database implements ObjectDB, OqlHost {
         }
     }
 
-    /** Callers wait while flushes / merges lag behind (back-pressure, design §12). */
+    /** Callers wait while flushes / merges lag behind (back-pressure, storage-design §10). */
     void throttle() {
         if (backlog.get() <= config.writeBacklog()) {
             return;

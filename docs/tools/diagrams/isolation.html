@@ -7,8 +7,8 @@
   <tr><td class="l"><b>SERIALIZABLE</b></td><td>snapshot + read validation</td><td class="ok">✓ prevented</td><td class="ok">✓ prevented</td><td class="ok">✓ prevented</td><td class="ok">✓ prevented</td><td class="ok">✓ prevented</td><td class="l">PostgreSQL SERIALIZABLE (SSI), CockroachDB</td></tr>
 </table>
 <div class="row" style="margin-top:22px;gap:14px">
-  <div class="box" style="width:400px;text-align:left;align-self:stretch"><b>Optimistic, never blocks</b><span>Writers buffer changes; the single sequencer validates at commit. Conflicts throw ConflictException and inTransaction retries with back-off.</span></div>
-  <div class="box" style="width:400px;text-align:left;align-self:stretch"><b>SERIALIZABLE read set</b><span>OIDs read by get, plus every query condition (indexed, unindexed, residual, OQL). Commits after the snapshot are tested against it.</span></div>
+  <div class="box" style="width:400px;text-align:left;align-self:stretch"><b>Optimistic, never blocks</b><span>Transactions never wait for each other. A conflict shows up at commit as ConflictException, and inTransaction retries automatically.</span></div>
+  <div class="box" style="width:400px;text-align:left;align-self:stretch"><b>SERIALIZABLE read set</b><span>Everything a transaction read (objects and query results) is checked at commit; if another commit changed it, the transaction is retried.</span></div>
   <div class="box" style="width:400px;text-align:left;align-self:stretch"><b>Read-only transactions</b><span>Never fail at any level: they are serialized at their snapshot.</span></div>
 </div>
 </div></body></html>

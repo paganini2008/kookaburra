@@ -24,7 +24,7 @@ import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 /**
- * Online backup (design §15.2): the live objects of one MVCC snapshot are written as fresh, compacted segment
+ * Online backup (storage-design §13): the live objects of one MVCC snapshot are written as fresh, compacted segment
  * files plus schema and commit into a new directory, like an export to a clean database. Writers are not blocked
  * (the snapshot pins nothing they need); in-memory databases can be backed up to disk the same way. The copy is
  * an ordinary database directory: restore = open it.

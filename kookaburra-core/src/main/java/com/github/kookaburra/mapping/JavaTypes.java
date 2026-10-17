@@ -19,6 +19,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -82,7 +83,11 @@ class JavaTypes {
                 }
                 index = ann.value();
             }
-            boolean unique = f.isAnnotationPresent(Unique.class);
+            Unique ua = f.getAnnotation(Unique.class);
+            if (ua != null && ua.fields().length > 0) {
+                throw new SchemaException("@Unique(fields = ...) belongs on the class, not on the field " + where);
+            }
+            boolean unique = ua != null;
             if (unique && (!t.kind().isScalar() || t.kind() == ValueType.MULTI)) {
                 throw new SchemaException("@Unique on " + where + " of type " + t + " is not supported (unique scalar fields)");
             }
@@ -151,6 +156,84 @@ class JavaTypes {
             default:
                 return TypeDef.scalar(vt);
         }
+    }
+
+    /**
+     * Class-level {@code @Unique(fields = …)} of {@code type} (not inherited: a superclass declares its own). Paths
+     * must name scalar fields of {@code fields} (dotted through embedded values).
+     */
+    static List<UniqueDef> uniques(Class<?> type, List<FieldDef> fields) {
+        List<UniqueDef> out = new ArrayList<>();
+        for (Unique u : type.getDeclaredAnnotationsByType(Unique.class)) {
+            if (u.fields().length == 0) {
+                throw new SchemaException("@Unique on class " + type.getName() + " needs fields = {...}");
+            }
+            for (String path : u.fields()) {
+                FieldDef f = fieldAt(fields, path);
+                if (f == null) {
+                    throw new SchemaException("@Unique on " + type.getName() + ": no field '" + path + "'");
+                }
+                if (!f.type().kind().isScalar()) {
+                    throw new SchemaException("@Unique on " + type.getName() + ": field '" + path + "' of type " + f.type()
+                            + " is not supported (scalar fields only)");
+                }
+            }
+            if (new HashSet<>(Arrays.asList(u.fields())).size() != u.fields().length) {
+                throw new SchemaException("@Unique on " + type.getName() + ": a field is listed twice");
+            }
+            out.add(new UniqueDef(u.name(), List.of(u.fields())));
+        }
+        return out;
+    }
+
+    /** Fields with the first path of every constraint indexed when none of its paths is (lookups go through it). */
+    static List<FieldDef> indexFor(List<FieldDef> fields, List<UniqueDef> uniques) {
+        List<FieldDef> out = fields;
+        for (UniqueDef u : uniques) {
+            boolean indexed = false;
+            for (String p : u.paths()) {
+                indexed |= fieldAt(out, p).index() != null;
+            }
+            if (!indexed) {
+                out = withIndex(out, u.paths().get(0));
+            }
+        }
+        return out;
+    }
+
+    private static List<FieldDef> withIndex(List<FieldDef> fields, String path) {
+        int dot = path.indexOf('.');
+        String head = dot < 0 ? path : path.substring(0, dot);
+        List<FieldDef> out = new ArrayList<>(fields);
+        for (int i = 0; i < out.size(); i++) {
+            FieldDef f = out.get(i);
+            if (!f.name().equals(head)) {
+                continue;
+            }
+            if (dot < 0) {
+                out.set(i, new FieldDef(f.name(), f.type(), IndexKind.AUTO, f.unique(), f.onDelete()));
+            } else {
+                TypeDef t = f.type();
+                TypeDef nested = TypeDef.embedded(t.name(), withIndex(t.fields(), path.substring(dot + 1)));
+                out.set(i, new FieldDef(f.name(), nested, f.index(), f.unique(), f.onDelete()));
+            }
+        }
+        return out;
+    }
+
+    /** Field at a dotted path through embedded values, or null. */
+    static FieldDef fieldAt(List<FieldDef> fields, String path) {
+        int dot = path.indexOf('.');
+        String head = dot < 0 ? path : path.substring(0, dot);
+        for (FieldDef f : fields) {
+            if (f.name().equals(head)) {
+                if (dot < 0) {
+                    return f;
+                }
+                return f.type().kind() == ValueType.EMBEDDED ? fieldAt(f.type().fields(), path.substring(dot + 1)) : null;
+            }
+        }
+        return null;
     }
 
     /** Element types of embedded lists / maps have no column paths, so they cannot carry constraints. */

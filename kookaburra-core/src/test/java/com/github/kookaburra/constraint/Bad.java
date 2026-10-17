@@ -43,4 +43,39 @@ class Bad {
         @Id long oid;
         List<Line> lines;
     }
+
+    @Entity
+    @Unique
+    static class ClassWithoutFields {
+        @Id long oid;
+        String a;
+    }
+
+    @Entity
+    @Unique(fields = {"a", "missing"})
+    static class UnknownField {
+        @Id long oid;
+        String a;
+    }
+
+    @Entity
+    @Unique(fields = {"a", "tags"})
+    static class ListInCombination {
+        @Id long oid;
+        String a;
+        List<String> tags;
+    }
+
+    @Entity
+    @Unique(fields = {"a", "a"})
+    static class Twice {
+        @Id long oid;
+        String a;
+    }
+
+    @Entity
+    static class FieldsOnField {
+        @Id long oid;
+        @Unique(fields = {"a"}) String a;
+    }
 }

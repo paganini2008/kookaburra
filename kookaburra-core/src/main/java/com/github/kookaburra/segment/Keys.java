@@ -13,7 +13,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 
 /**
- * Dictionary key encodings (design §5.2). LONG keys preserve the canonical order under
+ * Dictionary key encodings (storage-design §4.2). LONG keys preserve the canonical order under
  * {@link Long#compare}; FIXED128 keys are (epoch second UTC, nano); STRING keys are compared with
  * {@link String#compareTo}; DECIMAL keys are variable-length like STRING ({@link #decimalBytes}) and compared
  * by numeric value.

@@ -14,20 +14,33 @@ import java.util.Objects;
  * @param idField      Java name of the {@code @Id} field
  * @param versionField Java name of the {@code @Version} field, or null
  * @param layouts      all layouts, oldest first; the last one is current
+ * @param uniques      class-level unique constraints over field combinations (declared on this class)
  *
  * @Author: Fred Feng
  * @Date: 11/10/2026
  * @Version 1.0.0
  */
 public record ClassDef(int id, String name, String parent, String collection, String idField,
-                       String versionField, List<Layout> layouts) {
+                       String versionField, List<Layout> layouts, List<UniqueDef> uniques) {
 
     public ClassDef {
         Objects.requireNonNull(name, "name");
         layouts = List.copyOf(layouts);
+        uniques = uniques == null ? List.of() : List.copyOf(uniques);
         if (layouts.isEmpty()) {
             throw new IllegalArgumentException("no layout");
         }
+    }
+
+    /** A class without class-level unique constraints. */
+    public ClassDef(int id, String name, String parent, String collection, String idField, String versionField,
+                    List<Layout> layouts) {
+        this(id, name, parent, collection, idField, versionField, layouts, List.of());
+    }
+
+    /** The same class with other class-level unique constraints. */
+    ClassDef withUniques(List<UniqueDef> u) {
+        return new ClassDef(id, name, parent, collection, idField, versionField, layouts, u);
     }
 
     public Layout current() {
@@ -53,6 +66,6 @@ public record ClassDef(int id, String name, String parent, String collection, St
     ClassDef withLayout(List<FieldDef> fields) {
         List<Layout> l = new ArrayList<>(layouts);
         l.add(new Layout(layouts.size(), fields));
-        return new ClassDef(id, name, parent, collection, idField, versionField, l);
+        return new ClassDef(id, name, parent, collection, idField, versionField, l, uniques);
     }
 }

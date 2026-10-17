@@ -9,7 +9,7 @@ import java.util.List;
 
 /**
  * Persistence used by the engine: schema, commits, segment files, delete bitmaps and the WAL.
- * {@link MemoryStorage} keeps nothing; {@link DiskStorage} implements design §4.
+ * {@link MemoryStorage} keeps nothing; {@link DiskStorage} implements storage-design §3.
  *
  * @Author: Fred Feng
  * @Date: 11/10/2026

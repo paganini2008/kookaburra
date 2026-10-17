@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicLongArray;
 /**
  * Append-only arrays for one writer and many lock-free readers. Storage is split into fixed chunks;
  * growth only appends chunks and republishes the (volatile) directory, so a reader holding any directory
- * sees every element written before the size it read (design §6.2).
+ * sees every element written before the size it read (storage-design §6.2).
  *
  * @Author: Fred Feng
  * @Date: 11/10/2026

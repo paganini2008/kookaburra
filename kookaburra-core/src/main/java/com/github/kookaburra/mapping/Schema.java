@@ -180,6 +180,49 @@ public final class Schema {
         }
     }
 
+    /**
+     * A class-level unique constraint over a combination of paths.
+     *
+     * @param owner      declaring class (the constraint covers its stored subclasses)
+     * @param collection collection of the owner
+     * @param def        name and paths
+     * @param types      stored type of each path (same order as {@code def.paths()})
+     */
+    public record CompositeUnique(String owner, String collection, UniqueDef def, List<TypeDef> types) {
+
+        /** Path used for index lookups: the first indexed one (the first path is indexed when none was). */
+        public String lookupPath(Map<String, ColumnDef> columns) {
+            for (String p : def.paths()) {
+                if (columns.containsKey(p)) {
+                    return p;
+                }
+            }
+            return def.paths().get(0);
+        }
+
+        @Override
+        public String toString() {
+            String cls = owner.substring(owner.lastIndexOf('.') + 1) + "(" + String.join(", ", def.paths()) + ")";
+            return def.name().isEmpty() ? cls : def.name() + ": " + cls;
+        }
+    }
+
+    /** Every class-level unique constraint (combinations of fields). */
+    public List<CompositeUnique> compositeUniques() {
+        List<CompositeUnique> out = new ArrayList<>();
+        for (ClassDef def : byName.values()) {
+            for (UniqueDef u : def.uniques()) {
+                List<TypeDef> types = new ArrayList<>();
+                for (String p : u.paths()) {
+                    FieldDef f = fieldAt(def.current().fields(), p);
+                    types.add(f == null ? null : f.type());
+                }
+                out.add(new CompositeUnique(def.name(), def.collection(), u, types));
+            }
+        }
+        return out;
+    }
+
     /** Every constraint of every stored class (current layouts). */
     public List<Constraint> constraints() {
         List<Constraint> c = constraints;
@@ -296,6 +339,9 @@ public final class Schema {
                         .append(c.parent() == null ? "" : " parent=" + c.parent()).append('\n');
                 for (FieldDef f : c.current().fields()) {
                     sb.append("    ").append(f).append('\n');
+                }
+                for (UniqueDef u : c.uniques()) {
+                    sb.append("    ").append(u).append('\n');
                 }
             }
         }

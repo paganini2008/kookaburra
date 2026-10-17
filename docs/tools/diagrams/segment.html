@@ -1,0 +1,30 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head><body><div class="canvas" data-size="1560x470">
+<h1>Inside a segment <small>seg_N.odbf: rows plus a column per indexed field; a query works on docid sets</small></h1>
+<div class="row" style="align-items:flex-start;gap:26px">
+  <div class="group" style="width:470px"><div class="label">seg_7.odbf (immutable, memory-mapped)</div>
+    <div class="col">
+      <div class="box" style="text-align:left"><b>oids · versions · classIds</b><span>docid 0..N-1, sorted by OID; bloom filter on OIDs</span></div>
+      <div class="box" style="text-align:left;border-color:var(--ok)"><b class="ok">rows</b><span>the full encoded objects: primary storage</span></div>
+      <div class="box" style="text-align:left;border-color:var(--cyan)"><b class="cyan">column "city" (indexed field)</b><span>dict: sorted distinct values<br>ord: bit-packed value number per docid<br>post: one Roaring bitmap per value (few values)<br>sdoc: docids sorted by value (many values)<br>null: Roaring bitmap</span></div>
+      <div class="box" style="text-align:left"><b>$type</b><span>a Roaring bitmap per class (polymorphism)</span></div>
+    </div>
+  </div>
+  <div class="col" style="width:880px">
+    <div class="box" style="text-align:left"><b>query</b><span><code>city = 'Perth' AND age BETWEEN 30 AND 40 ORDER BY age LIMIT 10</code></span></div>
+    <div class="down">↓</div>
+    <div class="row" style="gap:10px;align-items:stretch">
+      <div class="box" style="width:200px"><b>live</b><span>docids alive at the snapshot<br>(minus delete log)</span></div>
+      <div class="arrow">∧</div>
+      <div class="box" style="width:200px"><b>city = 'Perth'</b><span>dict binary search<br>→ post[o]</span></div>
+      <div class="arrow">∧</div>
+      <div class="box" style="width:220px"><b>age in [30, 40]</b><span>dict → ordinal range<br>→ scan ord of candidates</span></div>
+    </div>
+    <div class="down">↓</div>
+    <div class="row" style="gap:10px;align-items:stretch">
+      <div class="box" style="width:300px"><b>top 10 by age</b><span>walk the age index in value order,<br>stop at 10 matches</span></div>
+      <div class="arrow">→</div>
+      <div class="box" style="width:300px;border-color:var(--ok)"><b class="ok">decode 10 rows</b><span>only the results are materialized;<br>count / group-by decode none</span></div>
+    </div>
+  </div>
+</div>
+</div></body></html>

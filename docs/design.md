@@ -1,6 +1,8 @@
 # Kookaburra: Embedded Object Database Design
 
 > Status: **living document**, updated together with the code. See [§20 Changelog](#20-changelog).
+>
+> Related: [storage-design.md](storage-design.md) (segments, write path, compaction, recovery, backup) · [transaction-design.md](transaction-design.md) (transactions) · [developer-guide.md](developer-guide.md) (build, test, conventions)
 
 ---
 
@@ -214,11 +216,13 @@ flowchart LR
 | Annotation | On | Rule | Violation |
 |---|---|---|---|
 | `@Unique` | scalar field (also inside `@Embeddable`, not in embedded lists) | no two live objects of the declaring class and its subclasses share a non-null value; nulls never conflict; decimals compare numerically | `ConstraintViolationException(UNIQUE)` |
+| `@Unique(fields = {…}, name)` | entity class, repeatable | no two live objects share the **combination** of values; an object with a null in any of the fields is not compared (SQL, PostgreSQL default); paths may be dotted (`place.city`) and declared in superclasses; the first field is indexed when none is | as above, `field()` = the paths |
 | `@ForeignKey(onDelete)` | `Ref<T>`, `List / Set<Ref<T>>` (also inside `@Embeddable`) | every non-null reference points at a live `T` (or subclass) | `ConstraintViolationException(FOREIGN_KEY)` |
 | `onDelete = RESTRICT` (default) | target deleted | the delete fails while referrers exist | as above |
 | `onDelete = CASCADE` | target deleted | referrers deleted in the same commit, recursively | none |
 | `onDelete = SET_NULL` | target deleted | `Ref` cleared, collection element removed; referrer gets a new version | none |
 
+- Composite constraints are stored per class (`ClassDef.uniques`, schema format 3) and checked with the same lookup on their first indexed path; candidates are compared on every path.
 - Both imply `@Index(AUTO)`: checks are point lookups (index candidates confirmed with `find(oid, seq)`), cost follows the matches, not the collection size.
 - Checked on the sequencer when the write commits (§6.5), against the latest state plus the batch's own writes: a batch may swap two unique values, insert a target and its referrer together, or delete a referrer and its target together. Inside a transaction the checks are deferred to `commit()` (like `DEFERRABLE INITIALLY DEFERRED`).
 - Cascaded deletes and cleared references are appended to the batch: one WAL record, one sequence number, replayed as logged. They are storage-level (like SQL): no lifecycle callbacks.
@@ -240,197 +244,28 @@ flowchart LR
 
 ## 4. Directory Layout
 
-```
-db/
-├─ LOCK                          single-process lock
-├─ CURRENT                       → commit_N
-├─ commit_N                      collections → [segment id, del gen], walSeq, schemaVersion
-├─ schema/
-│  └─ schema_V                   all classes, fields, class ids, hierarchy, constraints (format KKBSCH02; 01 still read)
-├─ wal/
-│  └─ wal_<firstSeq>.log
-└─ col/<collection>/
-   ├─ seg_<id>.odbf              immutable segment data file (≤ 1.5 GB; "object database file")
-   └─ seg_<id>_<gen>.del         delete bitmap (Roaring), generation <gen>
-```
+Moved to [storage-design.md §3](storage-design.md#3-directory-layout).
+
+- One directory per database, `LOCK`, `CURRENT` → `commit_N`, `schema/`, `wal/`, `col/<collection>/seg_N.odbf` + `.del` generations.
+- Atomic file writes: `*.tmp`, fsync, rename, directory fsync.
 
 ---
 
 ## 5. Segment Format
 
-### 5.1 Layout
+Moved to [storage-design.md §4](storage-design.md#4-segment-format) (layout, encodings, index kinds, row encoding) and [§5](storage-design.md#5-where-roaringbitmap-is-used) (RoaringBitmap usage).
 
-One segment = one file = rows of one collection, **sorted by OID**, docid = `0..N-1` (int). Little-endian. Every section has a CRC32C.
-
-```
-seg_<id>.odbf   (little-endian, sections 8-byte aligned)
-┌────────────────────────────────────────────────────────────┐
-│ header      magic "KKBSEG01" (8) · format (4) · pad (4)    │
-├────────────────────────────────────────────────────────────┤
-│ oids        long[N] sorted          versions  long[N]      │
-│ classIds    int[N]                                         │
-├────────────────────────────────────────────────────────────┤
-│ row offsets long[N+1] · rows (RecordCodec bytes)           │  ← primary storage
-├────────────────────────────────────────────────────────────┤
-│ bloom       long[bits/64] (OIDs, double hashing)           │
-│ $type       per class id: ImmutableRoaringBitmap           │  ← polymorphism
-├────────────────────────────────────────────────────────────┤
-│ column <path> × K                                          │
-│   ├─ dict   LONG: long[card] · FIXED128: (sec,nano)[card]  │
-│   │         STRING: int offsets[card+1] · UTF-8 data       │
-│   ├─ ord    bit-packed (ordinal+1, 0 = null), +8 B pad     │  single-valued
-│   ├─ multi  int offsets[N+1] · int ordinals[]              │  multi-valued
-│   ├─ post   long offsets[card+1] · Roaring per ordinal     │  BITMAP / AUTO(card ≤ N/16)
-│   ├─ sdoc   int start[card+1] · int docs[non-null]         │  single-valued without post
-│   └─ null   Roaring                                        │
-├────────────────────────────────────────────────────────────┤
-│ footer      N, OID min/max, section offsets, per column:   │
-│             path, value type, multi, enum constants, card, │
-│             dict/ord/multi/post/sdoc/null offsets          │
-├────────────────────────────────────────────────────────────┤
-│ trailer     footerOffset (8) · crc32c(footer) (4) · magic  │
-└────────────────────────────────────────────────────────────┘
-```
-
-### 5.2 Encodings
-
-| Structure | Encoding | Access |
-|---|---|---|
-| dict (LONG) | sorted `long` keys: BOOL 0/1, INT, sortable FLOAT64 bits, epochDay, enum index, OID | binary search |
-| dict (FIXED128) | `(epochSecond UTC, nano)` pairs (DATETIME, INSTANT) | binary search |
-| dict (STRING) | v1: offsets + UTF-8, compared with `String.compareTo` (front coding: backlog) | binary search |
-| dict (DECIMAL) | offsets + `zigzag(scale) · two's-complement unscaled` per key, compared with `BigDecimal.compareTo` | binary search |
-| ord | `bits = bitsFor(card)`, stores ordinal+1 (0 = null), `pos = docid × bits`, +8 B padding | O(1) |
-| post | concatenated `ImmutableRoaringBitmap`s + offset table, `runOptimize()` before write | zero-copy slice |
-| sdoc | documents sorted by (value, docid): `start[ord] … start[ord+1]` (4 B / document) | O(1) slice per value / range |
-| null | one `ImmutableRoaringBitmap` | zero-copy |
-| row area | `int64` offsets + rows (§5.4) | O(1) |
-
-**Core property:** dict sorted ⇒ ordinal order = value order ⇒ filter / sort / group become integer & bitmap ops.
-
-### 5.3 Index kinds (`@Index(kind)`)
-
-| Kind | dict | ord | post | Best for |
-|---|:-:|:-:|:-:|---|
-| `AUTO` (default) | ✓ | ✓ | if `card ≤ N / 16`, else sdoc | let the segment builder decide |
-| `BITMAP` | ✓ | ✓ | ✓ | low-card: eq / in / group-count |
-| `ORDINAL` | ✓ | ✓ | sdoc | high-card: point lookup / range / sort |
-| `BSI` | – | – | bit slices | **reserved (backlog)**: numeric range / sum / top-K |
-
-### 5.4 Row encoding
-
-```
-row := varint classId · varint layoutId · nullBits[ceil(F/8)] · value*
-value := BOOL 1 B | INT32/INT64/DATE zig-zag varint | FLOAT64 8 B | STRING varint-len UTF-8
-       | DECIMAL zig-zag scale · varint-len unscaled bytes
-       | ENUM varint constant index | DATETIME/INSTANT zig-zag seconds + varint nanos | REF varint OID
-       | MULTI/EMBEDDED_LIST varint count · element* | EMBEDDED nullBits · value* | MAP count · (key · present? · value)*
-       | BYTES/OBJECT varint-len bytes
-```
-Canonical in-memory form = `Record(classId, layout, Object[] values)` (design §9.8 uses the same form for dynamic access).
-
-**Path-only decoding** (`RecordCodec.readPath`): an unindexed predicate or sort key reads one field; preceding fields are skipped in place using the null bits and value lengths, nothing is allocated for them.
-Codec per concrete class, generated once via `MethodHandle` / `VarHandle`, cached.
-
-### 5.5 RoaringBitmap usage
-
-| Where | Type | Purpose |
-|---|---|---|
-| segment post / null / $type | `ImmutableRoaringBitmap` over mapped slice | zero-deserialize |
-| `.del` files | serialized Roaring | deleted docids per segment |
-| query intermediates | `RoaringBitmap` | and / or / andNot, cardinality |
-| segment build, memtable snapshots | `RoaringBitmap` | build postings, `runOptimize()` |
+- Immutable file per segment, rows sorted by OID, docid = row number.
+- Indexed fields: sorted dictionary, bit-packed ordinals, Roaring postings or sorted docids (`AUTO`).
+- Rows: `RecordCodec`, path-only decoding.
 
 ---
 
 ## 6. Write Path
 
-### 6.1 Flow
+§6.1 to §6.4 moved to [storage-design.md §6](storage-design.md#6-write-path): flow, MemSegment, delete logs, flush and commit.
 
-Single **sequencer** thread (LevelDB-style). Callers encode objects → `Record` → bytes on their own threads; the sequencer only validates, sequences, logs and applies.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant C as Caller threads
-    participant Q as Write queue
-    participant S as Sequencer (1 thread)
-    participant L as WAL
-    participant M as MemSegments
-    participant V as visibleSeq
-    C->>C: entity → Record → row bytes (parallel)
-    C->>Q: WriteBatch (insert / update / delete, any collections)
-    S->>Q: drain up to N batches
-    S->>S: transaction: write conflicts, SERIALIZABLE read validation (§12.1)
-    S->>S: per op: validate version (latest state), assign OID / version / seq,<br/>locate old (segment, docid) or mem row
-    S->>S: integrity (§6.5): @Unique, @ForeignKey, ON DELETE actions (may append ops)
-    S->>L: append all records, one fsync (group commit)
-    S->>M: append rows, mark deletes, delete-log entries
-    S->>V: publish max seq (volatile)
-    S-->>C: complete futures (oid, version) / OptimisticLockException
-```
-
-- A failed op fails only its own `WriteBatch` (all-or-nothing); other batches in the same group proceed.
-- Cross-collection batches are atomic for free: one WAL record, one `visibleSeq` publish.
-- `Config.durability(ASYNC)`: complete before fsync.
-
-### 6.2 MemSegment (memtable)
-
-Append-only, single writer, lock-free readers. Rows are visible to snapshot `s` iff `seq ≤ s < deletedSeq`.
-
-```
-MemSegment (memdocid = append order)
- ├─ oids      long[]           ├─ seq        long[]
- ├─ deletedSeq long[] (MAX)    ├─ prevRow    int[]   version chain (same OID)
- ├─ rows      byte[][]         encoded rows
- ├─ latest    OID → memdocid   (ConcurrentHashMap)
- └─ columns   per indexed path:
-      ├─ values   primitive / key array (append-only)
-      └─ post     key → IntAppendList  (BITMAP / AUTO with low card)
-publish: writer writes arrays → volatile size → VisibilityTracker.visibleSeq
-```
-
-- Readers see prefix `[0, size)`; growth replaces arrays (copy-on-grow), old arrays stay valid.
-- Postings are materialized to `RoaringBitmap` on demand per query (memtable is small).
-- **No row decoding needed** for indexed filters / sorts on memtable.
-- Freeze at threshold (default 64 MB) → new active MemSegment; frozen ones flushed in background.
-
-### 6.3 Updates & deletes on segments: delete log (`SegmentDeletes`)
-
-```mermaid
-flowchart LR
-    U["update(oid) / delete(oid)"] --> LOC{"old version in?"}
-    LOC -- MemSegment --> MD["deletedSeq[memdocid] = seq"]
-    LOC -- "segment S" --> DL["DeleteLog.append(seq, S, docid)"]
-    DL --> Q["query on S @ snapshot s:<br/>del = persisted(S, gen) ∪ log[0..len(s)) for S"]
-    DL --> FL["flush / commit:<br/>write seg_S_(gen+1).del, truncate log"]
-```
-
-- One `SegmentDeletes` per segment: persisted base bitmap + append-only `(seq, docid)` log; a snapshot sees entries with `seq <= snapshot`.
-- The bitmap for the newest prefix is cached and extended incrementally; the sequencer keeps a separate "latest" bitmap for validation.
-- No file I/O per update: `.del` generations are written at commit time.
-
-### 6.4 Flush & commit
-
-```mermaid
-sequenceDiagram
-    participant S as Sequencer
-    participant F as Flush thread
-    participant D as Storage
-    S->>S: active MemSegment ≥ memSegmentBytes → frozen (flushSeq = its last seq)
-    S->>F: after the group is published: build(job)
-    F->>F: rows live at flushSeq, sorted by OID → SegmentWriter
-    F->>D: seg_<id>.odbf (tmp → fsync → rename → fsync dir), mmap
-    F->>S: install task
-    S->>S: carry over deletes on the frozen rows with seq > flushSeq → segment delete log
-    S->>S: replace MemSegment by segment → new Version
-    S->>D: .del generations for segments with new deletes; commit_N+1; CURRENT
-    S->>D: rotate WAL; delete files no longer referenced (except segments being built)
-```
-
-- `commit_N` stores, per collection, `walSeq` = (first seq still only in MemSegments) − 1; recovery replays WAL ops of that collection with `seq > walSeq` only (collections share one WAL).
-- Commit also stores per-class OID high-water marks and the next segment id.
-- `ObjectDB.flush()` freezes every non-empty active MemSegment and waits for the installs.
+- One sequencer thread, WAL with group commit, MemSegment, background flush into segments.
 
 ### 6.5 Integrity checks
 
@@ -449,46 +284,17 @@ Failure rejects the whole batch (nothing logged); appended ops are logged, appli
 
 ## 7. MVCC: Versions & Snapshots
 
-```mermaid
-flowchart TB
-    subgraph V1["Version v1 (old, ref-counted)"]
-        direction LR
-        A1["M2 active"] --- F1["M1 frozen"] --- S2a["seg 2"] --- S1a["seg 1 @ del gen 3"]
-    end
-    subgraph V2["Version v2 (current), after M1 flushed"]
-        direction LR
-        A2["M2 active"] --- S3["seg 3 (= M1)"] --- S2b["seg 2"] --- S1b["seg 1 @ del gen 4"]
-    end
-    SN1["Snapshot A = (v1, seq 100)"] --> V1
-    SN2["Snapshot B = (v2, seq 180)"] --> V2
-    V1 -. "flush M1 + commit" .-> V2
-```
+Moved to [storage-design.md §7](storage-design.md#7-versions-and-snapshots-mvcc).
 
-- `Version` = immutable list of segment views per collection + delete-log references. Like LevelDB's `Version`.
-- `Snapshot = (Version, visibleSeq)`; acquiring = ref-count++, no locks.
-- Segment files are unmapped and deleted when no `Version` references them.
-- Query snapshot is **late-bound**: taken at terminal operation start unless an explicit `Snapshot` is used.
+- `Snapshot = (Version, visibleSeq)`, immutable `Version`, late-bound query snapshots.
 
 ---
 
 ## 8. Point Lookup
 
-```mermaid
-flowchart TD
-    G["get(Class, oid) @ snapshot s"] --> CL["classId → collection"]
-    CL --> MM{"MemSegments newest → oldest:<br/>latest[oid] → walk prevRow chain<br/>to first row with seq ≤ s"}
-    MM -- found --> VIS{"deletedSeq > s?"}
-    VIS -- yes --> DEC["decode row"]
-    VIS -- no --> NULL["null (deleted)"]
-    MM -- "not found" --> SG{"segments newest → oldest:<br/>bloom → OID binary search"}
-    SG -- hit --> DD{"in del bitmap @ s?"}
-    DD -- no --> DEC
-    DD -- yes --> NULL
-    SG -- miss --> NULL
-    DEC --> TYPE{"instance of Class?"}
-    TYPE -- yes --> R["return object"]
-    TYPE -- no --> NULL
-```
+Moved to [storage-design.md §8](storage-design.md#8-point-lookup-getoid).
+
+- MemSegments newest first (version chain), then segments (bloom, OID binary search, delete bitmap).
 
 ---
 
@@ -929,52 +735,23 @@ Full design: **[transaction-design.md](transaction-design.md)** (implemented 202
 
 ## 13. Compaction
 
-```mermaid
-flowchart LR
-    T["after each install: oldest run of fanIn adjacent segments<br/>in the same size tier (tier = log_fanIn(size / (memSegmentBytes/4)))"] --> R["flush thread: rows live at baseSeq,<br/>sorted by OID → SegmentWriter (current columns)"]
-    R --> I["sequencer: deletes with seq > baseSeq on the inputs<br/>→ remapped by OID into the merged delete log"]
-    I --> V["merged segment takes the position of the newest input<br/>(age order preserved) → new Version, commit"]
-    V --> X["input files deleted by cleanup"]
-```
+Moved to [storage-design.md §10](storage-design.md#10-compaction).
 
-- **Reclaiming deletes** (like Lucene `deletesPctAllowed`, RocksDB deletion-triggered compaction): when no tier run is due, segments without any live row are **dropped** (no rewrite, files deleted by cleanup), otherwise the segment with the most garbage is rewritten on its own once `deleted / rows ≥ compaction-garbage-ratio` (default 0.3). This covers segments that never meet a tier partner (alone in their tier, or above `segmentMaxBytes`).
-- `ObjectDB.compact()`: flush, wait for flushes and merges already running, then repeatedly merge all idle adjacent segments up to `segmentMaxBytes` and rewrite every segment that still has deleted rows; afterwards no segment holds deleted rows.
-- `ObjectDB.flush()` also waits for flushes started earlier by the size threshold (it returns when nothing is left in frozen MemSegments).
-- Merges rebuild columns from the current schema, so newly added indexes cover old data after a merge.
-- Old snapshots may still read input segments: on POSIX the unlinked files stay mapped until the `MappedFile` is garbage-collected (reference counting: backlog).
-- **Back-pressure**: writer threads wait (≤ 30 s) while frozen MemSegments + pending merges exceed `maxSegments / 8 + 2`; the sequencer itself never blocks on it (install tasks run on it).
-
-Limits: segment ≤ 1.5 GB (single `MappedByteBuffer` on JDK 17). A segment is built in a heap buffer before it is written: peak heap of a flush / merge ≈ the segment size (`segment-max-bytes`, default 512 MB); a streaming writer is in the backlog.
+- Size tiers (`compaction-fan-in`), garbage-driven rewrites (`compaction-garbage-ratio`), `compact()`, back-pressure.
 
 ---
 
 ## 14. File I/O
 
-```java
-final class MappedFile implements AutoCloseable {          // heap(byte[]) for in-memory DBs, map(Path) on disk
-    long size();  long getLong(long pos);  int getInt(long pos);  byte getByte(long pos);
-    ByteBuffer slice(long pos, int len);   // Roaring, dictionaries, rows
-    byte[] bytes(long pos, int len);
-}
-```
+Moved to [storage-design.md §11](storage-design.md#11-file-io).
 
-| Runtime | Impl | Unmap |
-|---|---|---|
-| JDK 17–21 | `MappedByteBuffer` (one per file ≤ 1.5 GB) | `Unsafe.invokeCleaner` (`jdk.unsupported`), else GC |
-| JDK 22+ (MR-JAR, backlog) | `MemorySegment` + `Arena.ofShared()` | `arena.close()` |
-
-All buffers `LITTLE_ENDIAN`. OS page cache does caching; heap holds footers, dict block indexes, offset tables.
+- `MappedFile` over memory-mapped files (heap in memory mode), little-endian.
 
 ## 15. Recovery
 
-1. Acquire `LOCK` (`FileChannel.tryLock`); load the newest `schema_V`; read `CURRENT` → `commit_N`.
-2. Map segments, load their `.del` generation → initial `Version`; delete files not referenced by the commit (orphans of interrupted flushes, `.tmp` files).
-3. Replay all WAL files in order; per op skip if `seq <= walSeq(collection)`; re-resolve old locations, rebuild MemSegments and delete logs. Outcomes (OIDs, versions) come from the log: no re-validation.
-4. A torn or corrupt tail (length / CRC) ends the log; the file is truncated there.
-5. Start the sequencer on a new WAL file `wal_<lastSeq+1>.log`.
+Moved to [storage-design.md §12](storage-design.md#12-recovery).
 
-WAL record: `len(4) · crc32c(4) · seq(8) · payload`, payload = ops `(INSERT oid row | UPDATE oid version row | DELETE oid applied)`.
-Storage is behind an interface: `MemoryStorage` (heap segments, nothing persisted) and `DiskStorage`.
+- Commit file, orphan cleanup, WAL replay from per-collection replay points, torn tail truncated.
 
 ### 15.1 Logging
 
@@ -995,9 +772,9 @@ Storage is behind an interface: `MemoryStorage` (heap segments, nothing persiste
 
 ### 15.2 Online backup
 
-![Online backup](assets/backup.png)
+Moved to [storage-design.md §13](storage-design.md#13-online-backup).
 
-`db.backup(target)` writes the live objects of one MVCC snapshot into a new or empty directory: per collection a k-way merge by OID over every view (segments are OID-sorted, MemSegment rows are sorted first), written as fresh segments of about `2 × mem-segment-bytes` of rows, plus the schema and a commit (`lastSeq` = snapshot, OID counters read after the snapshot). Writers are not blocked; old versions and deleted rows are not copied. Works for in-memory databases (backup to disk). Restore = open the directory. Returns `BackupInfo(path, seq, objects, segments, bytes, millis)`.
+- `db.backup(target)`: one snapshot exported into fresh segments, writers not blocked, returns `BackupInfo`.
 
 ---
 
@@ -1112,7 +889,7 @@ Independent desktop application: module / jar **`kookaburra-face`** (own launche
 | Platforms | one jar for **Windows x64, Linux x64, macOS Apple Silicon** (JavaFX natives of all three; `.dll` / `.so` / `.dylib` do not collide); Intel Mac / Linux ARM: `-Djavafx.mac=mac` / `-Djavafx.linux=linux-aarch64`. Needs a Java 17+ runtime; starts with a double-click (`Launcher`, `StudioApplication`). Verified: macOS aarch64 (double-click), Linux x86_64 (Docker + Xvfb) |
 | Logging | logback, see §15.1 |
 | Start-up | splash (logo, Studio + core version, loading bar) for ≥ 1.2 s while the main window is built, then fades out |
-| UI tests | TestFX 4.0.18 + Monocle 17.0.10, headless (software rendering); `StudioNestedTest` / `StudioMultiDbTest` run in memory and on disk; `TutorialRecorder` (not in the regular run) records the tutorial frames; screenshots → `target/screenshots`, published copies in `docs/assets/studio-*.png`; boundary suite `StudioEdgeCaseTest`; `-P visible` replays it on the real display with pauses |
+| UI tests | TestFX 4.0.18 + Monocle 17.0.10, headless (software rendering); `StudioNestedTest` / `StudioMultiDbTest` run in memory and on disk; `TutorialRecorder` (not in the regular run; `-P tutorial`) records Studio clicks and code slides and renders the tutorial video with `TutorialVideo` (mouse cursor, cross-fades, subtitles, music, poster); screenshots → `target/screenshots`, published copies in `docs/assets/studio-*.png`; boundary suite `StudioEdgeCaseTest`; `-P visible` replays it on the real display with pauses |
 
 ### 17.1 Layout
 
@@ -1198,7 +975,7 @@ DB calls never run on the FX thread; long queries are cancellable.
 ```
 kookaburra/
 ├─ docs/                         GitHub Pages: index.html (landing page), design.html (renders design.md), design.md,
-│                                 benchmark-10m.md, transaction-design.md (draft), blogger/ (zh, en, medium), assets/ (logo, screenshots, diagrams), .nojekyll
+│                                 benchmark-10m.md, storage-design.md, transaction-design.md, developer-guide.md, blogger/ (zh, en, medium), assets/ (logo, screenshots, diagrams), .nojekyll
 ├─ README.md                     English overview: features, quick start, examples, configuration, performance
 ├─ kookaburra.properties         the single settings file (bundled into kookaburra-core as defaults)
 ├─ bin/                          Studio distribution (built, not versioned): kookaburra-face.jar, scripts, logs/, data/
@@ -1247,7 +1024,6 @@ kookaburra/
 - [ ] Column overlay for hot single-field updates
 - [ ] Streaming segment writer (peak heap of flush / merge = segment size today)
 - [ ] Transactions roadmap ([transaction-design.md](transaction-design.md) §2): per-transaction durability, transaction metrics; optional extensions only (no Spring / JPA integration planned; no savepoints: T13)
-- [ ] Composite unique constraints (`@Unique` on several fields)
 - [ ] Studio `jpackage` installers with a bundled runtime
 - [ ] `@Renamed`, element-correlated embedded collections
 
@@ -1311,11 +1087,15 @@ kookaburra/
 | D52 | READ COMMITTED = fresh snapshot per statement, conflicts relative to the statement that read the object | PostgreSQL / Oracle default semantics; long transactions abort less |
 | D53 | Lifecycle callbacks with JPA semantics: PRE at the call, POST after the durable commit, skipped for bulk OQL / by-OID / dynamic writes | familiar to JPA users; no callback runs for a write that never commits |
 | D54 | Online backup = export of one snapshot into fresh compacted segments (not a file copy) | consistent without pausing writers, works for in-memory databases, the copy is compact and immediately openable |
+| D55 | Composite unique constraints as repeatable class-level `@Unique(fields = …)`; nulls exempt | JPA `@Table(uniqueConstraints = …)` shape, SQL null semantics; one annotation for both forms |
 
 ## 20. Changelog
 
 | Date | Change |
 |---|---|
+| 2026-10-17 | Storage design split into [storage-design.md](storage-design.md) (§4, §5, §6.1 to §6.4, §7, §8, §13, §14, §15, §15.2 now link there); [developer-guide.md](developer-guide.md) added |
+| 2026-10-17 | Tutorial video as one run: `mvn -f kookaburra-face/pom.xml test -P tutorial` records and renders (`TutorialRecorder` + `TutorialVideo`, ffmpeg); visible mouse cursor with click rings; Studio first, then the API; covers constraints, isolation levels, backlinks and backup; `docs/tools/make-tutorial.sh` removed |
+| 2026-10-17 | Composite unique constraints: class-level repeatable `@Unique(fields = …, name = …)` (§3.6, D55), schema format 3, Studio constraint column |
 | 2026-10-17 | `BigDecimal` (DECIMAL, D49); `@Unique` and `@ForeignKey` with RESTRICT / CASCADE / SET_NULL and backlinks `referrers` (§3.6, §6.5, D50); READ COMMITTED and SERIALIZABLE (§12.1, D51, D52), `kookaburra.tx-isolation`, `inTransaction(TxOptions, …)`; lifecycle callbacks and `EntityListener` (§3.7, D53); online backup (§15.2, D54); schema file format 2; Studio: isolation menu, Backup, backlinks, constraint column, decimals; demo with unique e-mail / SKU, foreign keys and decimal prices; bench phases Integrity and backup |
 | 2026-10-16 | Studio: console scripts (`;`) and `BEGIN` / `START TRANSACTION` / `COMMIT` / `ROLLBACK` (D48, transaction-design T14), toolbar **Flush**; `bin/data` re-seeded with the nested demo; savepoints dropped from the roadmap (T13) |
 | 2026-10-15 | Tutorial video (2:33, English subtitles, original synthesised BGM): `TutorialRecorder` drives Studio and renders frames, `docs/tools/make-tutorial.sh` (ffmpeg: crossfades, libass subtitles, loudnorm) → `docs/assets/kookaburra-tutorial.mp4`, played on the website; 10 M benchmark re-run (§16.1) |
