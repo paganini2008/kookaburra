@@ -141,7 +141,7 @@ class MetamodelProcessorTest {
                             Boolean bo; Short sh; Byte by; Character ch; Long lo; Double db; Float fl; float f; byte b; char c; short s;
                             LocalDateTime ldt; Instant in; List raw; List<? extends Number> wild; List<Emb> embs;
                             Map<String, Integer> map; byte[] bytes; Optional<String> opt; com.github.kookaburra.Ref raw2;
-                            Set<List<String>> nested;
+                            Set<List<String>> nested; float[] vec; double[] doubles;
                         }
                         """,
                 "Top.java", "@com.github.kookaburra.annotation.Entity public class Top { @com.github.kookaburra.annotation.Id long id; String n; }"));
@@ -156,7 +156,8 @@ class MetamodelProcessorTest {
                 .containsEntry("c", "IntField").containsEntry("s", "IntField").containsEntry("ldt", "ComparableField")
                 .containsEntry("in", "ComparableField").containsEntry("raw", "ObjectField").containsEntry("wild", "ObjectField")
                 .containsEntry("embs", "ObjectField").containsEntry("map", "ObjectField").containsEntry("bytes", "ObjectField")
-                .containsEntry("opt", "ObjectField").containsEntry("raw2", "RefField").containsEntry("nested", "ObjectField");
+                .containsEntry("opt", "ObjectField").containsEntry("raw2", "RefField").containsEntry("nested", "ObjectField")
+                .containsEntry("vec", "VectorField").containsEntry("doubles", "ObjectField");
         assertThat(loader.loadClass("Top_").getField("n").get(null).getClass().getSimpleName()).isEqualTo("StringField");
     }
 

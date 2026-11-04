@@ -6,11 +6,11 @@
 
 **Kookaburra**: *query Java objects like a database, right inside your application.*
 
-An **embedded object database for Java 17+**. Annotated classes in, type-safe chained queries or SQL-style **OQL** out, answered from indexes in milliseconds. Transactions at three isolation levels, unique and foreign-key constraints, exact decimals, online backup, and a desktop tool, **Kookaburra Studio**.
+An **embedded object database for Java 17+**. Annotated classes in, type-safe chained queries or SQL-style **OQL** out, answered from indexes in milliseconds. Transactions at three isolation levels, unique and foreign-key constraints, exact decimals, vector search, online backup, and a desktop tool, **Kookaburra Studio**.
 
 ![Kookaburra Studio](https://paganini2008.github.io/kookaburra/assets/studio-data.png)
 
-**Video tutorial (2:57, English subtitles)**:
+**Video tutorial (2:56, English subtitles)**:
 
 <video controls preload="metadata" playsinline width="100%" poster="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial-poster.jpg">
   <source src="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4" type="video/mp4">
@@ -65,7 +65,7 @@ try (ObjectDB db = ObjectDB.open(Path.of("data"))) {
 [Hyperion, Neuromancer]
 ```
 
-Studio: `mvn -f kookaburra-face/pom.xml -P dist package`, then double-click `bin/kookaburra-face.jar`.
+Studio: download the latest version, installers bring their own Java: [Windows](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-windows-x64.msi) · [macOS Apple silicon](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-macos-arm64.dmg) · [macOS Intel](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-macos-x64.dmg) · [Linux](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-linux-x64.deb) · [jar for Java 17+](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio.jar). Any database directory opens with **Open database…**.
 
 ## 4. Requirements
 
@@ -74,7 +74,7 @@ Studio: `mvn -f kookaburra-face/pom.xml -P dist package`, then double-click `bin
 | Java | 17+ |
 | Runtime dependencies | RoaringBitmap 1.6.22, ANTLR 4.13.2 runtime, SLF4J API 2.0 |
 | Build | Maven 3.8+ |
-| Studio | Java 17+; one jar for Windows x64, Linux x64 and macOS Apple Silicon (JavaFX bundled) |
+| Studio | installers with their own Java runtime for Windows x64, macOS (Apple silicon, Intel), Linux x64; or the jar on Java 17+ |
 
 Supported field types: `boolean`, all integer types, `float` / `double`, **`BigDecimal`**, `String`, enums, `LocalDate` / `LocalDateTime` / `Instant`, `Ref<T>`, lists and sets of these, `@Embeddable` classes (and lists / maps of them), `Map`, `byte[]`, any `Serializable`.
 
@@ -187,11 +187,30 @@ db.oql("SELECT s.code FROM Shipment s WHERE 'kiwi' MEMBER OF s.items.sku").list(
 db.insert(new Document("scan", text, Files.readAllBytes(Path.of("scan.png"))));        // MiB-sized values
 ```
 
-**In Studio**: backlinks of the selected object, constraints of every field, nested values as a tree.
+**Example 7: vector search (embeddings)**
+
+```java
+@Vector(dim = 384) float[] embedding;                         // in the entity; cosine by default
+
+List<Doc> top = db.query(Doc.class).where(Doc::getLang).eq("en")
+        .nearest(Doc::getEmbedding, queryVector, 10).list();  // filter first, then the 10 closest
+```
+```sql
+SELECT d.title, cosine_distance(d.embedding, :q) AS dist FROM Doc d ORDER BY dist LIMIT 10
+```
+
+| Search | Time |
+|---|---|
+| top 10 of 100,000 vectors (384 dims), exact | about 35 ms |
+| same with a filter that keeps 1 % | about 1 ms |
+
+**In Studio**: the objects referencing the selected one, the constraints of every field, nested values as a tree, and a **Stats dashboard** with live write and transaction rates. The demo database has product embeddings to try vector search in the console (`ORDER BY cosine_distance(p.embedding, '[1, 0, 0, 0]')`).
 
 ![Backlinks in Studio](https://paganini2008.github.io/kookaburra/assets/studio-backlinks.png)
 
 ![Constraints in Studio](https://paganini2008.github.io/kookaburra/assets/studio-constraints.png)
+
+![Stats dashboard in Studio](https://paganini2008.github.io/kookaburra/assets/studio-stats.png)
 
 ## 7. Configuration
 

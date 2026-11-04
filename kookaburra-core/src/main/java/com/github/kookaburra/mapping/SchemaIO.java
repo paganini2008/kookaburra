@@ -26,7 +26,9 @@ public class SchemaIO {
     /** Format 2 (2026-10-16): every field also stores {@code unique} and its {@code @ForeignKey} action. */
     private static final long MAGIC_V2 = 0x4B4B4253_43483032L;   // "KKBSCH02"
     /** Format 3 (2026-10-17): every class also stores its class-level unique constraints (field combinations). */
-    private static final long MAGIC = 0x4B4B4253_43483033L;      // "KKBSCH03"
+    private static final long MAGIC_V3 = 0x4B4B4253_43483033L;   // "KKBSCH03"
+    /** Format 4 (2026-11-04): every type also stores its vector dimension. */
+    private static final long MAGIC = 0x4B4B4253_43483034L;      // "KKBSCH04"
 
     private SchemaIO() {
     }
@@ -81,11 +83,11 @@ public class SchemaIO {
         try {
             DataInputStream head = new DataInputStream(new ByteArrayInputStream(file));
             long magic = head.readLong();
-            if (magic != MAGIC && magic != MAGIC_V2 && magic != MAGIC_V1) {
+            int format = magic == MAGIC ? 4 : magic == MAGIC_V3 ? 3 : magic == MAGIC_V2 ? 2 : magic == MAGIC_V1 ? 1 : 0;
+            if (format == 0) {
                 throw new SchemaException("not a schema file");
             }
-            boolean v2 = magic != MAGIC_V1;
-            boolean v3 = magic == MAGIC;
+            boolean v3 = format >= 3;
             CRC32C crc = new CRC32C();
             crc.update(file, 8, file.length - 12);
             int stored = new DataInputStream(new ByteArrayInputStream(file, file.length - 4, 4)).readInt();
@@ -106,7 +108,7 @@ public class SchemaIO {
                 int nl = in.readInt();
                 List<Layout> layouts = new ArrayList<>(nl);
                 for (int j = 0; j < nl; j++) {
-                    layouts.add(new Layout(in.readInt(), readFields(in, v2)));
+                    layouts.add(new Layout(in.readInt(), readFields(in, format)));
                 }
                 List<UniqueDef> uniques = new ArrayList<>();
                 int nu = v3 ? in.readInt() : 0;
@@ -138,7 +140,8 @@ public class SchemaIO {
         }
     }
 
-    private static List<FieldDef> readFields(DataInputStream in, boolean v2) throws IOException {
+    private static List<FieldDef> readFields(DataInputStream in, int format) throws IOException {
+        boolean v2 = format >= 2;
         int n = in.readInt();
         List<FieldDef> fields = new ArrayList<>(n);
         for (int i = 0; i < n; i++) {
@@ -146,7 +149,7 @@ public class SchemaIO {
             String index = readNullable(in);
             boolean unique = v2 && in.readBoolean();
             String onDelete = v2 ? readNullable(in) : null;
-            fields.add(new FieldDef(name, readType(in, v2), index == null ? null : IndexKind.valueOf(index), unique,
+            fields.add(new FieldDef(name, readType(in, format), index == null ? null : IndexKind.valueOf(index), unique,
                     onDelete == null ? null : OnDelete.valueOf(onDelete)));
         }
         return fields;
@@ -169,9 +172,10 @@ public class SchemaIO {
         }
         writeFields(out, t.fields());
         out.writeBoolean(t.set());
+        out.writeInt(t.dim());
     }
 
-    private static TypeDef readType(DataInputStream in, boolean v2) throws IOException {
+    private static TypeDef readType(DataInputStream in, int format) throws IOException {
         ValueType kind = ValueType.valueOf(in.readUTF());
         String name = readNullable(in);
         int nc = in.readInt();
@@ -179,10 +183,11 @@ public class SchemaIO {
         for (int i = 0; i < nc; i++) {
             constants.add(in.readUTF());
         }
-        TypeDef element = in.readBoolean() ? readType(in, v2) : null;
-        TypeDef key = in.readBoolean() ? readType(in, v2) : null;
-        List<FieldDef> fields = readFields(in, v2);
-        return new TypeDef(kind, name, constants, element, key, fields, in.readBoolean());
+        TypeDef element = in.readBoolean() ? readType(in, format) : null;
+        TypeDef key = in.readBoolean() ? readType(in, format) : null;
+        List<FieldDef> fields = readFields(in, format);
+        boolean set = in.readBoolean();
+        return new TypeDef(kind, name, constants, element, key, fields, set, format >= 4 ? in.readInt() : 0);
     }
 
     private static void writeNullable(DataOutputStream out, String s) throws IOException {

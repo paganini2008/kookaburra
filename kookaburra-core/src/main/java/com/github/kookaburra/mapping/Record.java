@@ -160,6 +160,9 @@ public final class Record {
         if (a instanceof byte[] x && b instanceof byte[] y) {
             return Arrays.equals(x, y);
         }
+        if (a instanceof float[] x && b instanceof float[] y) {
+            return Arrays.equals(x, y);
+        }
         if (a instanceof List<?> x && b instanceof List<?> y) {
             if (x.size() != y.size()) {
                 return false;
@@ -199,6 +202,9 @@ public final class Record {
         }
         if (v instanceof byte[] b) {
             return Arrays.hashCode(b);
+        }
+        if (v instanceof float[] f) {
+            return Arrays.hashCode(f);
         }
         if (v instanceof List<?> l) {
             int h = 1;

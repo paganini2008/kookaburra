@@ -1,5 +1,6 @@
 package com.github.kookaburra.exec;
 
+import com.github.kookaburra.annotation.VectorDistance;
 import com.github.kookaburra.mapping.Canonical;
 import com.github.kookaburra.mapping.TypeDef;
 import org.roaringbitmap.RoaringBitmap;
@@ -11,6 +12,7 @@ import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.function.IntPredicate;
 import java.util.function.Predicate;
+import java.util.function.ToDoubleFunction;
 
 /**
  * Runs one planned query over the segment views of a snapshot (design §10).
@@ -99,6 +101,47 @@ public class Executor {
             return limit < 0 || out.size() < limit;
         });
         return out;
+    }
+
+    /** A match and its distance to the query vector. */
+    public record Near(Hit hit, double distance, long order) {
+    }
+
+    /**
+     * Exact k-nearest-neighbour search: the matches (filters applied first) ordered by the distance of their vector at
+     * {@code path} to {@code query}, closest first; ties and NaN (last) in storage order. Objects without a vector, or
+     * with one of another dimension, are left out. Top-N with a bounded heap when {@code limit >= 0}.
+     */
+    public List<Near> nearest(String path, float[] query, VectorDistance distance, long skip, long limit) {
+        long bound = limit < 0 ? -1 : skip + limit;
+        if (bound == 0) {
+            return List.of();
+        }
+        Comparator<Near> closest = Comparator.comparingDouble(Near::distance).thenComparingLong(Near::order);
+        PriorityQueue<Near> heap = new PriorityQueue<>(closest.reversed());
+        List<Near> all = new ArrayList<>();
+        ToDoubleFunction<float[]> to = distance.to(query);
+        List<SegmentView> views = views();
+        for (int vi = 0; vi < views.size(); vi++) {
+            SegmentView v = views.get(vi);
+            long base = (long) vi << 32;
+            matches(v).forEach((int d) -> {
+                if (value(v, d, path) instanceof float[] f && f.length == query.length) {
+                    Near n = new Near(new Hit(v, d), to.applyAsDouble(f), base | d);
+                    if (bound < 0) {
+                        all.add(n);
+                    } else if (heap.size() < bound) {
+                        heap.add(n);
+                    } else if (closest.compare(n, heap.peek()) < 0) {
+                        heap.poll();
+                        heap.add(n);
+                    }
+                }
+            });
+        }
+        all.addAll(heap);
+        all.sort(closest);
+        return all.subList((int) Math.min(skip, all.size()), all.size());
     }
 
     /** Matches ordered by {@code keys}; top-N with a bounded heap when {@code limit >= 0}. */

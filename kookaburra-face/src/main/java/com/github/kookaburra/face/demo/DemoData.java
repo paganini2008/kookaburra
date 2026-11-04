@@ -47,11 +47,13 @@ public class DemoData {
      * per customer (foreign keys: deleting a customer cascades to its purchases, a purchased product cannot be
      * deleted). Nested examples: customer
      * address with coordinates (two levels), contacts (map of embedded addresses), notes (long text), product photos
-     * (PNG), purchase lines (list of embedded objects with a nested price and a reference).
+     * (PNG), purchase lines (list of embedded objects with a nested price and a reference). Products carry a
+     * 4-dimensional embedding for vector search ({@code ORDER BY cosine_distance(p.embedding, '[1, 0, 0, 0]')}).
      */
     public static void fill(ObjectDB db, int customers, long seed) {
         Random r = new Random(seed);
         Random n = new Random(seed * 31 + 7);              // nested examples: separate stream, base values stay stable
+        Random v = new Random(seed * 17 + 3);              // embeddings: separate stream as well
         List<Long> customerOids = new ArrayList<>();
         try (WriteBatch b = db.batch()) {
             for (int i = 0; i < customers; i++) {
@@ -99,6 +101,7 @@ public class DemoData {
             p.sku = "SKU-" + (1000 + i);
             p.price = BigDecimal.valueOf(Math.round(r.nextDouble() * 50_000), 2);
             p.photo = photo(i, p.title);
+            p.embedding = embedding(i % 3, v);
             productOids.add(db.insert(p));
             prices.add(p.price);
         }
@@ -120,6 +123,18 @@ public class DemoData {
             }
             b.commit();
         }
+    }
+
+    /** Cluster centres on the axes {@code [reading, tech, home, outdoor]}: book, gadget, item. */
+    private static final float[][] CENTRES = {{0.9f, 0.1f, 0.1f, 0.2f}, {0.1f, 0.9f, 0.3f, 0.1f}, {0.1f, 0.2f, 0.8f, 0.4f}};
+
+    /** A product embedding: its cluster centre plus a little noise, rounded to two decimals (readable in the grid). */
+    static float[] embedding(int cluster, Random v) {
+        float[] e = new float[4];
+        for (int k = 0; k < 4; k++) {
+            e[k] = Math.round((CENTRES[cluster][k] + (float) v.nextGaussian() * 0.12f) * 100) / 100f;
+        }
+        return e;
     }
 
     private static Address address(int city, String street) {

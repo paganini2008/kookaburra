@@ -11,8 +11,8 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * {@link DatabaseStats} as rows for the Stats tab: one row per collection, and the counters as
- * (section, metric, value) rows.
+ * {@link DatabaseStats} for the Stats tab (dashboard): key figures, per-second rates between two samples, one
+ * row per collection, and the counters as (section, metric, value) rows.
  *
  * @Author: Fred Feng
  * @Date: 17/10/2026
@@ -88,6 +88,63 @@ public final class StatsRows {
         out.add(new Metric(mt, "pending flushes and merges", n(m.pending())));
         out.add(new Metric(mt, "backups", n(m.backups())));
         return out;
+    }
+
+    /** Per-second rates between two statistics of one open database (zeros without an earlier one). */
+    public record Rates(double inserts, double updates, double deletes, double commits, double txCommits, double conflicts) {
+
+        public static final Rates NONE = new Rates(0, 0, 0, 0, 0, 0);
+    }
+
+    /** Rates from {@code prev} to {@code cur}; NONE when {@code prev} is null, of another opening or not earlier. */
+    public static Rates rates(DatabaseStats prev, DatabaseStats cur) {
+        if (prev == null || !prev.openedAt().equals(cur.openedAt())) {
+            return Rates.NONE;
+        }
+        double secs = Duration.between(prev.takenAt(), cur.takenAt()).toNanos() / 1e9;
+        if (secs <= 0) {
+            return Rates.NONE;
+        }
+        DatabaseStats.Writes a = prev.writes();
+        DatabaseStats.Writes b = cur.writes();
+        DatabaseStats.Outcomes x = prev.transactions().total();
+        DatabaseStats.Outcomes y = cur.transactions().total();
+        return new Rates(rate(a.inserts(), b.inserts(), secs), rate(a.updates(), b.updates(), secs), rate(a.deletes(), b.deletes(), secs),
+                rate(a.batches(), b.batches(), secs), rate(x.committed(), y.committed(), secs), rate(x.conflicts(), y.conflicts(), secs));
+    }
+
+    private static double rate(long from, long to, double secs) {
+        return Math.max(0, to - from) / secs;
+    }
+
+    /** One key figure of the dashboard: caption, big value and a detail line. */
+    public record Tile(String id, String caption, String value, String detail) {
+    }
+
+    /** The key figures: objects, storage, commit rate, transactions, conflicts, background work. */
+    public static List<Tile> tiles(DatabaseStats s, Rates r) {
+        long unflushed = s.collections().stream().mapToLong(DatabaseStats.CollectionStats::memBytes).sum();
+        long unflushedRows = s.collections().stream().mapToLong(DatabaseStats.CollectionStats::memRows).sum();
+        int segments = s.collections().stream().mapToInt(DatabaseStats.CollectionStats::segments).sum();
+        DatabaseStats.Outcomes t = s.transactions().total();
+        long ended = t.committed() + t.rolledBack();
+        DatabaseStats.Maintenance m = s.maintenance();
+        return List.of(
+                new Tile("objects", "Objects", n(s.objects()), s.collections().size() + " collections"),
+                new Tile("storage", "Storage", Display.size(s.segmentBytes() + unflushed, "bytes"),
+                        segments + " segment files · " + n(unflushedRows) + " rows unflushed"),
+                new Tile("commits", "Commits / s", rate(r.commits()), n(s.writes().batches()) + " since open"),
+                new Tile("transactions", "Open transactions", n(s.transactions().active()),
+                        n(t.committed()) + " committed · " + n(t.rolledBack()) + " rolled back"),
+                new Tile("conflicts", "Conflicts", n(t.conflicts()),
+                        ended == 0 ? "no transaction ended yet" : String.format(Locale.ROOT, "%.1f %% of ended transactions", 100.0 * t.conflicts() / ended)),
+                new Tile("maintenance", "Pending flushes / merges", n(m.pending()),
+                        n(m.flushes()) + " flushes · " + n(m.compactions()) + " compactions"));
+    }
+
+    /** A rate with one decimal below 100, whole numbers above. */
+    static String rate(double v) {
+        return v < 100 ? String.format(Locale.ROOT, "%.1f", v) : String.format(Locale.ROOT, "%,.0f", v);
     }
 
     private static String n(long v) {

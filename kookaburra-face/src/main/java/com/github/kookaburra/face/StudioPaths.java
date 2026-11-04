@@ -11,7 +11,9 @@ import java.util.Map;
 /**
  * Studio settings and paths. All settings come from {@code kookaburra.properties} (bundled defaults, the file
  * next to the Studio jar, {@code -Dkookaburra.*}); the data directory can also be given as {@code --data=DIR}.
- * An empty {@code kookaburra.data} means {@code data/} next to the jar (the working directory outside a jar).
+ * An empty {@code kookaburra.data} means {@code data/} next to the jar (the working directory outside a jar). The
+ * installed app (native package, read-only program folder) uses {@code ~/Kookaburra} instead of the jar folder:
+ * {@code ~/Kookaburra/kookaburra.properties}, {@code ~/Kookaburra/data}, {@code ~/Kookaburra/logs}.
  *
  * @Author: Fred Feng
  * @Date: 11/10/2026
@@ -27,6 +29,8 @@ public class StudioPaths {
     public static final String DEMO_CUSTOMERS = "kookaburra.demo-customers";
     public static final String LOG_DIR = "kookaburra.log-dir";
     public static final String LOG_LEVEL = "kookaburra.log-level";
+    /** System property set by the launchers of native packages (jpackage). */
+    static final String APP_PATH = "jpackage.app-path";
 
     private static Map<String, String> settings;
 
@@ -80,8 +84,15 @@ public class StudioPaths {
                 || Files.exists(dir.resolve("LOCK")) && Files.isDirectory(dir.resolve("schema")) && Files.isDirectory(dir.resolve("wal"));
     }
 
-    /** Directory of the Studio jar, or the working directory. */
+    /** {@code ~/Kookaburra} for the installed app, else the directory of the Studio jar, or the working directory. */
     static Path home() {
+        return home(System.getProperty(APP_PATH), System.getProperty("user.home"));
+    }
+
+    static Path home(String appPath, String userHome) {
+        if (appPath != null && !appPath.isBlank()) {
+            return Path.of(userHome, "Kookaburra");
+        }
         try {
             Path code = Path.of(StudioPaths.class.getProtectionDomain().getCodeSource().getLocation().toURI());
             return code.toString().endsWith(".jar") ? code.getParent() : Path.of("").toAbsolutePath();

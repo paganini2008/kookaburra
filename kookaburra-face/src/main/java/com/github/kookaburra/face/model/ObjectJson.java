@@ -5,6 +5,7 @@ import com.github.kookaburra.dynamic.DynamicObject;
 import com.github.kookaburra.mapping.ClassDef;
 import com.github.kookaburra.mapping.FieldDef;
 import com.github.kookaburra.mapping.TypeDef;
+import com.github.kookaburra.mapping.Vectors;
 
 import java.time.temporal.Temporal;
 import java.math.BigDecimal;
@@ -103,6 +104,13 @@ public class ObjectJson {
         if (v instanceof byte[] b) {
             return Base64.getEncoder().encodeToString(b);
         }
+        if (v instanceof float[] f) {
+            List<Object> out = new ArrayList<>(f.length);
+            for (float x : f) {
+                out.add(x);
+            }
+            return out;
+        }
         if (v instanceof Map<?, ?> m) {
             Map<String, Object> out = new LinkedHashMap<>();
             m.forEach((k, x) -> out.put(String.valueOf(k), out(x)));
@@ -199,6 +207,8 @@ public class ObjectJson {
                 throw new IllegalArgumentException(where + ": expected an OID number");
             case FLOAT64:
                 return v instanceof BigDecimal d ? (Object) d.doubleValue() : v;   // JSON decimals parse exactly
+            case VECTOR:
+                return Vectors.canonical(t, v, where);                              // checked here: the editor stays open
             default:
                 return v;
         }

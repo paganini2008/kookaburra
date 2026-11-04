@@ -161,7 +161,7 @@ footer .sp { margin-left: auto; }
     <video class="video" controls preload="metadata" playsinline width="1920" height="1080"
            poster="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial-poster.jpg">
       <source src="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4" type="video/mp4">
-      <a href="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4">Download the tutorial (MP4, 2:57)</a>
+      <a href="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4">Download the tutorial (MP4, 2:56)</a>
     </video>
   </div>
 </section>
@@ -194,6 +194,7 @@ footer .sp { margin-left: auto; }
     <div class="grid g4">
       <div class="card"><div class="ico">🧭</div><h3>Type-safe chained queries</h3><p><code>query(Book.class).where(Book::getYear).ge(1960).list()</code> or the generated <code>Book_</code> metamodel. Refactoring-safe.</p></div>
       <div class="card"><div class="ico">⚡</div><h3>Indexes</h3><p>Index the fields you filter, sort and group by: milliseconds on 10 M objects.</p></div>
+      <div class="card"><div class="ico">🎯</div><h3>Vector search</h3><p><code>float[]</code> embeddings with <code>@Vector</code>; <code>nearest(...)</code> by cosine, L2 or inner product, after your filters.</p></div>
       <div class="card"><div class="ico">🔤</div><h3>OQL</h3><p>SELECT / UPDATE / DELETE with the SQL-92 core: CASE, LIKE, DISTINCT, GROUP BY … HAVING.</p></div>
       <div class="card"><div class="ico">🧬</div><h3>Nested objects</h3><p>Inheritance, embedded objects at any depth, lists and maps of them (<code>whereAny</code>, <code>MEMBER OF</code>), references with fetch.</p></div>
       <div class="card"><div class="ico">🔁</div><h3>Transactions</h3><p>READ COMMITTED, SNAPSHOT, SERIALIZABLE; optimistic, never blocking; retries built in.</p></div>
@@ -203,9 +204,8 @@ footer .sp { margin-left: auto; }
       <div class="card"><div class="ico">🪝</div><h3>Lifecycle callbacks</h3><p><code>@PrePersist</code>, <code>@PostLoad</code> and friends, plus entity listeners.</p></div>
       <div class="card"><div class="ico">💾</div><h3>Online backup</h3><p>A consistent snapshot while writers keep going; restore = open.</p></div>
       <div class="card"><div class="ico">📦</div><h3>Large values</h3><p>Long texts and binaries such as images, several MiB per value.</p></div>
-      <div class="card"><div class="ico">🛡</div><h3>Durable & consistent</h3><p>Committed data survives crashes; readers see consistent snapshots; deleted space is reclaimed.</p></div>
+      <div class="card"><div class="ico">🛡</div><h3>Durable &amp; compact</h3><p>Committed data survives crashes; readers see consistent snapshots; about 150 B per object on disk; opens in milliseconds.</p></div>
       <div class="card"><div class="ico">🧩</div><h3>Dynamic API</h3><p>A self-describing schema with evolution. Open any database without its classes.</p></div>
-      <div class="card"><div class="ico">🗜</div><h3>Compact & fast restart</h3><p>About 150 B per object on disk; opens in milliseconds with a tiny heap.</p></div>
       <div class="card"><div class="ico">🖥</div><h3>Kookaburra Studio</h3><p>Several databases, transactions at any level, backlinks, constraints, image preview, OQL console, backup. One jar for every OS.</p></div>
       <div class="card"><div class="ico">💽</div><h3>Tested on disk</h3><p>Every shared suite runs in memory and on disk; ≥ 90% coverage; a 10 M-object stress run.</p></div>
     </div>
@@ -355,6 +355,23 @@ sum of 19.90 + 10.15 → 30.05</div></div>
 });</pre>
         <div class="res">second commit: serialization failure, retried
 one doctor stays on call</div></div>
+      <div class="card"><h3>Vector search</h3><p>The closest documents to an embedding, after a filter.</p>
+<pre>List&lt;Doc&gt; top = db.query(Doc.class)
+    .where(Doc::getLang).eq("en")
+    .nearest(Doc::getEmbedding, q, 10)
+    .list();</pre>
+        <div class="res">top 10 of 100,000 vectors (384 dims): about 35 ms</div></div>
+      <div class="card"><h3>Vectors in OQL</h3><p>Distance functions named as in pgvector.</p>
+<pre>SELECT d.title,
+  cosine_distance(d.embedding, :q) AS dist
+FROM Doc d WHERE d.lang = 'en'
+ORDER BY dist LIMIT 10</pre>
+        <div class="res">runs as the same vector search</div></div>
+      <div class="card"><h3>Statistics</h3><p>Numbers for your own monitoring.</p>
+<pre>DatabaseStats s = db.stats();
+s.objects();
+s.transactions().total().conflicts();</pre>
+        <div class="res">objects, storage, commits, conflicts</div></div>
       <div class="card"><h3>Online backup</h3><p>Back up while writing; open the copy to restore.</p>
 <pre>BackupInfo info = db.backup(
     Path.of("backups/2026-10-17"));
@@ -378,6 +395,12 @@ try (ObjectDB copy = ObjectDB.open(info.path())) {
     <div class="kicker">Kookaburra Studio</div>
     <h2>See inside every database</h2>
     <p class="lead">A standalone desktop tool: several databases side by side, transactions, constraints and backlinks, nested objects and binaries, an OQL console, backups.</p>
+    <p class="lead"><b>Download the latest version</b> (installers bring their own Java):
+      <a href="https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-windows-x64.msi">Windows</a> ·
+      <a href="https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-macos-arm64.dmg">macOS Apple silicon</a> ·
+      <a href="https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-macos-x64.dmg">macOS Intel</a> ·
+      <a href="https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-linux-x64.deb">Linux (.deb)</a> ·
+      <a href="https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio.jar">jar for Java 17+</a></p>
     <div class="grid g2 shots">
       <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-transaction.png" alt="Studio transaction" loading="lazy"><figcaption>Begin (pick the isolation level), Commit, Rollback per database, or <code>BEGIN ISOLATION LEVEL …; COMMIT</code> in the console.</figcaption></figure>
       <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-backlinks.png" alt="Studio backlinks" loading="lazy"><figcaption>"Referenced by": the objects pointing at the selected one; double-click opens one.</figcaption></figure>
@@ -385,6 +408,8 @@ try (ObjectDB copy = ObjectDB.open(info.path())) {
       <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-nested.png" alt="Studio nested inspector" loading="lazy"><figcaption>Lists of embedded objects as <code>[ n elements ]</code>; the Key / Value / Type inspector expands every level.</figcaption></figure>
       <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-nested-editor.png" alt="Studio element editor" loading="lazy"><figcaption>Element tables for lists and maps: add, remove, reorder.</figcaption></figure>
       <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-binary.png" alt="Studio binary field" loading="lazy"><figcaption>Binary fields: format, size, image preview, load / save.</figcaption></figure>
+      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-stats.png" alt="Studio stats dashboard" loading="lazy"><figcaption>Stats dashboard: key figures, live write and transaction rates, objects and storage per collection.</figcaption></figure>
+      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-query.png" alt="Studio OQL console" loading="lazy"><figcaption>OQL console with completion, paging, EXPLAIN and export.</figcaption></figure>
     </div>
   </div>
 </section>

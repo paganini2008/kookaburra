@@ -198,6 +198,7 @@ public class ObjectInspector extends BorderPane {
             case DATETIME -> "DateTime";
             case INSTANT -> "Instant";
             case BYTES -> "Bytes";
+            case VECTOR -> "Vector(" + (t.dim() == 0 ? "" : t.dim() + ", ") + t.name() + ")";
             case ENUM, EMBEDDED, OBJECT -> simple(t.name());
             case REF -> "→ " + simple(t.name());
             case MULTI, EMBEDDED_LIST -> (t.set() ? "Set<" : "List<") + typeName(t.element()) + ">";

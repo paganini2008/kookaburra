@@ -4,6 +4,7 @@ import com.github.kookaburra.annotation.Entity;
 import com.github.kookaburra.annotation.Id;
 import com.github.kookaburra.annotation.Index;
 import com.github.kookaburra.annotation.Unique;
+import com.github.kookaburra.annotation.Vector;
 
 import java.math.BigDecimal;
 
@@ -23,4 +24,6 @@ public class Product {
     @Index BigDecimal price;
     /** PNG thumbnail (binary content). */
     byte[] photo;
+    /** Embedding with readable axes {@code [reading, tech, home, outdoor]}: books, gadgets and items form clusters. */
+    @Vector(dim = 4) float[] embedding;
 }

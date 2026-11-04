@@ -309,7 +309,7 @@ class StudioEdgeCaseTest {
         view.directoryChooser = db::toFile;
         robot.interact(() -> view.open.fire());
         settle();
-        assertThat(alert(robot)).contains("already open");
+        assertThat(alert(robot)).contains("is in use by another program");
         other.close();
 
         Path ro = Files.createDirectories(tmp.resolve("ro"));

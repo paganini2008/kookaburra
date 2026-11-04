@@ -7,6 +7,8 @@ import com.github.kookaburra.annotation.Index;
 import com.github.kookaburra.annotation.IndexKind;
 import com.github.kookaburra.annotation.OnDelete;
 import com.github.kookaburra.annotation.Unique;
+import com.github.kookaburra.annotation.Vector;
+import com.github.kookaburra.annotation.VectorDistance;
 import com.github.kookaburra.annotation.Version;
 import com.github.kookaburra.field.Property;
 
@@ -71,6 +73,16 @@ class JavaTypes {
         for (Field f : persistentFields(type)) {
             String where = type.getName() + "." + f.getName();
             TypeDef t = describe(f.getType(), f.getGenericType(), stack, where);
+            Vector va = f.getAnnotation(Vector.class);
+            if (va != null) {
+                if (t.kind() != ValueType.VECTOR) {
+                    throw new SchemaException("@Vector on " + where + " of type " + t + " is not supported (float[] fields)");
+                }
+                if (va.dim() < 0) {
+                    throw new SchemaException("@Vector on " + where + ": negative dimension " + va.dim());
+                }
+                t = TypeDef.vector(va.dim(), va.distance());
+            }
             IndexKind index = null;
             Index ann = f.getAnnotation(Index.class);
             if (ann != null) {
@@ -120,6 +132,8 @@ class JavaTypes {
             }
             case BYTES:
                 return TypeDef.bytes();
+            case VECTOR:
+                return TypeDef.vector(0, VectorDistance.COSINE);
             case MULTI: {
                 Class<?> e = typeArg(generic, 0, 1);
                 boolean set = Set.class.isAssignableFrom(raw);

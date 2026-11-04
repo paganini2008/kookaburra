@@ -1,0 +1,152 @@
+# Kookaburra Studio release: push a tag v<major>.<minor>.<patch> and this workflow
+#   1. builds and tests core, processor and Studio (headless UI tests),
+#   2. packages Studio with its own Java runtime on Windows, Linux and macOS (jpackage),
+#   3. publishes a GitHub Release with fixed file names, marked "latest", so
+#      https://github.com/<owner>/<repo>/releases/latest/download/<file> always serves the newest version.
+# Release vs snapshot (like a -SNAPSHOT version in the pom):
+#   v1.2.0        release: every package (Windows msi + zip), published as "latest"
+#   v1.2.0-rc1    snapshot: Windows gets the zip only (no msi); published as a pre-release, "latest" unchanged
+#   Run workflow  snapshot: packages as workflow artifacts only, no release
+#
+# @Author: Fred Feng
+# @Date: 04/11/2026
+# @Version 1.0.0
+name: Studio release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: studio-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Core and processor (tests, coverage gate)
+        run: mvn -B -ntp install
+      - name: Studio (headless UI tests, coverage gate)
+        run: mvn -B -ntp -f kookaburra-face/pom.xml verify
+
+  package:
+    name: Package ${{ matrix.label }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-2022, label: windows-x64, javafx-mac: mac-aarch64 }
+          - { os: ubuntu-24.04, label: linux-x64, javafx-mac: mac-aarch64 }
+          - { os: macos-15, label: macos-arm64, javafx-mac: mac-aarch64 }
+          - { os: macos-15-intel, label: macos-x64, javafx-mac: mac }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            v="${GITHUB_REF_NAME#v}"
+            if [[ "$v" == *-* ]]; then kind=snapshot; else kind=release; fi   # v1.2.0-rc1 = snapshot
+          else
+            v="$(sed -n 's:.*<version>\(.*\)</version>.*:\1:p' kookaburra-face/pom.xml | head -1)"
+            kind=snapshot
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          echo "Studio $v ($kind)"
+      - name: Build the Studio jar
+        run: |
+          mvn -B -ntp -q install -DskipTests -Djacoco.skip=true
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then                       # Studio shows the tag (1.2.0, 1.2.0-rc1)
+            mvn -B -ntp -q -f kookaburra-face/pom.xml versions:set -DnewVersion="${{ steps.version.outputs.version }}" -DgenerateBackupPoms=false
+          fi
+          mvn -B -ntp -q -f kookaburra-face/pom.xml -P dist package -DskipTests -Djacoco.skip=true \
+            -Ddist.dir="$GITHUB_WORKSPACE/kookaburra-face/target/dist" -Djavafx.mac=${{ matrix.javafx-mac }}
+      - name: Linux packaging tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q fakeroot
+      - name: Package
+        run: bash kookaburra-face/src/packaging/package.sh "${{ steps.version.outputs.version }}" "${{ matrix.label }}" "${{ steps.version.outputs.kind }}"
+      - name: Add the cross-platform jar
+        if: matrix.label == 'linux-x64'
+        run: cp kookaburra-face/target/dist/kookaburra-face.jar kookaburra-face/target/release/kookaburra-studio.jar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studio-${{ matrix.label }}
+          path: kookaburra-face/target/release/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: package
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: studio-*
+          merge-multiple: true
+          path: dist
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$TAG" == *-* ]]; then
+            latest=(--prerelease --latest=false)                     # snapshot: its own files, latest unchanged
+            base="https://github.com/$GH_REPO/releases/download/$TAG"
+            windows="no installer for snapshots"
+          else
+            latest=(--latest)
+            base="https://github.com/$GH_REPO/releases/latest/download"
+            windows="[kookaburra-studio-windows-x64.msi]($base/kookaburra-studio-windows-x64.msi)"
+          fi
+          cat > notes.md <<EOF
+          ## Kookaburra Studio ${TAG}
+
+          | System | Installer | Without installing |
+          |---|---|---|
+          | Windows 10 / 11 (x64) | ${windows} | [.zip]($base/kookaburra-studio-windows-x64.zip) |
+          | macOS (Apple silicon) | [kookaburra-studio-macos-arm64.dmg]($base/kookaburra-studio-macos-arm64.dmg) | |
+          | macOS (Intel) | [kookaburra-studio-macos-x64.dmg]($base/kookaburra-studio-macos-x64.dmg) | |
+          | Linux (x64, Debian / Ubuntu) | [kookaburra-studio-linux-x64.deb]($base/kookaburra-studio-linux-x64.deb) | [.tar.gz]($base/kookaburra-studio-linux-x64.tar.gz) |
+          | Any system with Java 17+ | [kookaburra-studio.jar]($base/kookaburra-studio.jar) | |
+
+          The packages bring their own Java runtime. Settings, the default database and logs live in \`~/Kookaburra\`;
+          any database directory opens with **Open database…** or \`--data=PATH\`.
+          The packages are not signed yet: on macOS right-click the app and choose **Open** the first time,
+          on Windows choose **More info, Run anyway**.
+          EOF
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" --notes-file notes.md "${latest[@]}"
+          else
+            gh release create "$TAG" dist/* --title "Kookaburra Studio $TAG" --notes-file notes.md "${latest[@]}"
+          fi

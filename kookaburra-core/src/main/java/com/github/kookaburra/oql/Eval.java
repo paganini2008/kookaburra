@@ -1,7 +1,9 @@
 package com.github.kookaburra.oql;
 
 import com.github.kookaburra.Ref;
+import com.github.kookaburra.annotation.VectorDistance;
 import com.github.kookaburra.mapping.ValueType;
+import com.github.kookaburra.mapping.Vectors;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
@@ -319,8 +321,35 @@ class Eval {
                 arity(f, 2);
                 yield arithmetic("%", v[0], v[1]);
             }
+            case "COSINE_DISTANCE", "L2_DISTANCE", "INNER_PRODUCT" -> {
+                arity(f, 2);
+                float[] a = vector(v[0], f);
+                float[] b = vector(v[1], f);
+                if (a.length != b.length) {
+                    throw new OqlException(f.name() + ": vectors of different dimensions (" + a.length + " and " + b.length + ")",
+                            f.line(), f.column());
+                }
+                yield switch (f.name()) {
+                    case "COSINE_DISTANCE" -> VectorDistance.COSINE.distance(a, b);
+                    case "L2_DISTANCE" -> VectorDistance.L2.distance(a, b);
+                    default -> VectorDistance.dot(a, b);
+                };
+            }
+            case "VECTOR_DIMS" -> {
+                arity(f, 1);
+                yield (long) vector(v[0], f).length;
+            }
             default -> throw new OqlException("unknown function " + f.name(), f.line(), f.column());
         };
+    }
+
+    /** A vector argument: a stored vector, a {@code float[]} / {@code double[]} / list parameter or {@code '[1, 2]'}. */
+    private static float[] vector(Object v, Ast.Func f) {
+        try {
+            return Vectors.of(v, f.name());
+        } catch (IllegalArgumentException e) {
+            throw new OqlException(e.getMessage(), f.line(), f.column());
+        }
     }
 
     private static void arity(Ast.Func f, int n) {

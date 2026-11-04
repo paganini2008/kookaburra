@@ -10,6 +10,10 @@ import com.github.kookaburra.face.StudioPaths;
 import com.github.kookaburra.face.model.ClassInfo;
 import com.github.kookaburra.face.model.SegmentInfo;
 import com.github.kookaburra.face.model.Session;
+import javafx.animation.Animation;
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
+import javafx.application.Platform;
 import javafx.event.ActionEvent;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -44,6 +48,7 @@ import javafx.scene.layout.VBox;
 import javafx.stage.DirectoryChooser;
 import javafx.stage.Stage;
 import javafx.stage.Window;
+import javafx.util.Duration;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -54,8 +59,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 /**
@@ -73,6 +82,13 @@ public class MainView extends BorderPane {
     final QueryView query;
     final SchemaView schema = new SchemaView();
     final StatsView stats = new StatsView();
+    /** Samples the current database every 2 s while the Stats tab is shown. */
+    final Timeline statsTimer = new Timeline(new KeyFrame(Duration.seconds(2), e -> sampleStats()));
+    private final ExecutorService statsSampler = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "studio-stats");
+        t.setDaemon(true);
+        return t;
+    });
     final TabPane tabs = new TabPane();
     final Label status = new Label("No database open");
     final Label seq = new Label();
@@ -121,6 +137,9 @@ public class MainView extends BorderPane {
     /** Default data directory (next to the Studio jar unless configured). */
     private Path dataDir = StudioPaths.dataDir(List.of());
     final Label dataLabel = new Label();
+    /** Asks before a database is created in a non-empty directory that is not one (replaceable in tests). */
+    Predicate<Path> foreignConfirm = dir -> Dialogs.confirm(window(), "Create database",
+            dir + " is not empty and is not a Kookaburra database.\nCreate a new database in this directory?");
     /** Chooses a database directory (replaceable in tests). */
     Supplier<File> directoryChooser = () -> {
         DirectoryChooser c = new DirectoryChooser();
@@ -140,8 +159,7 @@ public class MainView extends BorderPane {
 
         open.setOnAction(e -> {
             File dir = directoryChooser.get();
-            if (dir != null && !switchToOpen(dir.toPath()) && (!Session.isForeignDirectory(dir.toPath()) || Dialogs.confirm(window(),
-                    "Create database", dir + " is not empty and is not a Kookaburra database.\nCreate a new database in this directory?"))) {
+            if (dir != null && !switchToOpen(dir.toPath()) && (!Session.isForeignDirectory(dir.toPath()) || foreignConfirm.test(dir.toPath()))) {
                 tasks.run(() -> Session.open(dir.toPath()), this::open, this::error);
             }
         });
@@ -283,9 +301,13 @@ public class MainView extends BorderPane {
         tabs.getSelectionModel().selectedItemProperty().addListener((o, a, b) -> {
             if (b != null && b.getContent() == stats) {
                 showStats();
+                statsTimer.play();                           // live rates while the dashboard is shown
+            } else {
+                statsTimer.stop();
             }
         });
         tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        statsTimer.setCycleCount(Animation.INDEFINITE);
         workspace = new SplitPane(treePane, tabs);
         workspace.setDividerPositions(0.22);
 
@@ -397,7 +419,28 @@ public class MainView extends BorderPane {
         use(s);
         data.clear();
         setCenter(workspace);
+        status("opened " + labels.get(s));
         refresh();
+    }
+
+    /**
+     * Opens a database directory given at start (command line or configuration), like Open… does: a non-empty
+     * directory that is not a database is created only after confirmation, and a directory that cannot be opened
+     * (in use by another process, a file, no permission) is reported in a dialog; the window stays usable.
+     */
+    public void openDirectory(Path dir) {
+        try {
+            if (switchToOpen(dir)) {
+                return;
+            }
+            if (Session.isForeignDirectory(dir) && !foreignConfirm.test(dir)) {
+                status(dir + " not opened");
+                return;
+            }
+            open(Session.open(dir));
+        } catch (RuntimeException e) {
+            error(e);
+        }
     }
 
     /** All open databases, in opening order. */
@@ -445,6 +488,7 @@ public class MainView extends BorderPane {
             return;
         }
         sessions.remove(s);
+        stats.forget(s);
         labels.remove(s);
         txLabels.remove(s);
         tasks.run(() -> {
@@ -516,7 +560,7 @@ public class MainView extends BorderPane {
             showTransaction(txLabels.get(current));
             @SuppressWarnings("unchecked") List<SegmentInfo> segs = (List<SegmentInfo>) r[3];
             schema.show(segs, (String) r[1]);
-            stats.show((DatabaseStats) r[4]);
+            stats.show(current, (DatabaseStats) r[4]);
             seq.setText("snapshot seq " + r[2]);
             if (toSelect != null) {
                 tree.getSelectionModel().select(toSelect);
@@ -530,10 +574,23 @@ public class MainView extends BorderPane {
         if (s != null) {
             tasks.run(s::stats, st -> {
                 if (s == session) {
-                    stats.show(st);
+                    stats.show(s, st);
                 }
             }, this::error);
         }
+    }
+
+    /** One dashboard sample of the current database, off the FX thread and without the busy indicator. */
+    void sampleStats() {
+        Session s = session;
+        if (s == null || statsSampler.isShutdown()) {
+            return;
+        }
+        CompletableFuture.supplyAsync(s::stats, statsSampler).whenComplete((st, t) -> Platform.runLater(() -> {
+            if (t == null && s == session) {
+                stats.show(s, st);
+            }
+        }));
     }
 
     private static TreeItem<NavNode> item(Session s, ClassInfo c) {
@@ -825,6 +882,8 @@ public class MainView extends BorderPane {
     }
 
     public void close() {
+        statsTimer.stop();
+        statsSampler.shutdownNow();
         for (Session s : sessions) {
             s.close();
         }

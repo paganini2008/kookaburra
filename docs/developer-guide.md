@@ -173,6 +173,19 @@ mvn -f kookaburra-face/pom.xml test -P tutorial
 - ffmpeg is found via `FFMPEG`, Homebrew or `PATH`.
 - The test asserts the length (≤ 3 min) and that subtitles contain no em dash. If the length changes, update it in README, website and blogs.
 
+### 5.4 Releasing Studio (GitHub Actions)
+
+| Step | What happens |
+|---|---|
+| push a tag `v1.2.3` | `.github/workflows/studio-release.yml` starts |
+| test | core + processor `install`, Studio `verify` (headless) on Ubuntu |
+| package | Windows (msi for releases, zip), Linux (deb, tar.gz, jar), macOS arm64 and x64 (dmg) with `kookaburra-face/src/packaging/package.sh` |
+| release | GitHub Release `v1.2.3`, marked latest, `SHA256SUMS.txt`; `releases/latest/download/<file>` now serves it |
+
+- Try a package locally on your OS: build the jar with `mvn -f kookaburra-face/pom.xml -P dist package -DskipTests -Ddist.dir=$PWD/kookaburra-face/target/dist`, then `bash kookaburra-face/src/packaging/package.sh 1.0.0 macos-arm64` (output in `kookaburra-face/target/release`).
+- Release vs snapshot: `v1.2.3` is a release (Windows msi + zip); `v1.2.3-rc1` is a snapshot, like `-SNAPSHOT` in the pom (Windows zip only, published as a pre-release, latest unchanged); "Run workflow" by hand is a snapshot as workflow artifacts only. Locally the third argument of `package.sh` is `release` or `snapshot` (default).
+- Maven Central releases of the library are a separate, manual process.
+
 ---
 
 ## 6. Where to change what

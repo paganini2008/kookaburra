@@ -116,4 +116,15 @@ public class ByteSource {
     public byte[] readBlob() {
         return readBytes(readVarInt());
     }
+
+    /** {@code n} little-endian float32 values. */
+    public float[] readFloats(int n) {
+        need(n * 4);
+        float[] out = new float[n];
+        for (int i = 0; i < n; i++) {
+            out[i] = buf.getFloat(pos);
+            pos += 4;
+        }
+        return out;
+    }
 }

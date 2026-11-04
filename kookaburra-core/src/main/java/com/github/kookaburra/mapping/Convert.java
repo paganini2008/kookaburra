@@ -72,6 +72,8 @@ class Convert {
             }
             case BYTES:
                 return v;
+            case VECTOR:
+                return Vectors.canonical(def, v, where);
             case OBJECT:
                 return serialize(v, where);
             default:
@@ -147,6 +149,8 @@ class Convert {
             }
             case BYTES:
                 return c;
+            case VECTOR:
+                return ((float[]) c).clone();            // the stored array is shared by readers of a MemSegment
             case OBJECT:
                 return deserialize((byte[]) c, raw.getClassLoader());
             default:

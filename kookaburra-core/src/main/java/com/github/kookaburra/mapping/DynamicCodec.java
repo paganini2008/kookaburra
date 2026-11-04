@@ -107,6 +107,8 @@ public class DynamicCodec {
                 throw new IllegalArgumentException(where + ": expected byte[]");
             case OBJECT:
                 return v instanceof byte[] ? v : Convert.serialize(v, where);
+            case VECTOR:
+                return Vectors.canonical(t, v, where);
             default:
                 return scalar(t, v, where);
         }
@@ -207,6 +209,8 @@ public class DynamicCodec {
                 ((Map<?, ?>) c).forEach((k, v) -> out.put(k, toDynamic(t.element(), v)));
                 return out;
             }
+            case VECTOR:
+                return ((float[]) c).clone();
             default:
                 return c;
         }
