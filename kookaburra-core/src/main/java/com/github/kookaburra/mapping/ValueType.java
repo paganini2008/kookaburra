@@ -33,7 +33,9 @@ public enum ValueType {
     /** {@code byte[]}; row only. */
     BYTES,
     /** Any other {@code Serializable} value, stored with Java serialization; row only. */
-    OBJECT;
+    OBJECT,
+    /** {@code float[]} embedding vector (float32, {@code @Vector}); row only, searched by distance. */
+    VECTOR;
 
     /** Maps a declared Java type to its value type, ignoring generics (see {@code JavaTypes} for full analysis). */
     public static ValueType of(Class<?> type) {
@@ -53,6 +55,7 @@ public enum ValueType {
         if (type == Instant.class) return INSTANT;
         if (type == Ref.class) return REF;
         if (type == byte[].class) return BYTES;
+        if (type == float[].class) return VECTOR;
         if (Collection.class.isAssignableFrom(type)) return MULTI;
         if (Map.class.isAssignableFrom(type)) return MAP;
         if (type.isAnnotationPresent(Embeddable.class)) return EMBEDDED;

@@ -74,6 +74,10 @@ public class Fields {
         return expect(of(entity, path), RefField.class);
     }
 
+    public static <T> VectorField<T> vectorField(Class<T> entity, String path) {
+        return expect(of(entity, path), VectorField.class);
+    }
+
     public static <T, V> ObjectField<T, V> objectField(Class<T> entity, String path) {
         return expect(of(entity, path), ObjectField.class);
     }
@@ -110,6 +114,10 @@ public class Fields {
 
     public static <T, R> RefField<T, R> of(RefGetter<T, R> getter) {
         return expect(resolve(getter), RefField.class);
+    }
+
+    public static <T> VectorField<T> of(VectorGetter<T> getter) {
+        return expect(resolve(getter), VectorField.class);
     }
 
     public static <T, V> ObjectField<T, V> of(Getter<T, V> getter) {
@@ -187,6 +195,7 @@ public class Fields {
             case DECIMAL, DATE, DATETIME, INSTANT -> new ComparableField<>(entity, path, chain);
             case REF -> new RefField<>(entity, path, chain);
             case MULTI -> new ListField<>(entity, path, chain);
+            case VECTOR -> new VectorField<>(entity, path, chain);
             case EMBEDDED, EMBEDDED_LIST, MAP, BYTES, OBJECT -> new ObjectField<>(entity, path, chain);
         };
     }

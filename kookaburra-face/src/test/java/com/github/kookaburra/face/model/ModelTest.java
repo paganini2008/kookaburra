@@ -104,10 +104,11 @@ class ModelTest {
         assertThat(book.idField()).isEqualTo("oid");
         assertThat(book.versionField()).isNull();
         assertThat(book.layouts()).isEqualTo(1);
-        assertThat(book.fields()).extracting(ClassMeta.FieldMeta::path).containsExactly("title", "sku", "price", "photo", "author", "pages");
+        assertThat(book.fields()).extracting(ClassMeta.FieldMeta::path).containsExactly("title", "sku", "price", "photo", "embedding", "author", "pages");
         assertThat(book.fields().get(0).declaredIn()).isEqualTo("Product");
-        assertThat(book.fields().get(4).index()).isEqualTo("AUTO");
-        assertThat(book.fields().get(5).index()).isEmpty();
+        assertThat(book.fields().get(4).type()).isEqualTo("VECTOR(4, COSINE)");
+        assertThat(book.fields().get(5).index()).isEqualTo("AUTO");
+        assertThat(book.fields().get(6).index()).isEmpty();
         assertThat(book.fields().get(1).index()).isEqualTo("AUTO");                  // implied by @Unique
         assertThat(book.fields().get(1).constraint()).isEqualTo("UNIQUE");
         assertThat(book.fields().get(5).constraint()).isEmpty();
@@ -573,5 +574,96 @@ class ModelTest {
         assertThat(StatsRows.uptime(Duration.ofSeconds(42))).isEqualTo("42 s");
         assertThat(StatsRows.uptime(Duration.ofSeconds(125))).isEqualTo("2 min 5 s");
         assertThat(StatsRows.uptime(Duration.ofMinutes(185))).isEqualTo("3 h 5 min");
+    }
+
+    @ParameterizedTest(name = "on disk = {0}")
+    @ValueSource(booleans = {false, true})
+    void vectors(boolean onDisk, @TempDir Path dir) {
+        Session s = onDisk ? Session.open(dir.resolve("db")) : Session.demo();
+        try {
+            s.db().insert(new Clip("x", 1, 0, 0));
+            s.db().insert(new Clip("y", 0, 1, 0));
+            s.db().insert(new Clip("none"));
+            if (onDisk) {
+                s.flush();
+            }
+            String clip = Clip.class.getName();
+            assertThat(s.meta(clip).fields()).extracting(ClassMeta.FieldMeta::type).contains("VECTOR(3, COSINE)");
+            assertThat(s.columns(clip)).filteredOn(c -> c.path().equals("embedding")).singleElement()
+                    .extracting(Column::sortable).isEqualTo(false);
+            QueryOutcome near = s.run("SELECT c.name, cosine_distance(c.embedding, '[1, 0, 0]') AS d FROM Clip c "
+                    + "ORDER BY d LIMIT 1");
+            assertThat(near.rows().get(0).get(0)).isEqualTo("x");
+            assertThat(near.rows().get(0).get(1)).isEqualTo(0.0);
+            DynamicObject x = s.db().dynamic(clip).from().where("name").eq("x").list().get(0);
+            float[] v = (float[]) x.get("embedding");
+            assertThat(Display.cell(v)).isEqualTo("[1.0, 0.0, 0.0]");
+            assertThat(Display.nested(v)).isFalse();
+            assertThat(Display.cell(new float[]{1, 2, 3, 4, 5})).isEqualTo("[1.0, 2.0, 3.0, 4.0, … (5 dims)]");
+            assertThat(Display.nested(new float[]{1, 2, 3, 4, 5})).isTrue();
+            assertThat(Display.text(v)).isEqualTo("[1.0, 0.0, 0.0]");
+            assertThat(Display.pretty(v)).contains("1.0");
+
+            ClassDef def = s.db().schema().byName(clip);
+            String json = ObjectJson.toJson(x, def);
+            assertThat(json).contains("\"embedding\"").contains("1.0");
+            DynamicObject back = ObjectJson.fromJson(x, def, json.replace("1.0", "0.5"));
+            s.save(back);
+            assertThat((float[]) s.reload(back).get("embedding")).containsExactly(0.5f, 0, 0);
+            assertThat(ObjectJson.text(new float[]{1, 2})).isEqualTo("[1.0,2.0]");
+            DynamicObject bad = s.newObject(clip).set("name", "bad").set("embedding", List.of(1, 2));
+            assertThatThrownBy(() -> s.save(bad)).hasMessageContaining("2 dimensions, expected 3");
+            assertThat(Completion.KEYWORDS).contains("COSINE_DISTANCE", "L2_DISTANCE", "INNER_PRODUCT", "VECTOR_DIMS");
+        } finally {
+            s.close();
+        }
+    }
+
+    @Test
+    void dashboardRatesAndTiles() {
+        Session s = Session.demo();
+        try {
+            DatabaseStats a = s.stats();
+            assertThat(StatsRows.rates(null, a)).isEqualTo(StatsRows.Rates.NONE);
+            assertThat(StatsRows.rates(a, a)).isEqualTo(StatsRows.Rates.NONE);       // no time passed
+            DynamicObject c = s.newObject(CUSTOMER).set("name", "Rate").set("email", "rate@x.io");
+            s.save(c);
+            DatabaseStats b = s.stats();
+            DatabaseStats later = new DatabaseStats(b.openedAt(), a.takenAt().plusSeconds(2), b.seq(), b.collections(), b.writes(),
+                    b.transactions(), b.constraints(), b.maintenance());
+            StatsRows.Rates r = StatsRows.rates(a, later);
+            assertThat(r.inserts()).isEqualTo(0.5);
+            assertThat(r.commits()).isEqualTo(0.5);
+            assertThat(r.deletes()).isZero();
+            DatabaseStats other = new DatabaseStats(a.openedAt().minusSeconds(1), later.takenAt(), b.seq(), b.collections(), b.writes(),
+                    b.transactions(), b.constraints(), b.maintenance());
+            assertThat(StatsRows.rates(a, other)).isEqualTo(StatsRows.Rates.NONE);  // another opening
+
+            List<StatsRows.Tile> tiles = StatsRows.tiles(later, r);
+            assertThat(tiles).extracting(StatsRows.Tile::id)
+                    .containsExactly("objects", "storage", "commits", "transactions", "conflicts", "maintenance");
+            assertThat(tiles.get(0).value()).isEqualTo(String.format(Locale.ROOT, "%,d", b.objects()));
+            assertThat(tiles.get(0).detail()).isEqualTo("3 collections");
+            assertThat(tiles.get(2).value()).isEqualTo("0.5");
+            assertThat(tiles.get(4).detail()).isEqualTo("no transaction ended yet");
+            s.run("BEGIN");
+            s.run("COMMIT");
+            assertThat(StatsRows.tiles(s.stats(), r).get(4).detail()).isEqualTo("0.0 % of ended transactions");
+            assertThat(StatsRows.rate(12.345)).isEqualTo("12.3");
+            assertThat(StatsRows.rate(12345.6)).isEqualTo("12,346");
+        } finally {
+            s.close();
+        }
+    }
+
+    @Test
+    void demoVectorSearch() {
+        // products cluster on [reading, tech, home, outdoor]: the closest to "reading" are books, to "tech" gadgets
+        QueryOutcome books = demo.run("SELECT p.title FROM Product p ORDER BY cosine_distance(p.embedding, '[1, 0, 0, 0]') LIMIT 5");
+        assertThat(books.rows()).extracting(r -> r.get(0)).allMatch(t -> String.valueOf(t).startsWith("Book #"));
+        QueryOutcome gadgets = demo.run("SELECT p.title, l2_distance(p.embedding, '[0, 1, 0, 0]') AS d FROM Product p ORDER BY d LIMIT 5");
+        assertThat(gadgets.rows()).extracting(r -> r.get(0)).allMatch(t -> String.valueOf(t).startsWith("Gadget #"));
+        assertThat(demo.run("SELECT COUNT(*) FROM Product p WHERE p.embedding IS NOT NULL").rows().get(0).get(0)).isEqualTo(30L);
+        assertThat(demo.meta(PRODUCT).fields()).extracting(ClassMeta.FieldMeta::type).contains("VECTOR(4, COSINE)");
     }
 }

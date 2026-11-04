@@ -163,6 +163,7 @@ public class Address {
 | `List` / `Set` of `@Embeddable` | EMBEDDED_LIST | n/a | row only |
 | `Map<S1, S2>` of scalars | MAP | n/a | row only |
 | `byte[]` | BYTES | n/a | row only |
+| `float[]`, `@Vector(dim, distance)` | VECTOR | n/a | row only: `varint n · n × float32`; dimension checked on write (0 = any), finite components; searched by distance (§10.6) |
 | any other `Serializable` (incl. `Map<String,Object>`, `UUID`) | OBJECT | n/a | row only, Java serialization |
 
 Not supported: `record` entities (immutable, no id back-fill), `final` persistent fields, entities without a no-arg constructor, fields hiding superclass fields. Null collection elements / map keys are rejected.
@@ -669,6 +670,29 @@ SORT age DESC, name ASC      [ordinal runs, k-way merge]
 LIMIT 20+10                  [top-N]
 ```
 
+### 10.6 Vector search (exact, phase 1)
+
+```mermaid
+flowchart LR
+    F["filters → matches bitmap<br/>(indexes, as any query)"] --> S["per match: read the vector<br/>(path-only row decoding)"]
+    S --> D["distance to the query<br/>(query norm computed once)"]
+    D --> H["bounded max-heap of skip + limit<br/>(ties: storage order, NaN last)"]
+    H --> R["closest first"]
+```
+
+| | Kookaburra | pgvector | Lucene / Elasticsearch |
+|---|---|---|---|
+| Type | `float[]` + `@Vector(dim, distance)` | `vector(n)` | `dense_vector` / `KnnFloatVectorField` (dims, similarity) |
+| Distances | COSINE (`1 - cos`), L2, INNER_PRODUCT (`-a·b`) | `<=>`, `<->`, `<#>` (+ L1) | cosine, l2_norm, dot_product, max_inner_product |
+| Query | `nearest(Doc::getEmbedding, q, k)`; OQL `ORDER BY cosine_distance(d.v, :q) LIMIT k` | `ORDER BY v <=> q LIMIT k` | `knn` query, `k`, `num_candidates` |
+| Filters | pre-filter on indexes, then exact scan of the matches | WHERE (post-filter with HNSW) | pre-filter |
+| Index | none yet (exact); HNSW per segment in phase 2 | HNSW / IVFFlat | HNSW per segment |
+
+- `QueryStream.nearest(...)` orders by distance (field's `@Vector` distance unless given) and allows `skip / limit` after it; not combined with `orderBy` / `groupBy`. Objects without a vector, or with one of another length (`dim = 0`), are not results.
+- `listWithDistance()` → `Neighbor(value, distance)`; `count()` / `exists()` count results with a vector.
+- OQL functions `COSINE_DISTANCE`, `L2_DISTANCE`, `INNER_PRODUCT` (positive dot), `VECTOR_DIMS`; vectors as stored values, `float[]` / `double[]` / list parameters or text `'[1, 0, 0]'`. A single ORDER BY item `COSINE_DISTANCE / L2_DISTANCE(path, constant)` ASC or `INNER_PRODUCT` DESC on a vector of the queried class is pushed down; objects without a vector are placed after (NULLS LAST) or before (NULLS FIRST) the closest, as the in-memory sort would.
+- Cost: linear in objects × dimensions. 100 k × 384 dims: top 10 in about 35 ms (exact scan), about 1 ms with a 1 % filter.
+
 ---
 
 ## 11. Semantics Contract
@@ -973,7 +997,7 @@ Independent desktop application: module / jar **`kookaburra-face`** (own launche
 | Object editor: JSON | RichTextFX JSON with highlighting + validation against schema; binaries as Base64, those over 64 KiB as a placeholder that keeps the stored bytes (megabytes of Base64 would stall the editor) |
 | CRUD | create / update (optimistic lock: conflict dialog with reload / overwrite) / delete (multi-select = one batch); constraint violations (`@Unique`, `ON DELETE RESTRICT`, missing FK target) → "Constraint violated" dialog, nothing stored; cascades show in the refreshed counts; decimals edited as exact text (`BigDecimal`) |
 | Query | OQL console: highlighting from `OqlLexer` tokens, Ctrl+Space completion (classes after FROM / JOIN / UPDATE, `alias.` paths, keywords), Ctrl / ⌘ + Enter runs; results paged (100 / 500 / 1000; statements with their own LIMIT / OFFSET are not re-paged) with `#` row numbers; whole-object results (`SELECT x`) expand to one column per property; `EXPLAIN` view; history; **scripts**: statements separated by `;` (outside strings and comments) run in order, stop at the first error (`statement 2 of 3: …`), the last one's result is shown and paged; **transaction commands** `BEGIN [TRANSACTION \| WORK] [ISOLATION LEVEL READ COMMITTED \| REPEATABLE READ \| SNAPSHOT \| SERIALIZABLE]` (REPEATABLE READ = SNAPSHOT, as in PostgreSQL), `START TRANSACTION`, `COMMIT`, `ROLLBACK` (highlighted and completed as keywords); **export** of the statement's whole result (JSON / JSONL / CSV, read in chunks of 5 000) |
-| Stats | `db.stats()` of the current database: per collection objects, segments, size, deleted rows, unflushed rows / size; counters since open (writes, transactions per isolation level, constraints, flushes, compactions, backups); refreshed when the tab is selected and on every refresh |
+| Stats (dashboard) | `db.stats()` of the current database: key figures (objects, storage, commits / s, open transactions, conflicts and their share, pending flushes / merges); line charts of writes / s and transactions / s from samples every 2 s while the tab is shown (5 minutes kept per database, off the FX thread, timer stopped on other tabs); bar charts of objects and storage per collection; the full tables (collections, counters since open) below; rates = difference of two samples of the same opening |
 | Schema | **left**: metadata of the selected class: full name, class id, parent, collection, subclasses, `@Id` / `@Version`, layouts, count; field table (path, type, index, declared in, **constraint**: `UNIQUE`, `FK → Customer · CASCADE`; scrolls as one panel, tooltips for clipped text). **right**: segments of every collection (memory / disk, documents, live, garbage %, size) + layout history |
 
 ### 17.4 Threading
@@ -989,6 +1013,27 @@ sequenceDiagram
     BG-->>UI: Platform.runLater → update grid / show dialog
 ```
 DB calls never run on the FX thread; long queries are cancellable.
+
+### 17.5 Distribution (GitHub Actions)
+
+```mermaid
+flowchart LR
+    T["git tag v1.2.3 + push"] --> A["test: core + processor + Studio<br/>(ubuntu, headless UI)"]
+    A --> W["windows-2022<br/>msi (releases) + zip"]
+    A --> L["ubuntu-24.04<br/>deb + tar.gz + jar"]
+    A --> M1["macos-15<br/>dmg (arm64)"]
+    A --> M2["macos-15-intel<br/>dmg (x64)"]
+    W --> R["GitHub Release v1.2.3<br/>marked latest, SHA256SUMS"]
+    L --> R
+    M1 --> R
+    M2 --> R
+```
+
+- `.github/workflows/studio-release.yml` runs on tags `v*`; `kookaburra-face/src/packaging/package.sh <version> <label>` packages on each OS with `jpackage` (JDK 21 runtime trimmed with jlink, about 45 MB per download). Icons in `src/packaging/` (`.ico`, `.icns`, `.png`).
+- **Always the latest**: file names carry no version (`kookaburra-studio-windows-x64.msi`, …), so `releases/latest/download/<file>` serves the newest release; README and website link there. Windows upgrades in place (fixed upgrade UUID).
+- **Release vs snapshot** (an rc tag is what `-SNAPSHOT` is in the pom): `v1.2.0` is a release (every package, Windows msi + zip, marked latest); `v1.2.0-rc1` is a snapshot (Windows zip only, no msi; a pre-release that leaves latest alone, its notes link to its own files); a manual run is a snapshot as workflow artifacts only. Studio shows the tag as its version (`1.2.0-rc1`); a manual run keeps `-SNAPSHOT`.
+- **Installed app paths**: the launchers set `jpackage.app-path`, so Studio keeps settings, the default database and logs in `~/Kookaburra` (the program folder is read-only); any directory opens with Open… or `--data=PATH`.
+- Not signed yet (Apple notarization, Windows code signing need certificates as repository secrets): first start needs right-click Open (macOS) or "Run anyway" (Windows).
 
 ---
 
@@ -1042,13 +1087,18 @@ kookaburra/
 
 ### 18.3 Backlog
 
+- [ ] Vector search phase 2: HNSW graph per segment (built at flush / merge, Lucene style), approximate `nearest` with `ef` / `numCandidates`; scalar quantization (int8) later
+- [ ] Exact vector scan: read floats straight from the mapped segment buffer (no `float[]` per row), SIMD via the Vector API once it is final
+- [ ] Studio: "Find similar" action on a row with a vector field (nearest neighbours of that row)
+- [ ] Studio release: first real run of the tag workflow (Windows WiX msi, macos-15-intel, Linux deb), then code signing (Apple notarization, Windows Authenticode)
+- [ ] Bench: rerun after the vector changes; optional vector scenario (100k × 384, filtered and unfiltered top-k)
+- [ ] Regenerate `bin/data` so the default demo database carries vectors
 - [ ] BSI index kind (numeric range / sum / top-K): own 64-bit BSI over `ImmutableRoaringBitmap` (library `bsi` module is 32-bit value or 64-bit-docid only)
 - [ ] JDK 22+ `MemorySegment` MR-JAR
 - [ ] Global ordinal cache for frequent group-by
 - [ ] Column overlay for hot single-field updates
 - [ ] Streaming segment writer (peak heap of flush / merge = segment size today)
 - [ ] Transactions roadmap ([transaction-design.md](transaction-design.md) §2): per-transaction durability, transaction metrics; optional extensions only (no Spring / JPA integration planned; no savepoints: T13)
-- [ ] Studio `jpackage` installers with a bundled runtime
 - [ ] `@Renamed`, element-correlated embedded collections
 
 ---
@@ -1113,11 +1163,16 @@ kookaburra/
 | D54 | Online backup = export of one snapshot into fresh compacted segments (not a file copy) | consistent without pausing writers, works for in-memory databases, the copy is compact and immediately openable |
 | D55 | Composite unique constraints as repeatable class-level `@Unique(fields = …)`; nulls exempt | JPA `@Table(uniqueConstraints = …)` shape, SQL null semantics; one annotation for both forms |
 | D56 | Monitoring as a pull API `db.stats()` (immutable `DatabaseStats`), no metrics library in core | embedded libraries stay dependency-free (Caffeine `stats()`, RocksDB `Statistics`); Micrometer / Dropwizard binding is the application's choice |
+| D57 | Vectors as `float[]` (float32 only) with `@Vector(dim, distance)`, exact search first, pgvector distance definitions and function names | mainstream embedding precision; exact pre-filtered search is correct for any filter and fast enough to 10⁵ to 10⁶ vectors; HNSW per segment fits the immutable segments (phase 2) |
+| D58 | Studio ships as native packages built by GitHub Actions on version tags, with version-less file names on a release marked latest | users always download the newest build from one fixed link; packages bring their own runtime; the user only pushes a tag |
 
 ## 20. Changelog
 
 | Date | Change |
 |---|---|
+| 2026-11-04 | Studio demo: products carry a 4-dimensional embedding `[reading, tech, home, outdoor]` (books, gadgets and items form clusters); tutorial video (2:56) adds vector search in the console, the Stats dashboard, the vector API slide and the download links; blogs synced |
+| 2026-11-04 | Studio distribution: GitHub Actions on tag `v*` → jpackage installers for Windows / macOS / Linux on a GitHub Release marked latest (§17.5, D58); installed app uses `~/Kookaburra`; databases given at start report errors in dialogs, non-empty foreign directories need confirmation |
+| 2026-11-04 | Vector search phase 1: `float[]` VECTOR type with `@Vector(dim, distance)`, exact `nearest(...)` with filters, `listWithDistance()`, OQL `COSINE_DISTANCE` / `L2_DISTANCE` / `INNER_PRODUCT` / `VECTOR_DIMS` with ORDER BY pushdown (§3.3, §10.6, D57); schema format 4; Studio display, JSON and form editing of vectors |
 | 2026-10-17 | Statistics API `db.stats()` / `DatabaseStats` (§15.3, D56); Studio Stats tab |
 | 2026-10-17 | Storage design split into [storage-design.md](storage-design.md) (§4, §5, §6.1 to §6.4, §7, §8, §13, §14, §15, §15.2 now link there); [developer-guide.md](developer-guide.md) added |
 | 2026-10-17 | Tutorial video as one run: `mvn -f kookaburra-face/pom.xml test -P tutorial` records and renders (`TutorialRecorder` + `TutorialVideo`, ffmpeg); visible mouse cursor with click rings; Studio first, then the API; covers constraints, isolation levels, backlinks and backup; `docs/tools/make-tutorial.sh` removed |

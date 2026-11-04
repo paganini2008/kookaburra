@@ -86,6 +86,10 @@ public class Session implements AutoCloseable {
             while (root.getCause() != null && root.getCause() != root) {
                 root = root.getCause();
             }
+            if (String.valueOf(e.getMessage()).contains("LOCK is held")) {
+                throw new IllegalStateException(dir.toAbsolutePath() + " is in use by another program (another Studio window or an "
+                        + "application using this database). Close it there first, or open a backup copy.", e);
+            }
             String reason = root instanceof AccessDeniedException ? "permission denied" : root.getMessage();
             throw new IllegalStateException(e.getMessage() + (root == e || reason == null ? "" : " (" + reason + ")"), e);
         }

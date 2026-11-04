@@ -50,7 +50,8 @@ public class StudioApplication extends Application {
             splash.finish(() -> {
                 stage.show();
                 LOG.info("window shown ({} theme)", Theme.saved());
-                openFromArgs(view, getParameters() == null ? List.of() : getParameters().getRaw());
+                List<String> args = getParameters() == null ? List.of() : getParameters().getRaw();
+                Platform.runLater(() -> openFromArgs(view, args));    // after the splash: errors open as dialogs
             });
         });
     }
@@ -65,9 +66,9 @@ public class StudioApplication extends Application {
         view.setDataDir(data);
         // several databases may open side by side: the data directory, plain paths, then the demo
         if (args.stream().anyMatch(a -> a.startsWith(StudioPaths.ARG)) || StudioPaths.isDatabase(data)) {
-            view.open(Session.open(data));
+            view.openDirectory(data);
         }
-        args.stream().filter(a -> !a.startsWith("--")).forEach(p -> view.open(Session.open(Path.of(p))));
+        args.stream().filter(a -> !a.startsWith("--")).forEach(p -> view.openDirectory(Path.of(p).toAbsolutePath()));
         if (args.contains("--demo")) {
             view.open(Session.demo());
         }

@@ -1,5 +1,7 @@
 package com.github.kookaburra.mapping;
 
+import com.github.kookaburra.annotation.VectorDistance;
+
 import java.util.List;
 import java.util.Objects;
 
@@ -13,16 +15,20 @@ import java.util.Objects;
  * @param key       MAP key type, else null
  * @param fields    EMBEDDED fields, else empty
  * @param set       MULTI / EMBEDDED_LIST: declared as a {@code Set}
+ * @param dim       VECTOR: required number of components (0 = any), else 0; {@code name} is its default distance
  *
  * @Author: Fred Feng
  * @Date: 11/10/2026
  * @Version 1.0.0
  */
 public record TypeDef(ValueType kind, String name, List<String> constants, TypeDef element, TypeDef key,
-                      List<FieldDef> fields, boolean set) {
+                      List<FieldDef> fields, boolean set, int dim) {
 
     public TypeDef {
         Objects.requireNonNull(kind, "kind");
+        if (dim < 0) {
+            throw new IllegalArgumentException("negative vector dimension " + dim);
+        }
         constants = constants == null ? List.of() : List.copyOf(constants);
         fields = fields == null ? List.of() : List.copyOf(fields);
     }
@@ -31,39 +37,49 @@ public record TypeDef(ValueType kind, String name, List<String> constants, TypeD
         if (!kind.isScalar() || kind == ValueType.ENUM || kind == ValueType.REF) {
             throw new IllegalArgumentException("not a plain scalar: " + kind);
         }
-        return new TypeDef(kind, null, null, null, null, null, false);
+        return new TypeDef(kind, null, null, null, null, null, false, 0);
     }
 
     public static TypeDef enumOf(String enumClass, List<String> constants) {
-        return new TypeDef(ValueType.ENUM, enumClass, constants, null, null, null, false);
+        return new TypeDef(ValueType.ENUM, enumClass, constants, null, null, null, false, 0);
     }
 
     public static TypeDef ref(String target) {
-        return new TypeDef(ValueType.REF, target, null, null, null, null, false);
+        return new TypeDef(ValueType.REF, target, null, null, null, null, false, 0);
     }
 
     public static TypeDef multi(TypeDef element, boolean set) {
-        return new TypeDef(ValueType.MULTI, null, null, element, null, null, set);
+        return new TypeDef(ValueType.MULTI, null, null, element, null, null, set, 0);
     }
 
     public static TypeDef embedded(String embeddable, List<FieldDef> fields) {
-        return new TypeDef(ValueType.EMBEDDED, embeddable, null, null, null, fields, false);
+        return new TypeDef(ValueType.EMBEDDED, embeddable, null, null, null, fields, false, 0);
     }
 
     public static TypeDef embeddedList(TypeDef element, boolean set) {
-        return new TypeDef(ValueType.EMBEDDED_LIST, null, null, element, null, null, set);
+        return new TypeDef(ValueType.EMBEDDED_LIST, null, null, element, null, null, set, 0);
     }
 
     public static TypeDef map(TypeDef key, TypeDef value) {
-        return new TypeDef(ValueType.MAP, null, null, value, key, null, false);
+        return new TypeDef(ValueType.MAP, null, null, value, key, null, false, 0);
     }
 
     public static TypeDef bytes() {
-        return new TypeDef(ValueType.BYTES, null, null, null, null, null, false);
+        return new TypeDef(ValueType.BYTES, null, null, null, null, null, false, 0);
     }
 
     public static TypeDef object(String javaType) {
-        return new TypeDef(ValueType.OBJECT, javaType, null, null, null, null, false);
+        return new TypeDef(ValueType.OBJECT, javaType, null, null, null, null, false, 0);
+    }
+
+    /** A float32 vector of {@code dim} components (0 = any) searched with {@code distance} by default. */
+    public static TypeDef vector(int dim, VectorDistance distance) {
+        return new TypeDef(ValueType.VECTOR, distance.name(), null, null, null, null, false, dim);
+    }
+
+    /** VECTOR: the default distance of nearest-neighbour searches. */
+    public VectorDistance distance() {
+        return VectorDistance.valueOf(name);
     }
 
     /** The scalar type values are compared by: the element type for MULTI, else this. */
@@ -95,6 +111,7 @@ public record TypeDef(ValueType kind, String name, List<String> constants, TypeD
             return older.kind == ValueType.INT32 && kind == ValueType.INT64;
         }
         return switch (kind) {
+            case VECTOR -> dim == 0 || dim == older.dim;
             case ENUM -> constants.size() >= older.constants.size()
                     && constants.subList(0, older.constants.size()).equals(older.constants);
             case MULTI, EMBEDDED_LIST -> element.canRead(older.element);
@@ -117,6 +134,7 @@ public record TypeDef(ValueType kind, String name, List<String> constants, TypeD
             case EMBEDDED_LIST -> (set ? "SET(" : "LIST(") + element + ")";
             case MAP -> "MAP(" + key + ", " + element + ")";
             case OBJECT -> "OBJECT(" + name + ")";
+            case VECTOR -> "VECTOR(" + (dim == 0 ? "" : dim + ", ") + name + ")";
             default -> kind.name();
         };
     }

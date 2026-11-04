@@ -51,7 +51,7 @@ db/
 ├─ LOCK                          single-process lock (FileChannel.tryLock)
 ├─ CURRENT                       → commit_N
 ├─ commit_N                      per collection: segments + delete generations, WAL replay point; OID counters
-├─ schema/schema_V               classes, fields, layouts, constraints (format KKBSCH03; 01 and 02 still read)
+├─ schema/schema_V               classes, fields, layouts, constraints (format KKBSCH04; 01 to 03 still read)
 ├─ wal/wal_<firstSeq>.log        write-ahead log, one shared file at a time, rotated at each commit
 └─ col/<collection>/
    ├─ seg_<id>.odbf              immutable segment (≤ 1.5 GB)
@@ -131,7 +131,7 @@ row   := varint classId · varint layoutId · nullBits · value*
 value := BOOL 1 B | INT zig-zag varint | FLOAT64 8 B | STRING varint-len UTF-8 | DECIMAL zig-zag scale · unscaled bytes
        | ENUM varint index | DATE zig-zag epochDay | DATETIME/INSTANT zig-zag seconds · varint nanos | REF varint OID
        | MULTI / EMBEDDED_LIST count · element* | EMBEDDED nullBits · value* | MAP count · (key · present · value)*
-       | BYTES / OBJECT varint-len bytes
+       | BYTES / OBJECT varint-len bytes | VECTOR varint n · n × float32 (little-endian)
 ```
 
 - `layoutId` lets old rows stay readable after a class changes (schema evolution, [design.md §3.5](design.md)).

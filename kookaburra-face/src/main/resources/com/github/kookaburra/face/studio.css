@@ -360,3 +360,93 @@
 .k-tool.danger .k-icon {
     -fx-icon-color: -k-err;
 }
+
+/* ---------------------------------------------------------------- stats dashboard */
+
+.k-tile {
+    -fx-background-color: -k-bg-1;
+    -fx-border-color: -k-border;
+    -fx-border-radius: 8;
+    -fx-background-radius: 8;
+    -fx-padding: 10 14 10 14;
+}
+
+.k-tile-caption {
+    -fx-text-fill: -k-fg-muted;
+    -fx-font-size: 11px;
+}
+
+.k-tile-value {
+    -fx-text-fill: -k-accent;
+    -fx-font-size: 24px;
+    -fx-font-weight: bold;
+}
+
+.k-tile-detail {
+    -fx-text-fill: -k-fg-muted;
+    -fx-font-size: 11px;
+}
+
+.k-chart-panel {
+    -fx-background-color: -k-bg-1;
+    -fx-background-radius: 8;
+    -fx-padding: 8 10 4 10;
+}
+
+.k-chart {
+    -fx-padding: 0;
+}
+
+.k-chart > .chart-content {
+    -fx-padding: 4 4 0 0;
+}
+
+.k-chart-title {
+    -fx-text-fill: -k-fg;
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+}
+
+.k-legend-item {
+    -fx-text-fill: -k-fg-muted;
+    -fx-font-size: 11px;
+    -fx-graphic-text-gap: 5;
+}
+
+.k-dot-0 { -fx-fill: -k-accent; }
+.k-dot-1 { -fx-fill: -k-accent-2; }
+.k-dot-2 { -fx-fill: -k-warn; }
+
+.k-chart .chart-plot-background {
+    -fx-background-color: -k-bg-0;
+}
+
+.k-chart .chart-vertical-grid-lines, .k-chart .chart-horizontal-grid-lines {
+    -fx-stroke: -k-border;
+}
+
+.k-chart .axis {
+    -fx-tick-label-fill: -k-fg-muted;
+}
+
+.k-chart .axis-label, .k-chart .chart-legend-item {
+    -fx-text-fill: -k-fg-muted;
+}
+
+.k-chart .chart-legend {
+    -fx-background-color: transparent;
+}
+
+.k-chart .chart-series-line {
+    -fx-stroke-width: 2px;
+}
+
+/* series colors from the theme: accent, second accent, warning */
+.k-chart .default-color0.chart-series-line { -fx-stroke: -k-accent; }
+.k-chart .default-color1.chart-series-line { -fx-stroke: -k-accent-2; }
+.k-chart .default-color2.chart-series-line { -fx-stroke: -k-warn; }
+.k-chart .default-color0.chart-line-symbol, .k-chart .default-color0.chart-legend-item-symbol { -fx-background-color: -k-accent; }
+.k-chart .default-color1.chart-line-symbol, .k-chart .default-color1.chart-legend-item-symbol { -fx-background-color: -k-accent-2; }
+.k-chart .default-color2.chart-line-symbol, .k-chart .default-color2.chart-legend-item-symbol { -fx-background-color: -k-warn; }
+.k-chart .default-color0.chart-bar { -fx-bar-fill: -k-accent; }
+.k-chart .default-color1.chart-bar { -fx-bar-fill: -k-accent-2; }

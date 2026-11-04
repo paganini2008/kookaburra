@@ -128,6 +128,7 @@ public class RecordCodec {
                 in.readVarLong();
             }
             case STRING, BYTES, OBJECT -> in.skip(in.readVarInt());
+            case VECTOR -> in.skip(in.readVarInt() * 4);
             case DECIMAL -> {
                 in.readZigZag();
                 in.skip(in.readVarInt());
@@ -235,6 +236,11 @@ public class RecordCodec {
                 }
             }
             case BYTES, OBJECT -> out.writeBlob((byte[]) v);
+            case VECTOR -> {
+                float[] f = (float[]) v;
+                out.writeVarInt(f.length);
+                out.writeFloats(f);
+            }
         }
     }
 
@@ -295,6 +301,7 @@ public class RecordCodec {
                 yield map;
             }
             case BYTES, OBJECT -> in.readBlob();
+            case VECTOR -> in.readFloats(in.readVarInt());
         };
     }
 }

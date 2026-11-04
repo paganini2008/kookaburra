@@ -1,6 +1,7 @@
 package com.github.kookaburra.face.view;
 
 import com.github.kookaburra.Isolation;
+import com.github.kookaburra.dynamic.DynamicCollection;
 import com.github.kookaburra.dynamic.DynamicObject;
 import com.github.kookaburra.face.StudioApplication;
 import com.github.kookaburra.face.demo.DemoData;
@@ -454,7 +455,7 @@ class TutorialRecorder {
         logoView.setFitHeight(180);
         logoView.setPreserveRatio(true);
 
-        slide("title", 5, "Kookaburra: an embedded object database for Java 17+, with type-safe queries and a desktop Studio",
+        slide("title", 4, "Kookaburra: an embedded object database for Java 17+, with type-safe queries and a desktop Studio",
                 "TUTORIAL", "Kookaburra in three minutes", null, logoView,
                 text("Query Java objects like a database, right inside your application.", 34, FontWeight.NORMAL, "#7A8BA8"));
 
@@ -472,7 +473,7 @@ class TutorialRecorder {
         sg.fillRect(0, 0, W, H);
         sg.drawImage(splashImg, (W - splashImg.getWidth()) / 2, (PICTURE_H - splashImg.getHeight()) / 2, null);
         sg.dispose();
-        still("splash", splashFrame, 3.5, "Part 1, Kookaburra Studio: a desktop tool to browse, edit, query and back up any database", false);
+        still("splash", splashFrame, 3, "Part 1, Kookaburra Studio: a desktop tool to browse, edit, query and back up any database", false);
         Platform.runLater(() -> StudioApplicationAccess.stop(app, main[0]));
         WaitForAsyncUtils.sleep(1500, TimeUnit.MILLISECONDS);
         Platform.runLater(() -> Window.getWindows().stream().filter(w -> w != stage).toList().forEach(w -> ((Stage) w).close()));
@@ -485,7 +486,7 @@ class TutorialRecorder {
         disk.db().flush();
         view.backupChooser = () -> tmp.resolve("backups").toFile();
         view.data.exportChooser = format -> tmp.resolve("customers." + format.extension()).toFile();
-        click("open", 4.5, "Open databases side by side: a directory on disk and the in-memory demo",
+        click("open", 4, "Open databases side by side: a directory on disk and the in-memory demo",
                 () -> view.demo, 0.5, () -> {
                     view.open(disk);
                     view.open(Session.demo());
@@ -505,20 +506,20 @@ class TutorialRecorder {
         });
         settle();
         int row = rowWhere(o -> o.get("address") != null && ((Map<?, ?>) o.get("contacts")).size() > 1);
-        click("inspector", 5, "Select a row: the inspector shows its nested values as a Key / Value / Type tree",
+        click("inspector", 4.5, "Select a row: the inspector shows its nested values as a Key / Value / Type tree",
                 () -> tableRow(row), 0.3, () -> view.data.table.getSelectionModel().clearAndSelect(row), null);
 
         Platform.runLater(() -> view.data.inspector.tree.getRoot().getChildren().forEach(i -> i.setExpanded(false)));
         settle();
         TreeItem<ObjectInspector.Entry> links = inspectorItem(ObjectInspector.REFERENCED_BY);
-        click("backlinks", 5, "Expand \"referenced by\" to see every object that points at it, here the customer's purchases",
+        click("backlinks", 4.5, "Expand \"referenced by\" to see every object that points at it, here the customer's purchases",
                 () -> inspectorRow(links), 0.25, () -> links.setExpanded(true), () -> links.getChildren().size() > 0
                         && !links.getChildren().get(0).getValue().key().equals("…"));
 
         click("export-menu", 3.5, "Export writes every object that matches the filter",
                 () -> view.data.export, () -> view.data.export.show(), () -> overlay(false) != null);
         Window exportMenu = overlay(false);
-        click("export-csv", 4.5, "as JSON, JSONL or CSV, read in chunks so large exports stay small in memory",
+        click("export-csv", 4, "as JSON, JSONL or CSV, read in chunks so large exports stay small in memory",
                 () -> labeled(exportMenu.getScene().getRoot(), "CSV"), () -> {
                     view.data.export.hide();
                     view.data.exportAs(Export.Format.CSV);
@@ -527,7 +528,7 @@ class TutorialRecorder {
         click("purchases", 3.5, "Purchases hold a list of order lines and references to products",
                 () -> treeCell("Purchase"), () -> view.tree.getSelectionModel().select(StudioUiTest.findClass(view, "Purchase")));
         int withLines = rowWhere(o -> ((List<?>) o.get("lines")).size() >= 3);
-        click("lines", 4.5, "Lists of embedded objects show as [ n elements ] and expand element by element",
+        click("lines", 4, "Lists of embedded objects show as [ n elements ] and expand element by element",
                 () -> tableRow(withLines), 0.3, () -> {
                     view.data.table.getSelectionModel().clearAndSelect(withLines);
                     TreeItem<ObjectInspector.Entry> lines = inspectorItem("lines");
@@ -535,7 +536,7 @@ class TutorialRecorder {
                 }, null);
 
         TreeItem<ObjectInspector.Entry> productRef = inspectorItem("product");
-        click("reference", 5, "Double-click a reference to open the object it points at, here the product with its photo",
+        click("reference", 4.5, "Double-click a reference to open the object it points at, here the product with its photo",
                 () -> inspectorRow(productRef), 0.25, () -> view.openRef(productRef.getValue().refClass(), productRef.getValue().refOid()),
                 () -> overlay(true) != null);
         DialogPane refPane = dialog();
@@ -547,7 +548,7 @@ class TutorialRecorder {
         DialogPane editorPane = dialog();
         ObjectEditor editor = (ObjectEditor) editorPane.getContent();
         int n = ((List<?>) editor.original().get("lines")).size();
-        click("add-line", 5, "Add, remove and reorder elements; nested fields are columns",
+        click("add-line", 4, "Add, remove and reorder elements; nested fields are columns",
                 () -> StudioNestedTest.byId(editor.control("lines"), "lines-add"), () -> {
                     ((Button) StudioNestedTest.byId(editor.control("lines"), "lines-add")).fire();
                     Platform.runLater(() -> {
@@ -558,7 +559,7 @@ class TutorialRecorder {
                         ((TextField) StudioNestedTest.byId(table, "field-lines[" + n + "].price.currency")).setText("AUD");
                     });
                 });
-        click("json", 4.5, "The JSON tab edits the whole nested document, checked against the schema on save",
+        click("json", 4, "The JSON tab edits the whole nested document, checked against the schema on save",
                 () -> fx(() -> editor.tabs.lookupAll(".tab").stream().toList().get(1)), () -> editor.tabs.getSelectionModel().select(1));
         click("cancel", 2, "",
                 () -> editorPane.lookupButton(ButtonType.CANCEL), () -> ((Button) editorPane.lookupButton(ButtonType.CANCEL)).fire());
@@ -579,7 +580,7 @@ class TutorialRecorder {
             ((TextField) newEditor.control("email")).setText(taken);
         });
         settle();
-        click("unique", 5.5, "Customer.email is @Unique: saving a taken e-mail is refused and nothing is stored",
+        click("unique", 5, "Customer.email is @Unique: saving a taken e-mail is refused and nothing is stored",
                 () -> newPane.lookupButton(ButtonType.OK), () -> ((Button) newPane.lookupButton(ButtonType.OK)).fire(),
                 () -> overlay(true) != null && overlay(true).getScene().getRoot() != newPane);
         DialogPane error = dialog();
@@ -592,7 +593,7 @@ class TutorialRecorder {
         click("delete", 3.5, "Delete asks first",
                 () -> view.delete, () -> view.delete.fire(), () -> overlay(true) != null);
         DialogPane confirm = dialog();
-        click("delete-ok", 5, "Purchase.customer is a foreign key with CASCADE: the customer's purchases go in the same commit",
+        click("delete-ok", 4.5, "Purchase.customer is a foreign key with CASCADE: the customer's purchases go in the same commit",
                 () -> confirm.lookupButton(ButtonType.OK), () -> ((Button) confirm.lookupButton(ButtonType.OK)).fire(),
                 () -> StudioUiTest.findClass(view, "Purchase").getValue().cls().count() < 750);
 
@@ -600,7 +601,7 @@ class TutorialRecorder {
         click("isolation-menu", 3.5, "The arrow next to Begin picks the isolation level",
                 () -> fx(() -> view.txBegin.lookup(".arrow-button")), () -> view.txBegin.show(), () -> overlay(false) != null);
         Window menu = overlay(false);
-        click("serializable", 3.5, "Read committed, snapshot or serializable",
+        click("serializable", 3, "Read committed, snapshot or serializable",
                 () -> labeled(menu.getScene().getRoot(), "Serializable"), () -> {
                     Toggle t = view.isolation.getToggles().stream().filter(x -> x.getUserData() == Isolation.SERIALIZABLE)
                             .findFirst().orElseThrow();
@@ -610,7 +611,7 @@ class TutorialRecorder {
         DynamicObject first = view.data.table.getItems().get(0);
         DynamicObject second = view.data.table.getItems().get(1);
         view.editorDialog = e -> Optional.of(e.original());
-        click("begin", 4.5, "Begin: edits stay private until Commit; the status bar counts the pending changes",
+        click("begin", 4, "Begin: edits stay private until Commit; the status bar counts the pending changes",
                 () -> view.txBegin, 0.3, () -> {
                     view.txBegin.fire();
                     first.set("age", 33);
@@ -620,7 +621,7 @@ class TutorialRecorder {
                         Platform.runLater(() -> view.editObject(second));
                     });
                 }, () -> view.txStatus.getText().contains("2 pending"));
-        click("commit", 4, "Commit publishes both changes atomically",
+        click("commit", 3.5, "Commit publishes both changes atomically",
                 () -> view.txCommit, () -> view.txCommit.fire());
         DynamicObject third = view.data.table.getItems().get(2);
         click("begin-again", 3.5, "Another transaction, another edit",
@@ -632,7 +633,7 @@ class TutorialRecorder {
         click("rollback", 3.5, "Rollback",
                 () -> view.txRollback, () -> view.txRollback.fire(), () -> overlay(true) != null);
         DialogPane discard = dialog();
-        click("rollback-ok", 3.5, "discards it: nothing reached the database",
+        click("rollback-ok", 3, "discards it: nothing reached the database",
                 () -> discard.lookupButton(ButtonType.OK), () -> ((Button) discard.lookupButton(ButtonType.OK)).fire(),
                 () -> !view.txStatus.isVisible());
 
@@ -641,30 +642,60 @@ class TutorialRecorder {
                 + "FROM Customer c\nGROUP BY c.tier\nORDER BY customers DESC"));
         click("query-tab", 3.5, "The Query tab: an OQL console with highlighting and completion",
                 () -> tab(1), () -> view.tabs.getSelectionModel().select(1));
-        click("run", 4.5, "Run (or Ctrl+Enter) shows the result, paged",
+        click("run", 4, "Run (or Ctrl+Enter) shows the result, paged",
                 () -> view.query.run, () -> view.query.run.fire());
         Platform.runLater(() -> view.query.setText("SELECT c FROM Customer c\nWHERE c.tier = 'GOLD' AND c.age BETWEEN 30 AND 40\n"
                 + "ORDER BY c.age DESC"));
         settle();
-        click("explain", 4.5, "Explain shows the plan: which index answers each condition, cheapest first",
+        click("explain", 4, "Explain shows the plan: which index answers each condition, cheapest first",
                 () -> view.query.explain, () -> view.query.explain.fire());
+        Platform.runLater(() -> view.query.setText("SELECT p.title, cosine_distance(p.embedding, '[1, 0, 0, 0]') AS distance\n"
+                + "FROM Product p\nORDER BY distance LIMIT 5"));
+        settle();
+        click("vector", 5, "Vector search: the products whose embedding is closest to [1, 0, 0, 0], the \"reading\" axis",
+                () -> view.query.run, () -> view.query.run.fire());
 
         // schema with constraints
-        click("schema", 4.5, "The Schema tab: fields, indexes and constraints such as UNIQUE and foreign keys",
+        click("schema", 4, "The Schema tab: fields, indexes and constraints such as UNIQUE and foreign keys",
                 () -> tab(2), () -> {
                     view.tree.getSelectionModel().select(StudioUiTest.findClass(view, "Purchase"));
                     view.tabs.getSelectionModel().select(2);
                     view.schema.split.setDividerPositions(0.62);
                 });
 
+        // statistics dashboard, with some activity for the live rates
+        DynamicCollection customers = view.session().db().dynamic("Customer");
+        List<DynamicObject> visitors = new ArrayList<>();
+        for (int round = 0; round < 5; round++) {
+            for (int i = 0; i < 6 + round * 4; i++) {
+                DynamicObject v = customers.newObject().set("name", "Visitor " + round + "-" + i)
+                        .set("email", "visitor." + round + "." + i + "@example.com");
+                customers.insert(v);
+                visitors.add(v);
+            }
+            if (round >= 2) {
+                for (int i = 0; i < 5; i++) {
+                    customers.delete(visitors.remove(0));
+                }
+            }
+            WaitForAsyncUtils.sleep(400, TimeUnit.MILLISECONDS);
+            Platform.runLater(view::sampleStats);
+            settle();
+        }
+        for (int i = 0; i < 30; i++) {                                 // writes since the last sample: live rates on screen
+            customers.insert(customers.newObject().set("name", "Visitor 5-" + i).set("email", "visitor.5." + i + "@example.com"));
+        }
+        click("stats", 5, "The Stats dashboard: key figures, live write and transaction rates, storage per collection",
+                () -> tab(3), () -> view.tabs.getSelectionModel().select(3));
+
         // backup
-        click("backup", 5, "Backup copies the database as of now while it keeps running; open the copy to restore",
+        click("backup", 4.5, "Backup copies the database as of now while it keeps running; open the copy to restore",
                 () -> view.backup, () -> view.backup.fire(), () -> view.status.getText().startsWith("backup of"));
 
         // ---- part 2: the same features in code
         slide("code", 3.5, "Part 2, the Java API: everything Studio showed is a few lines of code",
                 "PART 2", "The same, in code", null, logoView, null);
-        slide("entity", 6, "Annotate a plain class: indexes, a unique e-mail, a foreign key, an exact decimal and a callback",
+        slide("entity", 5.5, "Annotate a plain class: indexes, a unique e-mail, a foreign key, an exact decimal and a callback",
                 "DECLARE", "A plain class is the schema", """
                         @Entity
                         public class Order {
@@ -675,7 +706,7 @@ class TutorialRecorder {
                             List<Line> lines;                                       // embedded objects
                             @PrePersist void stamp() { created = Instant.now(); }
                         }""", null, null);
-        slide("query", 6, "Open a directory, write a batch, and query with the chained, type-safe API",
+        slide("query", 5.5, "Open a directory, write a batch, and query with the chained, type-safe API",
                 "STORE AND QUERY", "Chained queries from method references", """
                         try (ObjectDB db = ObjectDB.open(Path.of("data"))) {
                             db.batch().insert(order1).insert(order2).commit();
@@ -686,28 +717,40 @@ class TutorialRecorder {
                                     .limit(10)
                                     .list();
                         }""", null, null);
-        slide("oql", 5.5, "OQL is a JPQL-style text language for the console, scripts and bulk updates",
-                "OQL", "JPQL-style text queries", """
+        slide("vectors", 5.5, "Vector search: a float[] embedding with @Vector, filters first, then the k nearest",
+                "VECTOR SEARCH", "Embeddings next to your data", """
+                        @Entity
+                        public class Doc {
+                            @Index String lang;
+                            @Vector(dim = 384) float[] embedding;          // cosine by default
+                        }
+
+                        List<Doc> top = db.query(Doc.class)
+                                .where(Doc::getLang).eq("en")             // filters run first, on the indexes
+                                .nearest(Doc::getEmbedding, question, 10) // then the 10 closest
+                                .list();""", null, null);
+        slide("oql", 5, "OQL is a SQL-style text language for the console, scripts and bulk updates",
+                "OQL", "SQL-style text queries", """
                         db.oql("SELECT c.tier, COUNT(*), AVG(c.age) FROM Customer c GROUP BY c.tier").rows();
 
                         db.oql("SELECT p FROM Purchase p WHERE 'SKU-1007' MEMBER OF p.lines.sku").list();
 
                         db.oql("UPDATE Product p SET p.price = p.price * 0.9 WHERE p.price > 100").execute();""", null, null);
-        slide("transactions", 6, "Transactions at three isolation levels; SERIALIZABLE also stops write skew",
+        slide("transactions", 5.5, "Transactions at three isolation levels; SERIALIZABLE also stops write skew",
                 "TRANSACTIONS", "Optimistic, never blocking", """
                         db.inTransaction(TxOptions.defaults().isolation(Isolation.SERIALIZABLE), tx -> {
                             Account a = tx.get(Account.class, from);
                             tx.update(a.balance(a.getBalance() - 30));
                             tx.increment(Account.class, to, "balance", 30);
                         });                     // conflicts are retried automatically""", null, null);
-        slide("constraints", 6, "Constraints are checked when the write commits; backlinks come from the index",
+        slide("constraints", 5.5, "Constraints are checked when the write commits; backlinks come from the index",
                 "INTEGRITY", "Unique keys and foreign keys", """
                         db.insert(new Customer("Ann", "ann@example.com"));
                         db.insert(new Customer("Bob", "ann@example.com"));   // ConstraintViolationException
 
                         db.referrers(Purchase.class, annOid);                 // her purchases
                         db.delete(Customer.class, annOid);                    // purchases go too (CASCADE)""", null, null);
-        slide("backup-code", 5, "Online backup in one call; restoring is opening the directory",
+        slide("backup-code", 4.5, "Online backup in one call; restoring is opening the directory",
                 "BACKUP", "A consistent copy while writing", """
                         BackupInfo info = db.backup(Path.of("backups/2026-10-17"));
 
@@ -725,13 +768,13 @@ class TutorialRecorder {
             card.setAlignment(Pos.CENTER);
             perf.getChildren().add(card);
         }
-        slide("performance", 6, "On 10 million objects: get in 0.6 µs, indexed counts in 0.24 ms, 140 k serializable transactions per second",
+        slide("performance", 5.5, "On 10 million objects: get in 0.6 µs, indexed counts in 0.24 ms, 140 k serializable transactions per second",
                 "PERFORMANCE", "10 million objects, milliseconds", null, null, centred(36, perf,
                         text("Apple M2 Max · SSD · JDK 17 · full report in docs/benchmark-10m.md", 28, FontWeight.NORMAL, "#7A8BA8")));
         ImageView endLogo = new ImageView(logo);
         endLogo.setFitHeight(150);
         endLogo.setPreserveRatio(true);
-        slide("outro", 5, "Apache-2.0 licensed: documentation, source and this video at github.com/paganini2008/kookaburra",
+        slide("outro", 5, "Download Studio for Windows, macOS and Linux from the latest release; Apache-2.0 at github.com/paganini2008/kookaburra",
                 "GET STARTED", "github.com/paganini2008/kookaburra", null, endLogo,
                 text("com.github.paganini2008 : kookaburra-core  ·  paganini2008.github.io/kookaburra", 34, FontWeight.NORMAL, "#39FF88"));
         Platform.runLater(view::close);

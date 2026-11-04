@@ -9,11 +9,13 @@ import com.github.kookaburra.face.model.ClassMeta;
 import com.github.kookaburra.face.model.Display;
 import com.github.kookaburra.face.model.Session;
 import com.github.kookaburra.face.model.StatsRows;
+import javafx.animation.Animation;
 import javafx.application.Platform;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.DialogPane;
+import javafx.scene.control.Label;
 import javafx.scene.control.TextField;
 import javafx.scene.control.Toggle;
 import javafx.scene.control.TreeItem;
@@ -31,6 +33,7 @@ import org.testfx.util.WaitForAsyncUtils;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
@@ -153,7 +156,7 @@ class StudioIntegrityTest {
         robot.interact(() -> view.refresh());
         settle();
         assertThat(view.stats.collections.getItems().get(0).unflushed()).isEqualTo("1");
-        robot.clickOn("#flush");
+        robot.interact(() -> view.flush.fire());
         settle();
         robot.interact(() -> view.refresh());
         settle();
@@ -161,7 +164,44 @@ class StudioIntegrityTest {
         assertThat(metric("batches rejected")).isEqualTo("1");
         assertThat(metric("flushes")).doesNotStartWith("0 (");          // the demo data itself was flushed in memory
         assertThat(view.stats.collections.getItems().get(0).unflushed()).isEqualTo("0");
+
+        // dashboard: key figures, live rates sampled while the tab is shown, objects and storage per collection
+        assertThat(view.statsTimer.getStatus()).isEqualTo(Animation.Status.RUNNING);
+        assertThat(tile("objects")).isEqualTo(String.format(Locale.ROOT, "%,d", s.db().stats().objects()));
+        assertThat(view.stats.objects.getData().get(0).getData()).extracting(d -> d.getXValue())
+                .containsExactly("Customer", "Product", "Purchase");
+        assertThat(view.stats.storage.getData()).hasSize(2);
+        int before = view.stats.samples(s);
+        for (int round = 0; round < 3; round++) {
+            for (int i = 0; i < 20; i++) {
+                s.db().dynamic("Customer").insert(new DynamicObject("com.github.kookaburra.face.demo.Customer")
+                        .set("name", "Load " + round + "-" + i).set("email", "load" + round + "-" + i + "@example.com"));
+            }
+            WaitForAsyncUtils.sleep(150, TimeUnit.MILLISECONDS);
+            int n = view.stats.samples(s);
+            robot.interact(() -> view.sampleStats());
+            assertThat(await(() -> view.stats.samples(s) > n)).isTrue();
+        }
+        assertThat(view.stats.samples(s)).isGreaterThanOrEqualTo(before + 3);
+        assertThat(view.stats.writes.getData().get(0).getData()).isNotEmpty();
+        assertThat(view.stats.writes.getData().get(0).getData()).anyMatch(d -> d.getYValue().doubleValue() > 0);
+        assertThat(tile("commits")).isNotEqualTo("0.0");
+        assertThat(robot.lookup("#stats-writes-panel .k-legend-item").queryAllAs(Label.class)).extracting(Label::getText)
+                .containsExactly("inserts", "updates", "deletes");
+        assertThat(robot.lookup("#stats-writes-panel .k-legend-item").queryAllAs(Label.class))
+                .allMatch(n -> n.isVisible() && n.getBoundsInParent().getHeight() > 0);
         Shots.save(view.getScene(), "stats-" + (onDisk ? "disk" : "memory"));
+
+        robot.interact(() -> view.tabs.getSelectionModel().select(0));
+        assertThat(view.statsTimer.getStatus()).isEqualTo(Animation.Status.STOPPED);   // no sampling off the tab
+        robot.interact(() -> view.closeCurrent());
+        settle();
+        assertThat(view.stats.samples(s)).isZero();                                    // history dropped with the database
+        robot.interact(() -> view.sampleStats());                                      // nothing open: no sample, no error
+    }
+
+    private String tile(String id) {
+        return view.stats.tileLabels.get(id)[0].getText();
     }
 
     private String metric(String name) {

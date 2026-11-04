@@ -6,11 +6,11 @@
 
 **Kookaburra**：*像数据库一样查询 Java 对象，就在你的应用里。*
 
-面向 **Java 17+ 的嵌入式对象数据库**。存入的是普通的注解类，查询用类型安全的链式 API 或 SQL 风格的 **OQL**，由索引直接回答，毫秒级返回。支持三种隔离级别的事务、唯一约束和外键、精确小数、在线备份，并配有桌面工具 **Kookaburra Studio**。
+面向 **Java 17+ 的嵌入式对象数据库**。存入的是普通的注解类，查询用类型安全的链式 API 或 SQL 风格的 **OQL**，由索引直接回答，毫秒级返回。支持三种隔离级别的事务、唯一约束和外键、精确小数、向量搜索、在线备份，并配有桌面工具 **Kookaburra Studio**。
 
 ![Kookaburra Studio](https://paganini2008.github.io/kookaburra/assets/studio-data.png)
 
-**教学视频（2:57，英文字幕）**：
+**教学视频（2:56，英文字幕）**：
 
 <video controls preload="metadata" playsinline width="100%" poster="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial-poster.jpg">
   <source src="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4" type="video/mp4">
@@ -65,7 +65,7 @@ try (ObjectDB db = ObjectDB.open(Path.of("data"))) {
 [Hyperion, Neuromancer]
 ```
 
-用 Studio 查看：`mvn -f kookaburra-face/pom.xml -P dist package`，然后双击 `bin/kookaburra-face.jar`。
+用 Studio 查看：下载最新版（安装包自带 Java 运行时）：[Windows](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-windows-x64.msi) · [macOS Apple 芯片](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-macos-arm64.dmg) · [macOS Intel](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-macos-x64.dmg) · [Linux](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-linux-x64.deb) · [jar（需 Java 17+）](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio.jar)。任意数据库目录都可以用 **Open database…** 打开。
 
 ## 4. 环境要求
 
@@ -74,7 +74,7 @@ try (ObjectDB db = ObjectDB.open(Path.of("data"))) {
 | Java | 17+ |
 | 运行时依赖 | RoaringBitmap 1.6.22、ANTLR 4.13.2 runtime、SLF4J API 2.0 |
 | 构建 | Maven 3.8+ |
-| Studio | Java 17+；Windows x64 / Linux x64 / macOS Apple Silicon 共用一个 jar（已内置 JavaFX） |
+| Studio | 自带 Java 运行时的安装包：Windows x64、macOS（Apple 芯片、Intel）、Linux x64；也可以用 jar（需 Java 17+） |
 
 支持的字段类型：`boolean`、各种整数、`float` / `double`、**`BigDecimal`**、`String`、枚举、`LocalDate` / `LocalDateTime` / `Instant`、`Ref<T>`、以上类型的 List / Set、`@Embeddable` 类（及其 List / Map）、`Map`、`byte[]`、任意 `Serializable`。
 
@@ -187,11 +187,30 @@ db.oql("SELECT s.code FROM Shipment s WHERE 'kiwi' MEMBER OF s.items.sku").list(
 db.insert(new Document("scan", text, Files.readAllBytes(Path.of("scan.png"))));        // MiB 级字段
 ```
 
-**Studio 里**：选中对象的反向链接、每个字段的约束、嵌套值的树形展示。
+**示例 7：向量搜索（embedding）**
+
+```java
+@Vector(dim = 384) float[] embedding;                         // 实体里的字段，默认余弦距离
+
+List<Doc> top = db.query(Doc.class).where(Doc::getLang).eq("en")
+        .nearest(Doc::getEmbedding, queryVector, 10).list();  // 先过滤，再取最近的 10 条
+```
+```sql
+SELECT d.title, cosine_distance(d.embedding, :q) AS dist FROM Doc d ORDER BY dist LIMIT 10
+```
+
+| 搜索 | 耗时 |
+|---|---|
+| 10 万条 384 维向量取最近 10 条（精确） | 约 35 ms |
+| 先过滤到 1% 再搜 | 约 1 ms |
+
+**Studio 里**：选中对象的反向链接、每个字段的约束、嵌套值的树形展示，以及带实时写入和事务速率的 **Stats dashboard**。demo 数据库的商品带有向量，可以直接在控制台试向量搜索（`ORDER BY cosine_distance(p.embedding, '[1, 0, 0, 0]')`）。
 
 ![Studio 反向链接](https://paganini2008.github.io/kookaburra/assets/studio-backlinks.png)
 
 ![Studio 约束列](https://paganini2008.github.io/kookaburra/assets/studio-constraints.png)
+
+![Studio 统计 dashboard](https://paganini2008.github.io/kookaburra/assets/studio-stats.png)
 
 ## 7. 配置
 

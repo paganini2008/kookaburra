@@ -2,6 +2,7 @@ package com.github.kookaburra.face.model;
 
 import com.github.kookaburra.Ref;
 import com.github.kookaburra.dynamic.DynamicObject;
+import com.github.kookaburra.mapping.Vectors;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -35,6 +36,9 @@ public class Display {
         if (v instanceof List<?> l && l.stream().anyMatch(x -> x instanceof Map<?, ?>)) {
             return "[ " + l.size() + (l.size() == 1 ? " element ]" : " elements ]");
         }
+        if (v instanceof float[] f) {
+            return Vectors.format(f, VECTOR_CELL);
+        }
         if (v instanceof Map<?, ?> m) {
             return "{ " + m.size() + (m.size() == 1 ? " entry }" : " entries }");
         }
@@ -44,8 +48,11 @@ public class Display {
     /** True when {@link #cell} shortens the value (it is worth a tooltip). */
     public static boolean nested(Object v) {
         return v instanceof Map<?, ?> || v instanceof List<?> l && l.stream().anyMatch(x -> x instanceof Map<?, ?>)
-                || v instanceof String str && str.length() > CELL_MAX;
+                || v instanceof String str && str.length() > CELL_MAX || v instanceof float[] f && f.length > VECTOR_CELL;
     }
+
+    /** Vector components shown in a grid cell. */
+    public static final int VECTOR_CELL = 4;
 
     /** Longest text shown in a grid cell. */
     public static final int CELL_MAX = 200;
@@ -139,6 +146,9 @@ public class Display {
         if (v instanceof byte[] b) {
             String f = format(b);
             return (f == null ? "Binary" : f) + " · " + size(b.length, "bytes");
+        }
+        if (v instanceof float[] f) {
+            return Vectors.format(f, Integer.MAX_VALUE);
         }
         if (v instanceof DynamicObject d) {
             return d.className().substring(d.className().lastIndexOf('.') + 1) + "#" + d.oid();

@@ -2,6 +2,7 @@ package com.github.kookaburra.query;
 
 import com.github.kookaburra.Ref;
 import com.github.kookaburra.WriteBatch;
+import com.github.kookaburra.annotation.VectorDistance;
 import com.github.kookaburra.dynamic.DynField;
 import com.github.kookaburra.dynamic.DynamicObject;
 import com.github.kookaburra.exec.Aggregator;
@@ -18,6 +19,7 @@ import com.github.kookaburra.field.ComparableGetter;
 import com.github.kookaburra.field.DoubleField;
 import com.github.kookaburra.field.DoubleGetter;
 import com.github.kookaburra.field.Field;
+import com.github.kookaburra.field.Fields;
 import com.github.kookaburra.field.Getter;
 import com.github.kookaburra.field.IntField;
 import com.github.kookaburra.field.IntGetter;
@@ -26,9 +28,13 @@ import com.github.kookaburra.field.LongGetter;
 import com.github.kookaburra.field.RefField;
 import com.github.kookaburra.field.RefGetter;
 import com.github.kookaburra.field.StringGetter;
+import com.github.kookaburra.field.VectorField;
+import com.github.kookaburra.field.VectorGetter;
 import com.github.kookaburra.mapping.ClassDef;
 import com.github.kookaburra.mapping.Schema;
 import com.github.kookaburra.mapping.TypeDef;
+import com.github.kookaburra.mapping.ValueType;
+import com.github.kookaburra.mapping.Vectors;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -103,23 +109,30 @@ public class QueryStream<T> {
     private final long limit;
     private final int stage;
     private final List<RefField<? super T, ?>> fetches;
+    /** Nearest-neighbour ordering, or null. */
+    private final Nearest nearest;
+
+    /** Order by distance of the vector at {@code path} to {@code query} ({@code distance} null = the field's). */
+    private record Nearest(String path, float[] query, VectorDistance distance) {
+    }
 
     /** Internal: created by the database or a snapshot ({@code fixed} = snapshot view, or null). */
     public QueryStream(QueryHost host, Class<T> type, ReadView fixed) {
-        this(host, Target.typed(type), fixed, List.of(), List.of(), 0, -1, FILTERING, List.of());
+        this(host, Target.typed(type), fixed, List.of(), List.of(), 0, -1, FILTERING, List.of(), null);
         host.registry().entity(type);
     }
 
     /** Internal: a stream over an arbitrary target (dynamic objects, OQL). */
     public QueryStream(QueryHost host, Target<T> target, ReadView fixed) {
-        this(host, target, fixed, List.of(), List.of(), 0, -1, FILTERING, List.of());
+        this(host, target, fixed, List.of(), List.of(), 0, -1, FILTERING, List.of(), null);
         if (host.registry().schema().byName(target.className()) == null) {
             throw new IllegalArgumentException("no stored class " + target.className());
         }
     }
 
     private QueryStream(QueryHost host, Target<T> target, ReadView fixed, List<Predicate<? super T>> filters,
-                        List<Order.Key<?>> keys, long skip, long limit, int stage, List<RefField<? super T, ?>> fetches) {
+                        List<Order.Key<?>> keys, long skip, long limit, int stage, List<RefField<? super T, ?>> fetches,
+                        Nearest nearest) {
         this.host = host;
         this.target = target;
         this.fixed = fixed;
@@ -129,11 +142,12 @@ public class QueryStream<T> {
         this.limit = limit;
         this.stage = stage;
         this.fetches = fetches;
+        this.nearest = nearest;
     }
 
     /** Same query on another read view (sub-queries run on the outer query's snapshot). */
     QueryStream<T> withView(ReadView view) {
-        return new QueryStream<>(host, target, view, filters, keys, skip, limit, stage, fetches);
+        return new QueryStream<>(host, target, view, filters, keys, skip, limit, stage, fetches, nearest);
     }
 
     // ---------------------------------------------------------------- pipeline
@@ -183,26 +197,28 @@ public class QueryStream<T> {
         require(stage == FILTERING, "filter() must come before sorted() / skip() / limit()");
         List<Predicate<? super T>> f = new ArrayList<>(filters);
         f.add(Objects.requireNonNull(predicate));
-        return new QueryStream<>(host, target, fixed, List.copyOf(f), keys, skip, limit, stage, fetches);
+        return new QueryStream<>(host, target, fixed, List.copyOf(f), keys, skip, limit, stage, fetches, nearest);
     }
 
     @SafeVarargs
     public final QueryStream<T> sorted(Order<? super T>... orders) {
         require(stage == FILTERING, "sorted() must come before skip() / limit() and only once");
+        require(nearest == null, "sorted() cannot follow nearest(): results are ordered by distance");
         List<Order.Key<?>> k = new ArrayList<>();
         for (Order<? super T> o : orders) {
             k.addAll(o.keys());
         }
         require(!k.isEmpty(), "sorted() needs at least one order");
-        return new QueryStream<>(host, target, fixed, filters, List.copyOf(k), skip, limit, SORTED, fetches);
+        return new QueryStream<>(host, target, fixed, filters, List.copyOf(k), skip, limit, SORTED, fetches, nearest);
     }
 
     /** Appends a sort key (fluent {@link OrderBy}); allowed before skip / limit, any number of times. */
     QueryStream<T> thenSorted(Order<? super T> order) {
         require(stage == FILTERING || stage == SORTED, "orderBy() must come before skip() / limit()");
+        require(nearest == null, "orderBy() cannot follow nearest(): results are ordered by distance");
         List<Order.Key<?>> k = new ArrayList<>(keys);
         k.addAll(order.keys());
-        return new QueryStream<>(host, target, fixed, filters, List.copyOf(k), skip, limit, SORTED, fetches);
+        return new QueryStream<>(host, target, fixed, filters, List.copyOf(k), skip, limit, SORTED, fetches, nearest);
     }
 
     public OrderBy<T> orderBy(IntGetter<T> getter) {
@@ -255,16 +271,73 @@ public class QueryStream<T> {
         return DynField.of(schema, def, path);
     }
 
+    // ---------------------------------------------------------------- vector search: .nearest(Doc::getEmbedding, q, 10)
+
+    /**
+     * Orders the results by the distance of their vector to {@code query}, closest first (exact search over the
+     * filtered objects, like {@code ORDER BY embedding <=> :q} in pgvector), with the field's {@code @Vector}
+     * distance; objects without a vector are left out. Follow with {@code limit(k)}, or use
+     * {@link #nearest(VectorGetter, float[], int)}.
+     */
+    public QueryStream<T> nearest(VectorGetter<T> getter, float[] query) {
+        return nearest(Fields.of(getter), query, null);
+    }
+
+    /** The {@code k} results closest to {@code query}: {@code nearest(getter, query).limit(k)}. */
+    public QueryStream<T> nearest(VectorGetter<T> getter, float[] query, int k) {
+        return nearest(getter, query).limit(k);
+    }
+
+    /** Orders by distance to {@code query} with an explicit distance (null = the field's {@code @Vector} distance). */
+    public QueryStream<T> nearest(VectorGetter<T> getter, float[] query, VectorDistance distance) {
+        return nearest(Fields.of(getter), query, distance);
+    }
+
+    /** Same with a metamodel field ({@code Doc_.embedding}). */
+    public QueryStream<T> nearest(VectorField<? super T> field, float[] query, VectorDistance distance) {
+        return nearestPath(field.path(), query, distance);
+    }
+
+    /**
+     * Same by dotted path (dynamic objects, OQL): {@code query} as {@code float[]}, {@code double[]}, a list of numbers
+     * or the text {@code [0.1, 0.2, …]}.
+     */
+    public QueryStream<T> nearest(String path, Object query, VectorDistance distance) {
+        return nearestPath(path, Vectors.of(Objects.requireNonNull(query, "query"), "nearest query"), distance);
+    }
+
+    private QueryStream<T> nearestPath(String path, float[] query, VectorDistance distance) {
+        require(stage == FILTERING, "nearest() must follow the filters and come before skip() / limit(), once");
+        float[] q = Vectors.of(Objects.requireNonNull(query, "query"), "nearest query");
+        return new QueryStream<>(host, target, fixed, filters, keys, skip, limit, SORTED, fetches, new Nearest(path, q, distance));
+    }
+
+    /** Results of a {@link #nearest} search with their distances, closest first. */
+    public List<Neighbor<T>> listWithDistance() {
+        require(nearest != null, "listWithDistance() needs nearest(...)");
+        try (Run r = run()) {
+            List<Neighbor<T>> out = new ArrayList<>();
+            List<T> objects = new ArrayList<>();
+            for (Executor.Near n : r.near()) {
+                T o = target.result().materialize(host, n.hit().view(), n.hit().doc());
+                objects.add(o);
+                out.add(new Neighbor<>(o, n.distance()));
+            }
+            preload(r, objects);
+            return out;
+        }
+    }
+
     public QueryStream<T> skip(long n) {
         require(n >= 0, "negative skip");
         long l = limit < 0 ? -1 : Math.max(0, limit - n);
-        return new QueryStream<>(host, target, fixed, filters, keys, skip + n, l, SLICED, fetches);
+        return new QueryStream<>(host, target, fixed, filters, keys, skip + n, l, SLICED, fetches, nearest);
     }
 
     public QueryStream<T> limit(long n) {
         require(n >= 0, "negative limit");
         long l = limit < 0 ? n : Math.min(limit, n);
-        return new QueryStream<>(host, target, fixed, filters, keys, skip, l, SLICED, fetches);
+        return new QueryStream<>(host, target, fixed, filters, keys, skip, l, SLICED, fetches, nearest);
     }
 
     /**
@@ -274,7 +347,7 @@ public class QueryStream<T> {
     public QueryStream<T> fetch(RefField<? super T, ?> ref) {
         List<RefField<? super T, ?>> f = new ArrayList<>(fetches);
         f.add(Objects.requireNonNull(ref));
-        return new QueryStream<>(host, target, fixed, filters, keys, skip, limit, stage, List.copyOf(f));
+        return new QueryStream<>(host, target, fixed, filters, keys, skip, limit, stage, List.copyOf(f), nearest);
     }
 
     // ---------------------------------------------------------------- bulk writes
@@ -382,6 +455,9 @@ public class QueryStream<T> {
 
     public long count() {
         try (Run r = run()) {
+            if (nearest != null) {
+                return r.near().size();              // objects without a vector are not results
+            }
             long n = Math.max(0, r.ex.count() - skip);
             return limit < 0 ? n : Math.min(n, limit);
         }
@@ -389,6 +465,9 @@ public class QueryStream<T> {
 
     public boolean exists() {
         try (Run r = run()) {
+            if (nearest != null) {
+                return !r.near().isEmpty();
+            }
             boolean[] found = {false};
             long[] seen = {0};
             r.ex.forEach(h -> {
@@ -481,6 +560,14 @@ public class QueryStream<T> {
             } else {
                 sb.append('\n');
                 describe(sb, r.cond, views.isEmpty() ? null : views.get(0), "  ");
+            }
+            if (nearest != null) {
+                TypeDef t = r.planner.typeOf(r.planner.storedPath(nearest.path()));
+                VectorDistance d = nearest.distance() != null ? nearest.distance()
+                        : t != null && t.kind() == ValueType.VECTOR ? t.distance() : null;
+                sb.append("NEAREST ").append(nearest.path()).append(" by ").append(d).append(" to a ")
+                        .append(nearest.query().length).append("-dim vector  [exact scan of the filtered objects")
+                        .append(limit >= 0 ? ", top-N heap]" : ", full sort]").append('\n');
             }
             if (!keys.isEmpty()) {
                 sb.append("SORT ").append(String.join(", ", keys.stream().map(Order.Key::toString).toList()))
@@ -600,10 +687,29 @@ public class QueryStream<T> {
         }
 
         List<Executor.Hit> hits() {
+            if (nearest != null) {
+                return near().stream().map(Executor.Near::hit).toList();
+            }
             if (keys.isEmpty()) {
                 return ex.hits(skip, limit);
             }
             return ex.sorted(sortKeys(), skip, limit);
+        }
+
+        /** Nearest-neighbour hits with distances; the path must be a vector of the query's dimension. */
+        List<Executor.Near> near() {
+            String path = planner.storedPath(nearest.path());
+            TypeDef t = planner.typeOf(path);
+            if (t == null || t.kind() != ValueType.VECTOR) {
+                throw new IllegalArgumentException("nearest(): '" + nearest.path() + "' of " + target.label()
+                        + " is not a vector field" + (t == null ? "" : " (" + t + ")"));
+            }
+            if (t.dim() > 0 && t.dim() != nearest.query().length) {
+                throw new IllegalArgumentException("nearest(): query vector has " + nearest.query().length
+                        + " dimensions, " + nearest.path() + " has " + t.dim());
+            }
+            VectorDistance d = nearest.distance() != null ? nearest.distance() : t.distance();
+            return ex.nearest(path, nearest.query(), d, skip, limit);
         }
 
         List<Executor.SortKey> sortKeys() {

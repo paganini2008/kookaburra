@@ -3,6 +3,7 @@ package com.github.kookaburra.face.view;
 import com.github.kookaburra.Ref;
 import com.github.kookaburra.face.model.Display;
 import com.github.kookaburra.mapping.TypeDef;
+import com.github.kookaburra.mapping.Vectors;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
@@ -86,6 +87,7 @@ class FormWidgets {
             }
             case STRING -> inRow ? text(path, t) : longText(path);
             case BYTES -> binary(path, ctx);
+            case VECTOR -> vector(path, t);
             case EMBEDDED_LIST, MAP -> inRow ? kept(t) : new CollectionEditor(path, t, ctx).leaf();
             case OBJECT -> kept(t);
             default -> text(path, t);
@@ -110,6 +112,14 @@ class FormWidgets {
         c.setPromptText(hint(t));
         return new Leaf(c, () -> parse(t, c.getText(), path), v -> c.setText(v == null ? "" : v instanceof Ref<?> r ? String.valueOf(r.oid())
                 : v instanceof List<?> l ? String.join(", ", l.stream().map(Display::text).toList()) : String.valueOf(v)));
+    }
+
+    /** A vector as text {@code [0.1, 0.2, …]}, checked against the field's dimension. */
+    private static Leaf vector(String path, TypeDef t) {
+        TextField c = new TextField();
+        c.setPromptText(t.dim() == 0 ? "[0.1, 0.2, …]" : "[0.1, 0.2, …]  (" + t.dim() + " numbers)");
+        return new Leaf(c, () -> c.getText().isBlank() ? null : Vectors.canonical(t, c.getText(), path),
+                v -> c.setText(v == null ? "" : Display.text(v instanceof float[] ? v : Vectors.of(v, path))));
     }
 
     /** One-line text field; long or multi-line texts (or the expand button) switch to a text area. */

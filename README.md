@@ -23,7 +23,7 @@ Kookaburra is an **embedded object database for Java 17+**. You store plain anno
 
 <p align="center">
   <a href="https://paganini2008.github.io/kookaburra/#tutorial"><img src="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial-poster.jpg" width="560" alt="Watch the 3-minute tutorial"></a><br>
-  🎬 <a href="https://paganini2008.github.io/kookaburra/#tutorial"><b>Watch the tutorial</b></a> (2:57, English subtitles) · <a href="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4">MP4</a>
+  🎬 <a href="https://paganini2008.github.io/kookaburra/#tutorial"><b>Watch the tutorial</b></a> (2:56, English subtitles) · <a href="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4">MP4</a>
 </p>
 
 ---
@@ -37,6 +37,7 @@ Kookaburra is an **embedded object database for Java 17+**. You store plain anno
 | 🧭 | **Type-safe chained queries** from method references or a generated metamodel | Refactoring-safe filters, no SQL mapping layer |
 | ⚡ | **Indexes** on the fields you filter, sort and group by | Filter, count, top-N and group 10 M objects in milliseconds |
 | 🔤 | **OQL**: `SELECT / UPDATE / DELETE` with SQL-92 core | Text queries for tools, configs and ad-hoc analysis |
+| 🎯 | **Vector search**: `float[]` embeddings, nearest neighbours by cosine, L2 or inner product | Semantic search and RAG next to your filters |
 | 🧩 | **Dynamic API** on a self-describing schema | Open any database without its classes |
 
 ### Data model
@@ -85,6 +86,7 @@ Kookaburra is an **embedded object database for Java 17+**. You store plain anno
 | `List` / `Set` of `@Embeddable` | EMBEDDED_LIST | scan | "any element" paths (`items.sku`) |
 | `Map<K, V>` (scalar keys, scalar or `@Embeddable` values) | MAP | | |
 | `byte[]` | BYTES | | images, files; Base64 in JSON / CSV exports |
+| `float[]` (`@Vector(dim = …)`) | VECTOR | nearest | float32 embeddings; dimension checked on write; searched with `nearest(...)` |
 | any other `Serializable` | OBJECT | | Java serialization |
 
 ## How It Works
@@ -109,7 +111,7 @@ Design notes for contributors: [docs/design.md](docs/design.md).
 | Java | **17+** (JDK for building; JRE for running) |
 | Runtime dependencies | RoaringBitmap 1.6.22, ANTLR 4.13.2 runtime, SLF4J API 2.0 (bring any backend) |
 | Build | Maven 3.8+ |
-| Studio | Java 17+ runtime; Windows x64, Linux x64 (GTK 3) or macOS Apple Silicon; JavaFX is bundled |
+| Studio | Installers with their own Java runtime for Windows x64, macOS (Apple silicon, Intel) and Linux x64 (GTK 3); or the jar on any Java 17+ |
 
 ## Quick Start
 
@@ -173,13 +175,13 @@ try (ObjectDB db = ObjectDB.open(Path.of("data"))) {
 [Hyperion, Neuromancer]
 ```
 
-**4. Look at it in Studio:**
+**4. Look at it in Studio.** Download the latest version (no Java needed for the installers):
 
-```bash
-mvn install -DskipTests                                  # library
-mvn -f kookaburra-face/pom.xml -P dist package -DskipTests  # → bin/kookaburra-face.jar
-java -jar bin/kookaburra-face.jar --data=data            # or double-click the jar
-```
+| Windows 10 / 11 | macOS | Linux | Any OS with Java 17+ |
+|---|---|---|---|
+| [Installer (.msi)](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-windows-x64.msi) · [zip](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-windows-x64.zip) | [Apple silicon (.dmg)](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-macos-arm64.dmg) · [Intel (.dmg)](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-macos-x64.dmg) | [.deb](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-linux-x64.deb) · [.tar.gz](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-linux-x64.tar.gz) | [kookaburra-studio.jar](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio.jar) |
+
+Open any database directory with **Open database…** (or start with `--data=PATH`). The installed app keeps its settings, default database and logs in `~/Kookaburra`. From source: `mvn -f kookaburra-face/pom.xml -P dist package -DskipTests` builds `bin/kookaburra-face.jar`.
 
 <p align="center">
   <img src="https://paganini2008.github.io/kookaburra/assets/studio-splash.png" width="300" alt="Studio splash">
@@ -192,6 +194,7 @@ java -jar bin/kookaburra-face.jar --data=data            # or double-click the j
 | **← referenced by**: the objects pointing at the selected one (backlinks); double-click opens one | <img src="https://paganini2008.github.io/kookaburra/assets/studio-backlinks.png" width="420" alt="Studio backlinks"> |
 | Constraint column (`UNIQUE`, `FK → Customer · CASCADE`); violations open a "Constraint violated" dialog | <img src="https://paganini2008.github.io/kookaburra/assets/studio-constraints.png" width="420" alt="Studio constraints"> |
 | Element editor for lists of embedded objects and maps (add, remove, reorder) | <img src="https://paganini2008.github.io/kookaburra/assets/studio-nested-editor.png" width="420" alt="Studio element editor"> |
+| **Stats dashboard**: objects, storage, commits per second, open transactions, conflicts; live write and transaction rates; objects and storage per collection | <img src="https://paganini2008.github.io/kookaburra/assets/studio-stats.png" width="420" alt="Studio stats dashboard"> |
 | Binary fields with image preview, long texts, exact decimals; **Flush** and **Backup** in the toolbar | <img src="https://paganini2008.github.io/kookaburra/assets/studio-binary.png" width="420" alt="Studio binary field"> |
 
 The demo database (`--demo`) contains all of these: customers with a unique e-mail, a two-level address and a map of contacts; products with a unique SKU, a decimal price and a PNG photo; purchases with order lines and foreign keys (deleting a customer deletes their purchases, a purchased product cannot be deleted).
@@ -326,6 +329,29 @@ BackupInfo[path=/…/backups/2026-10-17, …, objects=2, …]
   <img src="https://paganini2008.github.io/kookaburra/assets/backup-overview.png" width="760" alt="Online backup">
 </p>
 
+### Vector search
+
+```java
+@Entity
+public class Doc {
+    @Id long oid;
+    @Index String lang;
+    String title;
+    @Vector(dim = 384) float[] embedding;            // cosine by default; distance = L2 / INNER_PRODUCT
+}
+
+List<Doc> top = db.query(Doc.class)
+        .where(Doc::getLang).eq("en")                // filters run first, on the indexes
+        .nearest(Doc::getEmbedding, queryVector, 10) // the 10 closest
+        .list();
+```
+```sql
+SELECT d.title, cosine_distance(d.embedding, :q) AS dist
+FROM Doc d WHERE d.lang = 'en' ORDER BY dist LIMIT 10
+```
+
+Try it in Studio: the demo database gives every product a 4-dimensional embedding (`[reading, tech, home, outdoor]`), so `ORDER BY cosine_distance(p.embedding, '[1, 0, 0, 0]')` lists the books first. `listWithDistance()` returns the distances too. The functions are named as in pgvector: `cosine_distance`, `l2_distance`, `inner_product` (larger is closer, so `ORDER BY … DESC`) and `vector_dims`. The search is exact: about 35 ms for the top 10 of 100,000 vectors of 384 dimensions, and about 1 ms when a filter leaves 1 % of them.
+
 ### Statistics
 
 ```java
@@ -336,7 +362,7 @@ s.transactions().total().conflicts();  // failed commits that a retry may fix
 s.constraints().uniqueViolations();
 ```
 
-Per collection: objects and disk size. Counters since open: writes, transactions per isolation level, constraint violations, background work and backups. Studio shows the same numbers on its **Stats** tab.
+Per collection: objects and disk size. Counters since open: writes, transactions per isolation level, constraint violations, background work and backups. Studio shows the same numbers on its **Stats** dashboard, with live rates.
 
 ### Nested objects
 
@@ -402,7 +428,7 @@ All settings live in one file, [`kookaburra.properties`](kookaburra.properties):
 | `kookaburra.transactions` | `false` | enables `begin()` / `inTransaction()`; off = every write commits directly |
 | `kookaburra.tx-isolation` | `SNAPSHOT` | isolation of `begin()` / `inTransaction`: `READ_COMMITTED`, `SNAPSHOT`, `SERIALIZABLE` |
 | `kookaburra.tx-timeout` / `tx-retries` | `60s` / `3` | transaction timeout; `inTransaction` retries after a conflict |
-| `kookaburra.data` | `<jar dir>/data` | Studio: default database directory |
+| `kookaburra.data` | `<jar dir>/data` (installed app: `~/Kookaburra/data`) | Studio: default database directory |
 | `kookaburra.log-dir` / `kookaburra.log-level` | `<jar dir>/logs` / `INFO` | Studio: log files |
 | `kookaburra.theme` / `page-size` / `console-page-size` | `NEON` / `50` / `100` | Studio UI |
 
@@ -444,7 +470,7 @@ Memory, file size and background-work tuning keys are listed with comments in [`
 
 | Guide | Link |
 |---|---|
-| Video tutorial | [Watch on the website](https://paganini2008.github.io/kookaburra/#tutorial) (2:57) · regenerate with `mvn -f kookaburra-face/pom.xml test -P tutorial` (needs ffmpeg) |
+| Video tutorial | [Watch on the website](https://paganini2008.github.io/kookaburra/#tutorial) (2:56) · regenerate with `mvn -f kookaburra-face/pom.xml test -P tutorial` (needs ffmpeg) |
 | Getting Started | [Quick Start](#quick-start) |
 | Design notes (for contributors) | [docs/design.md](docs/design.md) |
 | Transactions | [docs/transaction-design.md](docs/transaction-design.md): three isolation levels with OCC, decisions T1 to T17 |

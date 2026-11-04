@@ -2,6 +2,7 @@ package com.github.kookaburra.oql;
 
 import com.github.kookaburra.Ref;
 import com.github.kookaburra.WriteBatch;
+import com.github.kookaburra.annotation.VectorDistance;
 import com.github.kookaburra.dynamic.DynField;
 import com.github.kookaburra.dynamic.DynamicCollection;
 import com.github.kookaburra.dynamic.DynamicObject;
@@ -13,6 +14,7 @@ import com.github.kookaburra.mapping.DynamicCodec;
 import com.github.kookaburra.mapping.Schema;
 import com.github.kookaburra.mapping.TypeDef;
 import com.github.kookaburra.mapping.ValueType;
+import com.github.kookaburra.mapping.Vectors;
 import com.github.kookaburra.query.Order;
 import com.github.kookaburra.query.Pred;
 import com.github.kookaburra.query.QueryStream;
@@ -512,6 +514,21 @@ class Engine {
             return grouped(q, s, stream, itemExprs, names, orderExprs, enumOrder, limit, offset, plan, explainOnly);
         }
 
+        // ---- nearest neighbours: ORDER BY cosine_distance(x.v, :q) [LIMIT k] runs as a vector search
+        NearOrder near = orderExprs.size() == 1 && !(q.distinct() && !objects)
+                ? nearOrder(orderExprs.get(0), q.orderBy().get(0), s) : null;
+        if (near != null) {
+            QueryStream<DynamicObject> ordered = stream.nearest(near.path(), near.query(), near.distance());
+            long want = limit < 0 ? -1 : offset + limit;
+            plan.append((want < 0 ? ordered : ordered.limit(want)).explain());
+            plan.append("OQL ").append(objects ? "objects" : "projection " + names).append("  [ORDER BY pushed down: nearest neighbours]\n");
+            if (explainOnly) {
+                return new Result(List.of("plan"), List.of(), List.of(), q.shape(), false, plan.toString());
+            }
+            List<DynamicObject> found = nearestRows(stream, ordered, near, s, want, offset, limit);
+            return rows(found, objects, itemExprs, names, q, s, plan);
+        }
+
         // ---- plain select: push ORDER BY (plain stored paths) and slicing down when possible
         List<Order<DynamicObject>> pushedOrder = new ArrayList<>();
         for (int i = 0; i < orderExprs.size(); i++) {
@@ -579,6 +596,93 @@ class Engine {
             rows.forEach(r -> objs.add((DynamicObject) r[0]));
         }
         return new Result(names, rows, objs, q.shape(), objects, plan.toString());
+    }
+
+    /** A pushed-down nearest-neighbour ORDER BY item. */
+    private record NearOrder(String path, float[] query, VectorDistance distance, boolean nullsFirst) {
+    }
+
+    /**
+     * {@code COSINE_DISTANCE / L2_DISTANCE(path, constant)} ascending or {@code INNER_PRODUCT(path, constant)} descending
+     * on a vector of the queried class, else null (sorted in memory).
+     */
+    private NearOrder nearOrder(Ast.Expr e, Ast.OrderItem item, Scope s) {
+        if (!(e instanceof Ast.Func f) || f.args().size() != 2) {
+            return null;
+        }
+        VectorDistance d = switch (f.name()) {
+            case "COSINE_DISTANCE" -> VectorDistance.COSINE;
+            case "L2_DISTANCE" -> VectorDistance.L2;
+            case "INNER_PRODUCT" -> VectorDistance.INNER_PRODUCT;
+            default -> null;
+        };
+        if (d == null || item.desc() != (d == VectorDistance.INNER_PRODUCT)) {
+            return null;
+        }
+        Ast.Expr pathArg = f.args().get(0);
+        Ast.Expr queryArg = f.args().get(1);
+        if (!(pathArg instanceof Ast.Path)) {
+            pathArg = f.args().get(1);
+            queryArg = f.args().get(0);
+        }
+        if (!(pathArg instanceof Ast.Path p) || !constant(queryArg) || s.local(p).isEmpty()) {
+            return null;
+        }
+        Resolved r = s.resolve(s.local(p), p);
+        if (r.refTarget() != null || r.type().kind() != ValueType.VECTOR) {
+            return null;
+        }
+        Object qv = constValue(queryArg);
+        if (qv == null) {
+            return null;
+        }
+        float[] query;
+        try {
+            query = Vectors.of(qv, f.name());
+        } catch (IllegalArgumentException ex) {
+            throw new OqlException(ex.getMessage(), f.line(), f.column());
+        }
+        return new NearOrder(r.local(), query, d, item.nullsFirst() != null ? item.nullsFirst() : item.desc());
+    }
+
+    /**
+     * The objects of a nearest-neighbour ORDER BY, sliced: the closest ones from the vector search, and objects without
+     * a vector before or after them (NULLS FIRST / LAST), exactly as the in-memory sort would place them.
+     */
+    private List<DynamicObject> nearestRows(QueryStream<DynamicObject> filtered, QueryStream<DynamicObject> ordered, NearOrder near,
+                                            Scope s, long want, long offset, long limit) {
+        List<DynamicObject> withVector = (want < 0 ? ordered : ordered.limit(want)).toList();
+        List<DynamicObject> all = new ArrayList<>();
+        if (near.nullsFirst() || want < 0 || withVector.size() < want) {
+            QueryStream<DynamicObject> nulls = filtered.filter(s.coll.field(near.path()).isNull());
+            List<DynamicObject> without = (want < 0 ? nulls : nulls.limit(want)).toList();
+            all.addAll(near.nullsFirst() ? without : withVector);
+            all.addAll(near.nullsFirst() ? withVector : without);
+        } else {
+            all.addAll(withVector);
+        }
+        int from = (int) Math.min(offset, all.size());
+        int to = limit < 0 ? all.size() : (int) Math.min(all.size(), from + limit);
+        return all.subList(from, to);
+    }
+
+    /** Result rows of already ordered and sliced objects. */
+    private Result rows(List<DynamicObject> found, boolean objects, List<Ast.Expr> itemExprs, List<String> names, Ast.Select q,
+                        Scope s, StringBuilder plan) {
+        List<Object[]> rows = new ArrayList<>();
+        for (DynamicObject o : found) {
+            Object[] row = new Object[objects ? 1 : itemExprs.size()];
+            if (objects) {
+                row[0] = o;
+            } else {
+                Eval.Env env = rowEnv(o, s);
+                for (int i = 0; i < row.length; i++) {
+                    row[i] = Eval.eval(itemExprs.get(i), env);
+                }
+            }
+            rows.add(row);
+        }
+        return new Result(names, rows, objects ? new ArrayList<>(found) : List.of(), q.shape(), objects, plan.toString());
     }
 
     /** Checks that every path in {@code e} names a stored field (through references). */

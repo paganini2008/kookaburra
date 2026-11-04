@@ -19,6 +19,7 @@ import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
@@ -180,6 +181,9 @@ public class MetamodelProcessor extends AbstractProcessor {
             case LONG: return new Kind("LongField", "longField", null);
             case FLOAT: case DOUBLE: return new Kind("DoubleField", "doubleField", null);
             case DECLARED: break;
+            case ARRAY:
+                return ((ArrayType) t).getComponentType().getKind() == TypeKind.FLOAT
+                        ? new Kind("VectorField", "vectorField", null) : object(t);
             default: return object(t);
         }
         TypeElement e = asElement(t);
@@ -219,7 +223,7 @@ public class MetamodelProcessor extends AbstractProcessor {
 
     private boolean isScalar(TypeMirror t) {
         Kind k = classify(t);
-        return k.kind != null && !k.kind.equals("ListField") && !k.kind.equals("ObjectField");
+        return k.kind != null && !k.kind.equals("ListField") && !k.kind.equals("ObjectField") && !k.kind.equals("VectorField");
     }
 
     private boolean isCollection(TypeMirror t) {

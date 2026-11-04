@@ -45,5 +45,14 @@ class StudioPathsTest {
         assertThat(StudioPaths.logDir(Map.of(StudioPaths.LOG_DIR, "../var/log"), home)).isEqualTo(tmp.resolve("var/log"));
         assertThat(StudioPaths.logDir(Map.of(StudioPaths.LOG_DIR, abs.toString()), home)).isEqualTo(abs);
         assertThat(StudioPaths.logDir()).isAbsolute();
+
+        // the installed app keeps settings, data and logs in the user's home (its program folder is read-only)
+        Path user = tmp.resolve("user");
+        assertThat(StudioPaths.home("/Applications/Kookaburra Studio.app/Contents/MacOS/Kookaburra Studio", user.toString()))
+                .isEqualTo(user.resolve("Kookaburra"));
+        assertThat(StudioPaths.dataDir(List.of(), Map.of(), StudioPaths.home("C:\\Program Files\\Kookaburra Studio\\app.exe",
+                user.toString()))).isEqualTo(user.resolve("Kookaburra").resolve("data").toAbsolutePath());
+        assertThat(StudioPaths.home(null, user.toString())).isEqualTo(StudioPaths.home());
+        assertThat(StudioPaths.home(" ", user.toString())).isEqualTo(StudioPaths.home());
     }
 }

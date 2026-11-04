@@ -113,4 +113,12 @@ public class ByteSink {
         writeVarInt(b.length);
         return writeBytes(b);
     }
+
+    /** Little-endian float32 values (no length). */
+    public ByteSink writeFloats(float[] v) {
+        for (float f : v) {
+            writeInt(Float.floatToRawIntBits(f));
+        }
+        return this;
+    }
 }
