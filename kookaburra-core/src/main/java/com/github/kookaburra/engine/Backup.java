@@ -94,7 +94,8 @@ class Backup {
                         queue.add(c);
                     }
                     if (chunkBytes >= limit || queue.isEmpty()) {
-                        byte[] seg = SegmentWriter.write(chunk, schema.columns(collection).values(), db.config().bloomFpp(),
+                        byte[] seg = SegmentWriter.write(chunk, schema.columns(collection).values(),
+                                SegmentWriter.VectorSpec.of(schema.vectorColumns(collection), db.config()), db.config().bloomFpp(),
                                 db.config().autoPostingsRatio());
                         int id = nextId++;
                         try (MappedFile f = out.writeSegment(collection, id, seg)) {

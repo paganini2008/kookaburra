@@ -2,7 +2,7 @@
 
 > Status: **living document**, updated together with the code. See [§20 Changelog](#20-changelog).
 >
-> Related: [storage-design.md](storage-design.md) (segments, write path, compaction, recovery, backup) · [transaction-design.md](transaction-design.md) (transactions) · [developer-guide.md](developer-guide.md) (build, test, conventions)
+> Related: [architecture.md](architecture.md) (layers, one picture) · [storage-design.md](storage-design.md) (segments, write path, compaction, recovery, backup) · [transaction-design.md](transaction-design.md) (transactions) · [developer-guide.md](developer-guide.md) (build, test, conventions)
 
 ---
 
@@ -25,6 +25,8 @@
 ---
 
 ## 2. Architecture
+
+The layers in one picture: [architecture.md](architecture.md). Components and their dependencies:
 
 ```mermaid
 flowchart TB
@@ -207,8 +209,12 @@ flowchart LR
 | Index kind added / changed | New layout; old segments simply lack the column (planner falls back to residual) |
 | `@Unique` / `@ForeignKey` added | Stored data is checked first (like `ALTER TABLE ADD CONSTRAINT`): duplicates or dangling references fail the registration and the schema stays unchanged |
 | Add subclass | New class id; old segments have no rows of it |
-| Rename (`@Renamed("old")`) | Reserved |
+| Rename a field: `@Renamed("old")` on the field (entity or embeddable, any depth) | the former name is rewritten to the new one in every stored layout (rows decode by position, so old rows read under the new name); in-memory rows are decoded again; old segments' columns keep the old path until a merge (queries read the rows meanwhile); both names stored → rejected |
+| Rename a class: `@Renamed("com.old.Name")` on the class | the class definition takes the new name, keeps id, OIDs, layouts and its collection (directory); the old name is kept as a **former name** (schema format 5) so references, OQL and dynamic access by the old name still find it; a renamed parent is followed by its subclasses |
+| Comment added / changed: `@Comment` on a class or field | stored in the schema (class and field definitions, format 5); a change that touches only comments replaces the current layout instead of appending one, so no schema version is added |
 | Any other type change | Rejected at open → explicit migration |
+
+**Export as Java** (`db.exportSchema(targetPackage)` → `SchemaExport`, `exportSchema(dir, pkg)` writes it): one file per top-level class; entities (parent, `@Id`, `@Version`, class `@Unique`), the embeddables and enums they use, every field with its annotations (`@Index(kind)` unless implied by a constraint, `@Unique`, `@ForeignKey(onDelete)`, `@FullText(analyzer)`, `@Vector(dim, distance, quantization)`, `@Comment` plus Javadoc), wrapper types (the schema keeps no primitive / boxed difference), getters and setters. Nested classes (`Outer$Inner`) are written nested, missing outer classes as holders. Compiled, the classes reproduce the stored field lists exactly, so opening the database with them adds no layout (D69). A target package moves every class and adds `@Renamed(storedName)`: opening renames the stored classes. Warnings: serialized types not in `java.*`, references to classes that are not stored, embeddables stored with different fields.
 
 ### 3.6 Constraints
 
@@ -254,7 +260,7 @@ Moved to [storage-design.md §3](storage-design.md#3-directory-layout).
 
 ## 5. Segment Format
 
-Moved to [storage-design.md §4](storage-design.md#4-segment-format) (layout, encodings, index kinds, row encoding) and [§5](storage-design.md#5-where-roaringbitmap-is-used) (RoaringBitmap usage).
+Moved to [storage-design.md §4](storage-design.md#4-segment-format) (layout, encodings, index kinds, row encoding, vector columns and HNSW graphs) and [§5](storage-design.md#5-where-roaringbitmap-is-used) (RoaringBitmap usage).
 
 - Immutable file per segment, rows sorted by OID, docid = row number.
 - Indexed fields: sorted dictionary, bit-packed ordinals, Roaring postings or sorted docids (`AUTO`).
@@ -657,41 +663,123 @@ Scans of `ord` are restricted to the current candidate bitmap when one exists.
 
 Cross-segment: ordinal → value, merge in hash map (`count` add, `sum` add, `avg` (sum,count), `min/max` compare, `count distinct` set union).
 
-### 10.5 explain()
+### 10.5 Query plans: explain and explain analyze
+
+A plan is a tree of steps, the root being the result (as PostgreSQL's `EXPLAIN`): `QueryStream.plan()` / `explain()`
+show how the query will run without running it; `analyze()` / `explainAnalyze()` run it (results materialized as by
+`list()`) and add the rows each step produced (`in → out`) and its time (as `EXPLAIN ANALYZE`). OQL: `EXPLAIN …`,
+`EXPLAIN ANALYZE SELECT …` (SELECT only: an UPDATE or DELETE would change data), `OqlQuery.plan()` for the tree.
 
 ```
-QUERY Person  snapshot=seq 1842  segments=5 (mem 2, disk 3)
-FILTER
-  AND
-    city = 'Sydney'          [BITMAP post]        est 1.2%
-    age > 30                 [ORDINAL scan]       est 38%
-  RESIDUAL p -> ...          [decode rows]
-SORT age DESC, name ASC      [ordinal runs, k-way merge]
-LIMIT 20+10                  [top-N]
+Query  Person · snapshot 2 · 2 segments                         10 rows   3.62 ms
+└─ Fetch objects  materialize the results                       10 rows   0.43 ms
+   └─ Limit  10                                                 10 rows
+      └─ Top-N sort  age DESC NULLS FIRST                       20 → 10 rows   1.43 ms
+         └─ Filter  city = 'Perth' AND score IN (90, +∞)        1,001 → 20 rows   1.76 ms
+            ├─ mem#3  1 object                                  1 → 0 rows   0.55 ms
+            │  └─ AND …
+            └─ seg#2  1,000 objects                             1,000 → 20 rows   1.21 ms
+               └─ AND                                           1,000 → 20 rows   1.19 ms
+                  ├─ city = 'Perth'  [postings card=4]          1,000 → 250 rows   0.05 ms
+                  └─ score IN (90, +∞)  [scan: reads each row]  250 → 20 rows   1.09 ms
 ```
 
-### 10.6 Vector search (exact, phase 1)
+| Step | Meaning |
+|---|---|
+| Query | collection, snapshot, segment views |
+| Fetch objects | materializing the results (analyze only) |
+| Limit | `skip` / `limit` |
+| Diverse / Rerank / Hybrid | re-ordering of the closest candidates (§10.6) |
+| Top-N sort / Sort · Nearest · Full-text search | ordering: by keys, by vector distance (HNSW or exact per segment), by BM25 |
+| Filter | the planned condition, then one step per segment view and its conditions in evaluation order, each with its access: `postings`, `ordinals`, `sorted docs`, `OID lookup`, `$type`, `full-text index`, `scan: reads each row`, `decode rows` |
+
+- `QueryPlan.Step(operation, detail, access, inputRows, rows, nanos, children)`; `Access` = INDEX, FULLTEXT, VECTOR, SCAN, PROCESS, NONE colours the Studio diagram.
+- Measuring: an `exec.Profile` passed to the executor records per view the candidates, matches and time, and per condition (with its depth) the documents in and out and the time; without a profile nothing is recorded.
+- Studio draws the tree (§17.3): Explain / Analyze buttons, steps coloured by access, rows and time bars, the slowest working step marked, a text view.
+
+### 10.6 Vector search
 
 ```mermaid
 flowchart LR
-    F["filters → matches bitmap<br/>(indexes, as any query)"] --> S["per match: read the vector<br/>(path-only row decoding)"]
-    S --> D["distance to the query<br/>(query norm computed once)"]
-    D --> H["bounded max-heap of skip + limit<br/>(ties: storage order, NaN last)"]
-    H --> R["closest first"]
+    F["filters → matches bitmap<br/>(indexes, as any query)"] --> V{"per segment view"}
+    V -->|"graph for this distance,<br/>limit, matches > ef"| H["HNSW search, ef = max(numCandidates, k)<br/>matches = accept set"]
+    H -->|"compared more vectors<br/>than there are matches"| X
+    V -->|"no graph / exact() / few matches"| X["exact scan of the vector column<br/>(floats read in place)"]
+    V -->|"in-memory segment"| R["exact scan of the records"]
+    H --> M["merge: bounded max-heap of skip + limit<br/>(exact float distances, ties in storage order)"]
+    X --> M
+    R --> M
 ```
 
 | | Kookaburra | pgvector | Lucene / Elasticsearch |
 |---|---|---|---|
-| Type | `float[]` + `@Vector(dim, distance)` | `vector(n)` | `dense_vector` / `KnnFloatVectorField` (dims, similarity) |
+| Type | `float[]` + `@Vector(dim, distance)` | `vector(n)` | `dense_vector` / `KnnFloatVectorField` |
 | Distances | COSINE (`1 - cos`), L2, INNER_PRODUCT (`-a·b`) | `<=>`, `<->`, `<#>` (+ L1) | cosine, l2_norm, dot_product, max_inner_product |
-| Query | `nearest(Doc::getEmbedding, q, k)`; OQL `ORDER BY cosine_distance(d.v, :q) LIMIT k` | `ORDER BY v <=> q LIMIT k` | `knn` query, `k`, `num_candidates` |
-| Filters | pre-filter on indexes, then exact scan of the matches | WHERE (post-filter with HNSW) | pre-filter |
-| Index | none yet (exact); HNSW per segment in phase 2 | HNSW / IVFFlat | HNSW per segment |
+| Index | HNSW per segment, built at flush / merge (`m = 16`, `ef_construction = 100`) | HNSW (`m = 16`, `ef_construction = 64`) / IVFFlat | HNSW per segment (`m = 16`, `beam_width = 100`) |
+| Query | `nearest(Doc::getEmbedding, q, k)`, `.numCandidates(n)`, `.exact()`; OQL `ORDER BY cosine_distance(d.v, :q) LIMIT k` | `ORDER BY v <=> q LIMIT k`, `hnsw.ef_search` | `knn { k, num_candidates }` |
+| Filters | pre-filter bitmap = accept set of the graph search; exact when selective | post-filter (iterative scans since 0.8) | pre-filter as accept set; exact when selective |
+| Text query | `nearest(field, "text", k)`, OQL `EMBED('text')` (Ollama) | none (app side) | inference endpoints |
+
+**Storage** ([storage-design.md §4.5](storage-design.md#45-vector-columns-and-hnsw-graphs)): a `@Vector(dim = N)` path gets a vector column per segment: the docs with a vector of that dimension, their floats contiguous (read with an absolute bulk get, no row decoding, no `float[]` per row), and, from `kookaburra.vector-index-min-rows` vectors on, the HNSW graph (bottom layer `2m` links per node, upper layers `m`, diversity heuristic). Free-length vectors (`dim = 0`) and in-memory segments are scanned exactly. The graph is built for the field's distance; a query with another distance scans exactly. Cosine graphs are built on unit vectors (`1 - dot`).
+
+**Search per segment** (Lucene's strategy):
+- no limit, `exact()`, no graph, or at most `ef` matches → exact scan of the matches;
+- else HNSW: greedy descent through the upper layers, beam search with `ef` candidates on the bottom layer; every node is a stepping stone, only matches enter the results; when the search compares more vectors than there are matches (a selective filter) it stops and the matches are scanned exactly;
+- results carry exact float32 distances and are merged across segments with the in-memory segment.
+
+**int8** (`@Vector(quantization = INT8)`, as Elasticsearch's `int8_hnsw`): per segment the range of 99 % of the components (0.5 / 99.5 percentiles of up to 100 000 sampled values) is split into 256 steps; the vector column also holds one byte per component, the graph search reads those (a quarter of the memory), and all `ef` candidates are re-ranked with the float vectors, so results carry exact distances. Floats stay for re-ranking and merges.
+
+**Quality**: recall@10 against the exact search is 0.996 on 100 k × 384 clustered vectors (`ef = 100`) and 1.000 on 10 k real 2560-dim text embeddings (`qwen3-embedding:4b` through Ollama). `numCandidates` trades latency for recall up to 1.0; `exact()` is the true answer.
+
+**Cost** (M2 Max, JDK 17): 100 k × 384: top 10 about 1 ms with HNSW, 21 ms exact (was 35 ms reading rows); graph build about 10 s per 100 k vectors at flush (two flush threads).
+
+**Re-ordering the closest candidates** (both need a limit; the first pass takes `max(20, 4 k)` candidates unless `fetch` is given):
+- `diverse(λ, fetch)`: maximal marginal relevance (LangChain `max_marginal_relevance_search`, Elasticsearch / Qdrant MMR): greedy picks maximising `-λ · d(q, x) + (1 - λ) · min d(x, picked)`; λ = 1 is the plain order.
+- `rerank(textField[, query, fetch])`: a `Reranker` re-scores each candidate's text against the query text (by default the text of `nearest(field, "text", k)`); built in: Ollama `/api/generate`, the model answers whether the document meets the query with one token and the score is `P(yes) / (P(yes) + P(no))` from its log-probabilities (Qwen3-Reranker method, any instruct or reranker model); requests sent concurrently; `Neighbor.score()` carries it.
+
+**Embeddings**: `Embedder` (text → `float[]`) in core, no dependencies; built in: Ollama `/api/embed` (`kookaburra.embedder=ollama`, model, URL, timeout; batches of 64; contacted only when used). `Config.withEmbedder(...)` plugs in anything else. Used by `nearest(getter, "text", k)`, OQL `EMBED('text')` (once per distinct text and statement) and Studio's "From text" button.
 
 - `QueryStream.nearest(...)` orders by distance (field's `@Vector` distance unless given) and allows `skip / limit` after it; not combined with `orderBy` / `groupBy`. Objects without a vector, or with one of another length (`dim = 0`), are not results.
 - `listWithDistance()` → `Neighbor(value, distance)`; `count()` / `exists()` count results with a vector.
-- OQL functions `COSINE_DISTANCE`, `L2_DISTANCE`, `INNER_PRODUCT` (positive dot), `VECTOR_DIMS`; vectors as stored values, `float[]` / `double[]` / list parameters or text `'[1, 0, 0]'`. A single ORDER BY item `COSINE_DISTANCE / L2_DISTANCE(path, constant)` ASC or `INNER_PRODUCT` DESC on a vector of the queried class is pushed down; objects without a vector are placed after (NULLS LAST) or before (NULLS FIRST) the closest, as the in-memory sort would.
-- Cost: linear in objects × dimensions. 100 k × 384 dims: top 10 in about 35 ms (exact scan), about 1 ms with a 1 % filter.
+- OQL functions `COSINE_DISTANCE`, `L2_DISTANCE`, `INNER_PRODUCT` (positive dot), `VECTOR_DIMS`, `EMBED`; vectors as stored values, `float[]` / `double[]` / list parameters or text `'[1, 0, 0]'`. A single ORDER BY item `COSINE_DISTANCE / L2_DISTANCE(path, constant)` ASC or `INNER_PRODUCT` DESC on a vector of the queried class is pushed down; objects without a vector are placed after (NULLS LAST) or before (NULLS FIRST) the closest, as the in-memory sort would.
+- `explain()` shows per segment: `HNSW, ef=…`, `exact scan of the vector column` or `exact scan of the rows`.
+
+### 10.7 Full-text search
+
+```mermaid
+flowchart LR
+    T["text"] --> A["Analyzer<br/>(english: words · possessive · stop words · Porter)"] --> W["words + frequencies"]
+    W --> I["per segment: word dictionary<br/>Roaring posting per word · frequencies · lengths"]
+    Q["query 'baking bread*'"] --> A2["same analyzer<br/>(prefix: lower-cased only)"] --> M["matches: AND / OR of postings"]
+    M --> S["search: BM25 over collection statistics"]
+    S --> H["hybrid: RRF with nearest()"]
+```
+
+| | Kookaburra | SQLite FTS5 | Lucene / Elasticsearch | PostgreSQL |
+|---|---|---|---|---|
+| Declare | `@FullText(analyzer = "english")` on a `String` | `CREATE VIRTUAL TABLE … USING fts5` | `text` field + analyzer | `tsvector` + GIN |
+| Analysis | `english` (default): Unicode words, CJK bigrams, possessive, stop words, Porter stem; `standard`: Unicode words + CJK bigrams; own ones via `Analyzers.register` | `unicode61`, `porter` | `standard`, `english` (same chain), `cjk` … | text search configs |
+| Filter | `where(f).matches("a b")` (all words), `matchesAny`, prefix `bre*`; OQL `MATCH(x.f, '…')` | `MATCH 'a b'`, `bre*` | `match` (OR / AND), `prefix` | `@@ to_tsquery` |
+| Relevance | `search(f, "…", k)` BM25 (k1 1.2, b 0.75); OQL `ORDER BY SCORE(x.f, '…') DESC` | `bm25()` | BM25 | `ts_rank` (no IDF) |
+| Hybrid | `nearest(v, "text", k).hybrid(f)`: RRF, constant 60 | none | RRF retriever | app side |
+
+- **Storage** ([storage-design.md §4.6](storage-design.md#46-full-text-indexes)): an inverted index per segment on the same blocks as the columns: sorted word dictionary, one Roaring posting per word, frequencies in posting order, word count per document; the in-memory segment keeps postings and per-row frequencies. Segment format 3.
+- **Analyzer** named in the schema (the string field's `TypeDef.name`), so indexing and queries always use the same one; an unregistered name fails with a hint to register it.
+- **Semantics**: `matches` = every word (as FTS5), `matchesAny` / `search` = any word (as a `match` query); a field without an index gives the same answers by splitting its rows (differential test). Statistics include deleted documents until a merge (as Lucene).
+- **Rerank** works after `search(...)` as after `nearest(...)`; `SCORE()` in a select list needs the same `ORDER BY SCORE(…) DESC` (the score comes from the search).
+- **Phrases** `"fresh bread"`: words next to each other, in order; positions come from the analyzer (`Analyzer.tokens`: word, position, offsets), removed stop words keep their position (Lucene's gaps). The index finds the documents with every word of the phrase; positions are checked on the candidates' text (no positions stored in segments).
+- **Highlighting**: `TextQuery.highlight(text)` / OQL `HIGHLIGHT(x.f, 'query')` marks matched words and phrases `<em>…</em>` (Elasticsearch's marks, PostgreSQL's `ts_headline`); long texts give up to three fragments of about 100 characters joined by ` … `; analyzers without offsets give the text unmarked.
+
+### 10.8 Conditions on one element of an embedded list
+
+| | API / OQL | Meaning |
+|---|---|---|
+| any element (existing) | `whereAny(Order::getLines, Line::getSku).contains("A")`, `'A' MEMBER OF o.lines.sku` | each condition may be met by a different element |
+| one element | `whereElement(Order::getLines, e -> e.where(Line::getSku).eq("A").where(Line::getQty).gt(5))` | the same element meets every condition (MongoDB `$elemMatch`) |
+| one element, OQL | `SELECT o FROM Order o JOIN o.lines l WHERE l.sku = 'A' AND l.qty > 5` | JPQL join over the list: some binding of `l` makes WHERE true; each object once (EXISTS semantics); `LEFT JOIN` binds null to an empty list; several element joins bind independently |
+
+- Execution: equalities / IN on an element path are pushed down as "some element has the value" (index of the multi-valued path, a superset); conjuncts without the element alias run as usual; the exact check then evaluates the conditions per element (`Pred.ElemMatch`, OQL correlated residual). Conditions with NOT / OR on the alias are only checked per element (pushing them down could drop matches).
+- The element alias is only allowed in WHERE (no per-element rows).
 
 ---
 
@@ -856,6 +944,16 @@ Later sources override earlier ones (`Settings.load`, `Config.load` / `Config.fr
 | `kookaburra.durability` | `SYNC` | core | `SYNC` = fsync per commit group, `ASYNC` = OS page cache |
 | `kookaburra.group-commit-micros` | `200` | core | sequencer waits this long to batch more commits (SYNC only) |
 | `kookaburra.sequencer-max-group` | `512` | core | max write requests per group commit |
+| `kookaburra.vector-m` | `16` | core | HNSW links per node on the upper layers (bottom layer: twice as many) |
+| `kookaburra.vector-ef-construction` | `100` | core | HNSW candidate list while inserting |
+| `kookaburra.vector-ef-search` | `100` | core | HNSW candidates per segment of a search (at least k); `numCandidates(n)` per query |
+| `kookaburra.vector-index-min-rows` | `2000` | core | segments with fewer vectors get no graph (exact scan) |
+| `kookaburra.embedder` | `ollama` | core | text embedder: `ollama` or `none` (contacted only when used) |
+| `kookaburra.embedder-url` | `http://localhost:11434` | core | Ollama address |
+| `kookaburra.embedder-model` | `nomic-embed-text` | core | embedding model (its dimension must match the `@Vector` field) |
+| `kookaburra.embedder-timeout` | `60s` | core | longest wait for one embedding request |
+| `kookaburra.reranker` | `ollama` | core | reranker for `rerank(...)`: `ollama` or `none` (contacted only when used) |
+| `kookaburra.reranker-url` / `-model` / `-timeout` | `http://localhost:11434` / `qwen3:4b` / `120s` | core | Ollama address, instruct or reranker model, longest wait |
 | `kookaburra.data` | _(empty → `<app dir>/data`)_ | Studio | default database directory |
 | `kookaburra.theme` | `NEON` | Studio | initial theme (user choice is remembered) |
 | `kookaburra.page-size` | `50` | Studio | Data grid rows per page |
@@ -992,13 +1090,18 @@ Independent desktop application: module / jar **`kookaburra-face`** (own launche
 | Navigator (sidebar) | **several databases at once**: tree database → classes (hierarchy, live object counts); close button per database; a directory already open is focused, not reopened; same-named databases get unique labels (`demo`, `demo (2)`); selecting a class opens it in Data and Schema |
 | Transactions | toolbar **Begin / Commit / Rollback** per database (no cross-database transactions); Begin is a split button whose menu picks READ COMMITTED / SNAPSHOT / SERIALIZABLE (default `kookaburra.tx-isolation`); create / edit / delete / console DML go into the open transaction; status `TX #id · SERIALIZABLE · N pending changes`; `ConflictException` → dialog; Studio opens databases with `kookaburra.transactions=true`, timeout 30 min; closing a database or the window with pending changes asks first; the console's `BEGIN` / `COMMIT` / `ROLLBACK` drive the same transaction (D48) |
 | About | product, version (filtered from the POM), GitHub link, author, e-mail, license, core / JavaFX / Java versions |
-| Data | paged grid with `#` row numbers; embedded objects flattened into dotted columns, lists of embedded objects / maps summarised as `[ 2 elements ]` / `{ 3 entries }`, long texts cut at 200 characters, binaries as `PNG · 1.1 KiB` (full value in the tooltip); **inspector** on the right: Key / Value / Type tree of the selected object (embedded objects, list elements `[i]`, map keys; lists ≤ 10 elements expanded), double-click a reference = open its target (dangling references reported); **← referenced by** node: backlinks looked up when expanded (`referrers`), double-click opens one;  column header click = server-side sort; quick filter box = OQL `WHERE` fragment; reload button keeps filter / sort / page; **export** of all matches (filter + sort, every page) as JSON / JSONL (one object per line, recommended for large exports) / CSV (RFC 4180, refs as OIDs), fetched in chunks of 5 000; double-click a row = edit |
-| Object editor: Form | widgets per `ValueType` (text, checkbox, date picker, enum combo, OID for references); embedded objects = titled nested sections (any depth, dotted paths); **lists of embedded objects and maps = element tables** (one row per element / entry, map key column, nested fields as dotted columns, add / remove / move up / down; duplicate or empty keys and bad values are reported); **binaries**: format + size, image preview (PNG / JPEG / GIF / BMP), Load… / Save… / Clear; **long or multi-line texts** in a text area (⤢ expands short ones); values nested deeper than an element table (a list inside a list element) are kept and edited in the JSON tab |
+| Data | paged grid with `#` row numbers; embedded objects flattened into dotted columns, lists of embedded objects / maps summarised as `[ 2 elements ]` / `{ 3 entries }`, long texts cut at 200 characters, binaries as `PNG · 1.1 KiB` (full value in the tooltip); **inspector** on the right: Key / Value / Type tree of the selected object (embedded objects, list elements `[i]`, map keys; lists ≤ 10 elements expanded), double-click a reference = open its target (dangling references reported); **← referenced by** node: backlinks looked up when expanded (`referrers`), double-click opens one;  column header click = server-side sort; quick filter box = OQL `WHERE` fragment; reload button keeps filter / sort / page; **export** of all matches (filter + sort, every page) as JSON / JSONL (one object per line, recommended for large exports) / CSV (RFC 4180, refs as OIDs), fetched in chunks of 5 000; double-click a row = edit; **row context menu**: Open, **Find similar by &lt;vector field&gt;** (one item per vector field, disabled when the object has none): the console runs `SELECT x, cosine_distance(x.v, :vector) AS distance FROM <declaring class> x WHERE x.oid <> :self ORDER BY distance LIMIT 10` with `:vector` / `:self` bound (the field's own distance; L2 / inner product accordingly) |
+| Object editor: Form | widgets per `ValueType` (text, checkbox, date picker, enum combo, OID for references); embedded objects = titled nested sections (any depth, dotted paths); **lists of embedded objects and maps = element tables** (one row per element / entry, map key column, nested fields as dotted columns, add / remove / move up / down; duplicate or empty keys and bad values are reported); **binaries**: format + size, image preview (PNG / JPEG / GIF / BMP), Load… / Save… / Clear; **long or multi-line texts** in a text area (⤢ expands short ones); values nested deeper than an element table (a list inside a list element) are kept and edited in the JSON tab; **vectors**: `[0.1, 0.2, …]` text checked against `@Vector(dim)`, **From text…** asks for a text and fills the field with its embedding (configured embedder, off the FX thread; disabled with a hint when none is configured; a model of another dimension is reported) |
 | Object editor: JSON | RichTextFX JSON with highlighting + validation against schema; binaries as Base64, those over 64 KiB as a placeholder that keeps the stored bytes (megabytes of Base64 would stall the editor) |
 | CRUD | create / update (optimistic lock: conflict dialog with reload / overwrite) / delete (multi-select = one batch); constraint violations (`@Unique`, `ON DELETE RESTRICT`, missing FK target) → "Constraint violated" dialog, nothing stored; cascades show in the refreshed counts; decimals edited as exact text (`BigDecimal`) |
-| Query | OQL console: highlighting from `OqlLexer` tokens, Ctrl+Space completion (classes after FROM / JOIN / UPDATE, `alias.` paths, keywords), Ctrl / ⌘ + Enter runs; results paged (100 / 500 / 1000; statements with their own LIMIT / OFFSET are not re-paged) with `#` row numbers; whole-object results (`SELECT x`) expand to one column per property; `EXPLAIN` view; history; **scripts**: statements separated by `;` (outside strings and comments) run in order, stop at the first error (`statement 2 of 3: …`), the last one's result is shown and paged; **transaction commands** `BEGIN [TRANSACTION \| WORK] [ISOLATION LEVEL READ COMMITTED \| REPEATABLE READ \| SNAPSHOT \| SERIALIZABLE]` (REPEATABLE READ = SNAPSHOT, as in PostgreSQL), `START TRANSACTION`, `COMMIT`, `ROLLBACK` (highlighted and completed as keywords); **export** of the statement's whole result (JSON / JSONL / CSV, read in chunks of 5 000) |
+| Query | OQL console: highlighting from `OqlLexer` tokens, Ctrl+Space completion (classes after FROM / JOIN / UPDATE, `alias.` paths, keywords and functions incl. `EMBED`), Ctrl / ⌘ + Enter runs; results paged (100 / 500 / 1000; statements with their own LIMIT / OFFSET are not re-paged) with `#` row numbers; whole-object results (`SELECT x`) expand to one column per property; **Format** button: keywords upper-case, one clause per line, `AND` / `OR` indented (not the `AND` of `BETWEEN`), long select lists one item per line, sub-queries indented, statements separated by a blank line; works on the OQL lexer's tokens (strings, quoted names and comments kept; text with unknown characters left alone), one undo step (`OqlFormat`, as DBeaver's / DataGrip's Format SQL); **Plan** tab: Explain (plan only) and **Analyze** (`EXPLAIN ANALYZE`: runs the SELECT) draw the plan as a diagram, one row per step in tree order with an icon and a colour by access (index green, full-text magenta, vector cyan, row scan orange, processing grey), bars for the rows each step produced (`in → out`) and for its share of the time, the slowest working step outlined and marked; a Text toggle shows the same tree as text; `EXPLAIN [ANALYZE] …` typed in the console shows the same; UPDATE / DELETE plans as text; history; **scripts**: statements separated by `;` (outside strings and comments) run in order, stop at the first error (`statement 2 of 3: …`), the last one's result is shown and paged; **transaction commands** `BEGIN [TRANSACTION \| WORK] [ISOLATION LEVEL READ COMMITTED \| REPEATABLE READ \| SNAPSHOT \| SERIALIZABLE]` (REPEATABLE READ = SNAPSHOT, as in PostgreSQL), `START TRANSACTION`, `COMMIT`, `ROLLBACK` (highlighted and completed as keywords); **export** of the statement's whole result (JSON / JSONL / CSV, read in chunks of 5 000) |
 | Stats (dashboard) | `db.stats()` of the current database: key figures (objects, storage, commits / s, open transactions, conflicts and their share, pending flushes / merges); line charts of writes / s and transactions / s from samples every 2 s while the tab is shown (5 minutes kept per database, off the FX thread, timer stopped on other tabs); bar charts of objects and storage per collection; the full tables (collections, counters since open) below; rates = difference of two samples of the same opening |
-| Schema | **left**: metadata of the selected class: full name, class id, parent, collection, subclasses, `@Id` / `@Version`, layouts, count; field table (path, type, index, declared in, **constraint**: `UNIQUE`, `FK → Customer · CASCADE`; scrolls as one panel, tooltips for clipped text). **right**: segments of every collection (memory / disk, documents, live, garbage %, size) + layout history |
+| Schema | **left**: metadata of the selected class: full name, class id, parent, collection, subclasses, `@Id` / `@Version`, layouts, count, **comment**; field table (path, type, index, declared in, **constraint**: `UNIQUE`, `FK → Customer · CASCADE`, **comment**; scrolls as one panel, tooltips for clipped text). **right**: segments of every collection (memory / disk, documents, live, garbage %, size) + layout history |
+| Data grid comments | a header of a field with `@Comment` carries an info mark whose tooltip is the comment |
+| Export as Java | toolbar / File menu: the `SchemaExport` of the current database; file list, highlighted editable code (edited files marked, Reset file, Copy), package field (Generate; edits discarded after confirmation; invalid names refused), Save… into a source folder (asks before replacing files whose content differs) |
+| Menu bar | File, Edit, Query, Transaction, View, Help (the macOS system menu bar there); every item fires its toolbar / tab button and is enabled exactly when that button is; shortcuts: Shortcut+O / N / E / S / Q / 1 to 4, F5; formatting has none |
+| About | product, versions, links and a **feature map** (8 areas: objects, query, indexes, full-text, vectors, transactions, operations, Studio) |
+| Text colours | dark themes: all text pure white; light themes: pure black (`text-dark.css` / `text-light.css` after the theme); only input placeholders stay grey; dialogs take the main window's stylesheets |
 
 ### 17.4 Threading
 
@@ -1087,19 +1190,7 @@ kookaburra/
 
 ### 18.3 Backlog
 
-- [ ] Vector search phase 2: HNSW graph per segment (built at flush / merge, Lucene style), approximate `nearest` with `ef` / `numCandidates`; scalar quantization (int8) later
-- [ ] Exact vector scan: read floats straight from the mapped segment buffer (no `float[]` per row), SIMD via the Vector API once it is final
-- [ ] Studio: "Find similar" action on a row with a vector field (nearest neighbours of that row)
-- [ ] Studio release: first real run of the tag workflow (Windows WiX msi, macos-15-intel, Linux deb), then code signing (Apple notarization, Windows Authenticode)
-- [ ] Bench: rerun after the vector changes; optional vector scenario (100k × 384, filtered and unfiltered top-k)
-- [ ] Regenerate `bin/data` so the default demo database carries vectors
-- [ ] BSI index kind (numeric range / sum / top-K): own 64-bit BSI over `ImmutableRoaringBitmap` (library `bsi` module is 32-bit value or 64-bit-docid only)
-- [ ] JDK 22+ `MemorySegment` MR-JAR
-- [ ] Global ordinal cache for frequent group-by
-- [ ] Column overlay for hot single-field updates
-- [ ] Streaming segment writer (peak heap of flush / merge = segment size today)
-- [ ] Transactions roadmap ([transaction-design.md](transaction-design.md) §2): per-transaction durability, transaction metrics; optional extensions only (no Spring / JPA integration planned; no savepoints: T13)
-- [ ] `@Renamed`, element-correlated embedded collections
+Features to be built next (only what users of the library or Studio will get): none planned for 1.0.0; everything above is done.
 
 ---
 
@@ -1165,11 +1256,30 @@ kookaburra/
 | D56 | Monitoring as a pull API `db.stats()` (immutable `DatabaseStats`), no metrics library in core | embedded libraries stay dependency-free (Caffeine `stats()`, RocksDB `Statistics`); Micrometer / Dropwizard binding is the application's choice |
 | D57 | Vectors as `float[]` (float32 only) with `@Vector(dim, distance)`, exact search first, pgvector distance definitions and function names | mainstream embedding precision; exact pre-filtered search is correct for any filter and fast enough to 10⁵ to 10⁶ vectors; HNSW per segment fits the immutable segments (phase 2) |
 | D58 | Studio ships as native packages built by GitHub Actions on version tags, with version-less file names on a release marked latest | users always download the newest build from one fixed link; packages bring their own runtime; the user only pushes a tag |
+| D59 | Approximate vector search with an HNSW graph per immutable segment (Lucene's design: built at flush / merge, filter bitmap as accept set, exact fallback for selective filters, exact float32 distances in results); graph only for `@Vector(dim = N)` and from `vector-index-min-rows` vectors | segments are immutable, so a graph never changes after it is written; same quality knobs as Lucene / pgvector (`m`, `ef_construction`, `ef`); exact fallback keeps filtered recall at 1.0 |
+| D69 | `@Comment` stored in the schema, comment-only changes replace the current layout; schema export generates Java from the stored definitions with wrapper types and nested classes | Hibernate 6 / SQL `COMMENT ON` users know; a comment is documentation, not a format change; generated classes must map to the stored fields exactly so a database can be opened without its original code |
+| D68 | int8 copies of the vectors for the graph search, float re-ranking of all `ef` candidates | a quarter of the memory read while searching, exact distances in results (Elasticsearch / Lucene scalar quantization) |
+| D67 | Phrases checked on the candidates' text instead of positions in segments | no format change and no positions to store; the index still narrows to documents with every word |
+| D66 | Element conditions: Java builder + OQL JOIN over embedded lists with EXISTS semantics, superset pushdown + exact per-element check | MongoDB `$elemMatch` / JPQL join semantics users know; pushdown only where it cannot drop matches |
+| D65 | `@Renamed`: rewrite former names in stored layouts (fields), former class names in the schema (classes); collections keep their storage name | no data rewrite at rename time; old references and names keep working; merges move indexes to the new paths |
+| D64 | Durability per transaction (`TxOptions.durability`) and per batch (`WriteBatch.durability`), resolved per group commit: one fsync when any request of the group is SYNC | PostgreSQL's per-transaction `synchronous_commit`, MongoDB's per-operation write concern; bulk loads and logs need not pay an fsync in a SYNC database |
+| D63 | Query plans as a tree of steps with access kinds, `EXPLAIN ANALYZE` measured by an optional executor profile, Studio diagram | the shape users know from PostgreSQL / MySQL 8 and pgAdmin / Workbench; one model for the text, the API and the diagram; no cost when not analyzing |
+| D62 | Full-text search on per-segment inverted indexes built from the existing dictionary + Roaring postings, BM25 with collection statistics, analyzers by name with Lucene's `english` chain (Porter) as default and a multilingual `standard` one; no Lucene dependency | same building blocks as the columns, no new dependency; results and scores as users know them from Lucene / Elasticsearch; names in the schema keep index and queries in step |
+| D61 | Rerank through an LLM's yes / no log-probabilities on Ollama `/api/generate` (no rerank endpoint in Ollama), behind a `Reranker` interface; MMR on the vector distances | the Qwen3-Reranker scoring works with any local instruct model and with dedicated reranker models; MMR needs nothing but the candidates' vectors |
+| D60 | Text embeddings through an `Embedder` interface in core with Ollama as the only built-in (JDK HTTP client, contacted lazily, default model `nomic-embed-text`) | the library stays dependency-free and local-first; Ollama is the common local runtime; anything else plugs in via `Config.withEmbedder` |
 
 ## 20. Changelog
 
 | Date | Change |
 |---|---|
+| 2026-11-06 | Fix: references inside lists, sets and map values keep their target (`LIST(REF(Member))` instead of `REF(Object)`); list foreign keys check the referenced class; Studio shows `Ref<T>` / `List<Ref<T>>` |
+| 2026-11-06 | `@Comment` on classes and fields (§3.5, D69); `exportSchema` / `SchemaExport` (§3.5); Studio: comments on the Schema page and as grid header hints, Export as Java with editable preview, menu bar, About feature map, pure white / black text (§17.3); tutorial video (2:58) with the Export as Java clip; `bin/data` rebuilt |
+| 2026-11-05 | `@Renamed` fields and classes (§3.5, D65, schema format 5); element conditions `whereElement` / OQL `JOIN` over embedded lists (§10.8, D66); full-text phrases and `HIGHLIGHT` (§10.7, D67); int8 vectors (§10.6, D68, segment format 4); crash-image tests of the search features |
+| 2026-11-05 | Durability per transaction and per batch (D64): `TxOptions.durability(...)`, `WriteBatch.durability(...)`; group commit forces the WAL only when a request of the group needs it |
+| 2026-11-05 | Query plans (§10.5, D63): `QueryPlan` tree, `plan()` / `analyze()` / `explainAnalyze()`, OQL `EXPLAIN ANALYZE` and `OqlQuery.plan()`, type filters by class name; Studio Plan diagram with Explain / Analyze |
+| 2026-11-05 | Full-text search (§10.7, D62): `@FullText(analyzer)`, `Analyzer` / `Analyzers` (english with Porter, standard, custom), `matches` / `matchesAny`, `search(field, text, k)` with BM25, `hybrid(...)` with RRF, OQL `MATCH` / `SCORE`, segment format 3; Studio demo product descriptions |
+| 2026-11-05 | Search quality: `nearest(...).diverse(λ, fetch)` (MMR) and `.rerank(textField[, query, fetch])` with `Reranker` (Ollama, yes / no log-probabilities, D61); `Neighbor.score()`; explain lines DIVERSE / RERANK; `kookaburra.reranker*` settings |
+| 2026-11-05 | Vector search phase 2 (§10.6, D59): per-segment vector columns (floats read in place) and HNSW graphs, `numCandidates` / `exact()`, explain per segment, segment format 2, `kookaburra.vector-*` settings; text embeddings (D60): `Embedder`, Ollama, `nearest(field, "text", k)`, OQL `EMBED`; Studio "Find similar" row action and "From text" for vector fields; bench vector phase; backlog reordered |
 | 2026-11-04 | Studio demo: products carry a 4-dimensional embedding `[reading, tech, home, outdoor]` (books, gadgets and items form clusters); tutorial video (2:56) adds vector search in the console, the Stats dashboard, the vector API slide and the download links; blogs synced |
 | 2026-11-04 | Studio distribution: GitHub Actions on tag `v*` → jpackage installers for Windows / macOS / Linux on a GitHub Release marked latest (§17.5, D58); installed app uses `~/Kookaburra`; databases given at start report errors in dialogs, non-empty foreign directories need confirmation |
 | 2026-11-04 | Vector search phase 1: `float[]` VECTOR type with `@Vector(dim, distance)`, exact `nearest(...)` with filters, `listWithDistance()`, OQL `COSINE_DISTANCE` / `L2_DISTANCE` / `INNER_PRODUCT` / `VECTOR_DIMS` with ORDER BY pushdown (§3.3, §10.6, D57); schema format 4; Studio display, JSON and form editing of vectors |

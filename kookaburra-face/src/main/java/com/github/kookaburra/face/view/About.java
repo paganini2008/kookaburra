@@ -9,18 +9,23 @@ import javafx.scene.control.Hyperlink;
 import javafx.scene.control.Label;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.GridPane;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.stage.Window;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.util.List;
 import java.util.Properties;
 import java.util.function.Consumer;
 
 /**
- * About dialog: product, version, GitHub, author, e-mail, license and runtime versions.
+ * About dialog: product, version, GitHub, author, e-mail, license and runtime versions, and a feature map of what
+ * Kookaburra does, grouped by area.
  *
  * @Author: Fred Feng
  * @Date: 11/10/2026
@@ -42,8 +47,57 @@ public class About {
         return p;
     }
 
+    /** A group of the feature map: icon, title and its features. */
+    record Area(String icon, String title, List<String> features) {
+    }
+
+    /** The feature map shown next to the product information. */
+    static final List<Area> FEATURES = List.of(
+            new Area("mdi2c-cube-outline", "Objects", List.of("Java entities", "Inheritance", "Embedded objects", "References",
+                    "Foreign keys", "Unique constraints", "@Renamed", "@Comment", "Export as Java")),
+            new Area("mdi2d-database-search", "Query", List.of("Fluent Java API", "SQL-style OQL", "Aggregates", "GROUP BY",
+                    "List joins", "Explain", "Explain analyze")),
+            new Area("mdi2l-lightning-bolt", "Indexes", List.of("@Index", "Bitmap", "Ordinal", "Multi-value",
+                    "Composite unique")),
+            new Area("mdi2t-text-search", "Full-text", List.of("BM25 ranking", "Phrases", "Prefixes", "Highlight",
+                    "Many languages", "Custom analyzers")),
+            new Area("mdi2v-vector-link", "Vectors", List.of("HNSW search", "Cosine / L2 / dot", "Int8 quantization",
+                    "Hybrid search", "Diversity (MMR)", "Rerank", "Ollama embedder")),
+            new Area("mdi2s-swap-horizontal-circle-outline", "Transactions", List.of("ACID", "Snapshot isolation",
+                    "Serializable", "Optimistic locking", "Per-commit durability")),
+            new Area("mdi2s-shield-check-outline", "Operations", List.of("Embedded or in memory", "Crash recovery",
+                    "Online backup", "Compaction", "Statistics")),
+            new Area("mdi2m-monitor-dashboard", "Studio", List.of("Data grid", "Object editor", "OQL console",
+                    "Visual plans", "Find similar", "CSV / JSON export", "Themes")));
+
+    /** The feature map: one card per area with its features as chips. */
+    static GridPane featureMap() {
+        GridPane grid = new GridPane();
+        grid.setId("about-features");
+        grid.getStyleClass().add("k-feature-map");
+        grid.setHgap(10);
+        grid.setVgap(10);
+        for (int i = 0; i < FEATURES.size(); i++) {
+            Area a = FEATURES.get(i);
+            Label title = new Label(a.title(), Icons.of(a.icon()));
+            title.getStyleClass().add("k-feature-title");
+            FlowPane chips = new FlowPane(5, 5);
+            chips.setPrefWrapLength(200);
+            for (String f : a.features()) {
+                Label chip = new Label(f);
+                chip.getStyleClass().add("k-feature-chip");
+                chips.getChildren().add(chip);
+            }
+            VBox card = new VBox(8, title, chips);
+            card.getStyleClass().add("k-feature-card");
+            card.setPrefWidth(222);
+            grid.add(card, i % 4, i / 4);
+        }
+        return grid;
+    }
+
     /** Dialog content; {@code browse} opens links (GitHub, mail). */
-    public static VBox content(Consumer<String> browse) {
+    public static HBox content(Consumer<String> browse) {
         Properties p = info();
         ImageView logo = new ImageView(new Image(About.class.getResourceAsStream("/com/github/kookaburra/face/logo.png")));
         logo.setFitWidth(96);
@@ -73,9 +127,20 @@ public class About {
 
         VBox box = new VBox(10, logo, name, version, grid);
         box.setAlignment(Pos.TOP_CENTER);
-        box.setPadding(new Insets(16, 24, 8, 24));
-        box.getStyleClass().add("k-about");
-        return box;
+        box.setPadding(new Insets(16, 24, 8, 8));
+        box.setMinWidth(Region.USE_PREF_SIZE);
+        grid.getChildren().forEach(n -> {
+            if (n instanceof Region r) {
+                r.setMinWidth(Region.USE_PREF_SIZE);
+            }
+        });
+        Label mapTitle = new Label("FEATURE MAP");
+        mapTitle.getStyleClass().add("k-section-title");
+        VBox map = new VBox(8, mapTitle, featureMap());
+        map.setPadding(new Insets(16, 8, 8, 16));
+        HBox all = new HBox(8, box, map);
+        all.getStyleClass().add("k-about");
+        return all;
     }
 
     private static void row(GridPane grid, int row, String label, Node value) {

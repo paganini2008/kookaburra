@@ -26,6 +26,14 @@ public class Highlight {
             "(?<key>\"(?:[^\"\\\\]|\\\\.)*\"(?=\\s*:))|(?<str>\"(?:[^\"\\\\]|\\\\.)*\")|(?<num>-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)"
                     + "|(?<lit>\\b(?:true|false|null)\\b)|(?<punct>[{}\\[\\],:])");
 
+    private static final Pattern JAVA = Pattern.compile(
+            "(?<comment>//[^\\n]*|/\\*(?s:.*?)\\*/)|(?<str>\"(?:[^\"\\\\\\n]|\\\\.)*\"|'(?:[^'\\\\\\n]|\\\\.)*')"
+                    + "|(?<ann>@[A-Za-z_$][\\w$]*)|(?<num>\\b\\d+(?:\\.\\d+)?[LlFfDd]?\\b)"
+                    + "|(?<kw>\\b(?:package|import|public|private|protected|static|final|abstract|class|interface|enum|record"
+                    + "|extends|implements|return|this|new|void|long|int|double|float|boolean|byte|char|short|null|true|false"
+                    + "|if|else|for|while|do|switch|case|default|break|continue|throw|throws|try|catch|finally|super)\\b)"
+                    + "|(?<type>\\b[A-Z][\\w$]*\\b)");
+
     /** Console transaction commands (not OQL tokens, see {@code Session.txCommand}). */
     private static final Set<String> TX_COMMANDS = Set.of("BEGIN", "COMMIT", "ROLLBACK");
 
@@ -85,6 +93,22 @@ public class Highlight {
         while (m.find()) {
             String style = m.group("key") != null ? "key" : m.group("str") != null ? "str" : m.group("num") != null ? "num"
                     : m.group("lit") != null ? "kw" : "op";
+            b.add(Collections.emptyList(), m.start() - last);
+            b.add(List.of(style), m.end() - m.start());
+            last = m.end();
+        }
+        b.add(Collections.emptyList(), text.length() - last);
+        return b.create();
+    }
+
+    /** Java source: comments, strings, annotations, numbers, keywords and type names. */
+    public static StyleSpans<Collection<String>> java(String text) {
+        StyleSpansBuilder<Collection<String>> b = new StyleSpansBuilder<>();
+        Matcher m = JAVA.matcher(text);
+        int last = 0;
+        while (m.find()) {
+            String style = m.group("comment") != null ? "comment" : m.group("str") != null ? "str" : m.group("ann") != null ? "ann"
+                    : m.group("num") != null ? "num" : m.group("kw") != null ? "kw" : "ident";
             b.add(Collections.emptyList(), m.start() - last);
             b.add(List.of(style), m.end() - m.start());
             last = m.end();

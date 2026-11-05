@@ -5,7 +5,7 @@
 | Status | **Implemented**; living document, updated with the code |
 | Audience | developers working on `kookaburra-core` (engine, segments, recovery) |
 | Scope | how objects are stored, written, read, merged, recovered and backed up |
-| Related | [design.md](design.md) (overall design), [transaction-design.md](transaction-design.md) (transactions) |
+| Related | [architecture.md](architecture.md) (layers) · [design.md](design.md) (overall design), [transaction-design.md](transaction-design.md) (transactions) |
 
 ---
 
@@ -76,7 +76,7 @@ One segment = one file = rows of one collection, **sorted by OID**, docid = `0..
 ```
 seg_<id>.odbf
 ┌────────────────────────────────────────────────────────────┐
-│ header      magic "KKBSEG01" · format · pad                │
+│ header      magic "KKBSEG01" · format (4) · pad            │
 ├────────────────────────────────────────────────────────────┤
 │ oids long[N] (sorted) · versions long[N] · classIds int[N] │
 ├────────────────────────────────────────────────────────────┤
@@ -91,6 +91,14 @@ seg_<id>.odbf
 │   post  Roaring per ordinal                  few values    │
 │   sdoc  docids sorted by value               many values   │
 │   null  Roaring                                            │
+├────────────────────────────────────────────────────────────┤
+│ vector column <path> × V        (@Vector(dim = N) paths)   │
+│   docs   int[count]  documents with a vector of dim N      │
+│   floats float32[count × N]                                │
+│   graph  HNSW: level 0 links · upper levels (nodes, links) │
+├────────────────────────────────────────────────────────────┤
+│ full-text index <path> × F      (@FullText paths)          │
+│   words · postings · frequencies · lengths                 │
 ├────────────────────────────────────────────────────────────┤
 │ footer: N, OID min / max, offsets, per column metadata     │
 │ trailer: footerOffset · crc32c(footer) · magic             │
@@ -136,6 +144,54 @@ value := BOOL 1 B | INT zig-zag varint | FLOAT64 8 B | STRING varint-len UTF-8 |
 
 - `layoutId` lets old rows stay readable after a class changes (schema evolution, [design.md §3.5](design.md)).
 - **Path-only decoding** (`RecordCodec.readPath`): reading one field skips the preceding ones in place; nothing is allocated for them. An unindexed scan of 10 M rows takes about 0.8 s.
+
+### 4.5 Vector columns and HNSW graphs
+
+Format 2 (format 1 files have no vector columns and are still read). Every `@Vector(dim = N)` path of the collection (top level or in embeddables) gets one vector column per segment; free-length vectors (`dim = 0`) stay in the rows only.
+
+| Part | Encoding | Access |
+|---|---|---|
+| docs | `int[count]`, ascending docids that have a vector of dimension N (slot = position) | binary search doc → slot |
+| int8 (format 4, `quantization = INT8`) | `byte[count × N]` unsigned steps of `(max - min) / 255` from the segment's 0.5 / 99.5 percentile range | read by the graph search; floats re-rank the candidates |
+| floats | `float32[count × N]` little-endian, 8-byte aligned | absolute bulk get into a reused `float[N]`: no row decoding, no allocation per vector |
+| level 0 | per slot: `n · neighbours[2m]` (padded with -1) | O(1) by slot |
+| level l ≥ 1 | sorted slots on that level · per node `n · neighbours[m]` | binary search slot → node |
+| footer | path, dim, distance, count, offsets, `m`, entry point, top level | |
+
+```mermaid
+flowchart TB
+    subgraph L2["level 2: few nodes, long links"]
+        a2((e)) --- b2(( ))
+    end
+    subgraph L1["level 1"]
+        a1((e)) --- c1(( )) --- d1(( ))
+    end
+    subgraph L0["level 0: every vector, 2m links"]
+        a0((e)) --- x0(( )) --- y0(( )) --- z0(( )) --- w0(( ))
+    end
+    a2 -.-> a1 -.-> a0
+```
+
+- **Build** (flush / merge thread, `SegmentWriter`): vectors inserted in slot order; level = `⌊-ln(U) / ln(m)⌋` from a seeded random (deterministic files); greedy descent to the node's top level, then per level a beam search with `ef_construction` candidates and the diversity heuristic (keep a candidate only if it is closer to the new node than to every neighbour kept); a full neighbour list is re-chosen with the same heuristic. Cosine graphs are built on unit vectors (`1 - dot`). Segments with fewer than `vector-index-min-rows` vectors get docs and floats only.
+- **Search** (`Hnsw.Searcher`, one per thread and segment): greedy descent from the entry point through the upper levels, beam search with `ef` on level 0; distances travel as `long` keys (sortable float bits, slot) in primitive heaps; visited marks are a generation-stamped `int[]`. The filter bitmap is the accept set: rejected nodes are still traversed. The search gives up (and the caller scans exactly) when it compares more vectors than the filter has matches.
+- **Merge** rebuilds the graph from the live vectors; deleted documents are never in results (they are not in the accept set).
+- **Size**: about `4 × N` bytes per vector plus `4 × (2m + 1)` bytes of level 0 links (m = 16: 132 B) and a few bytes of upper levels. Vectors are also kept in the rows (whole-object reads).
+
+### 4.6 Full-text indexes
+
+Format 3. Every `@FullText` path gets an inverted index per segment, built from the field's analyzer (named in the schema):
+
+| Part | Encoding | Access |
+|---|---|---|
+| dictionary | `int[words + 1]` UTF-8 offsets + bytes, sorted | binary search; prefix = range from the insertion point |
+| postings | `long[words + 1]` offsets + one Roaring bitmap per word | zero-copy slice |
+| frequencies | `int[words + 1]` start per word + `int[total postings]` in posting (doc) order | `start[w] + rank(doc) - 1` |
+| lengths | `int[N]` words per document | O(1) |
+| footer | path, documents with words, total words | BM25 statistics |
+
+- MemSegments keep postings per word (append-only int lists) and each row's word frequencies.
+- Matching = AND / OR of postings (prefixes: OR of the dictionary range); BM25 sums `idf · tf · 2.2 / (tf + 1.2 · (0.25 + 0.75 · len / avg))` with N, df and average length summed over all views.
+- Merges rebuild the index from the live rows.
 
 ---
 
@@ -395,5 +451,7 @@ flowchart TD
 | S6 | Memory-mapped files, little-endian, zero-copy bitmaps | the OS page cache does the caching; tiny heap |
 | S7 | Garbage-driven compaction besides size tiers | deleted space is reclaimed even for lone or oversized segments (design D44) |
 | S8 | Backup = snapshot export into fresh segments | consistent without pausing writers (design D54) |
+| S10 | Inverted index per segment on dictionary + Roaring postings, frequencies aligned to posting order | reuses the column building blocks; term lookups and Boolean matching are bitmap operations; no extra dependency (design D62) |
+| S9 | Vector columns + one HNSW graph per segment, rebuilt on merge | immutable segments never update a graph in place; floats read in place; same shape as Lucene (design D59) |
 
 More decisions with history: [design.md §19](design.md).

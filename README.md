@@ -10,12 +10,16 @@
   <a href="https://openjdk.org/projects/jdk/17/"><img src="https://img.shields.io/badge/Java-17%2B-orange?logo=openjdk" alt="Java 17+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
   <a href="https://central.sonatype.com/namespace/com.github.paganini2008"><img src="https://img.shields.io/badge/Maven-com.github.paganini2008-informational" alt="Maven"></a>
-  <img src="https://img.shields.io/badge/coverage-%E2%89%A5%2090%25-brightgreen" alt="Coverage ≥ 90%">
   <img src="https://img.shields.io/badge/embedded-no%20server-8A2BE2" alt="Embedded, no server">
   <a href="https://paganini2008.github.io/kookaburra/"><img src="https://img.shields.io/badge/docs-GitHub%20Pages-00E5FF" alt="Docs"></a>
 </p>
 
-Kookaburra is an **embedded object database for Java 17+**. You store plain annotated objects. Then you query them with a type-safe, chained API (`query(Book.class).where(Book::getYear).ge(1960).list()`) or with **SQL-style OQL**. Indexed filters, sorts and aggregates answer in milliseconds on millions of objects. Data is crash-safe on disk, with optional **transactions** (READ COMMITTED, SNAPSHOT, SERIALIZABLE), **unique and foreign-key constraints** and online backup. **Kookaburra Studio** is a desktop admin tool for browsing, editing and querying any database.
+**Kookaburra** is an **embedded object database for Java 17+**: one library in your process, plain annotated classes in.
+
+- **Query**: a type-safe chained API (`query(Book.class).where(Book::getYear).ge(1960).list()`) or **SQL-style OQL**; indexed filters, sorts and aggregates in milliseconds on millions of objects.
+- **Search**: vector search (HNSW) and full-text search (BM25), together or fused.
+- **Safety**: crash-safe files, **transactions** (READ COMMITTED, SNAPSHOT, SERIALIZABLE), **unique and foreign-key constraints**, online backup.
+- **Studio**: a desktop tool to browse, edit and query any database.
 
 <p align="center">
   <img src="https://paganini2008.github.io/kookaburra/assets/studio-data.png" width="860" alt="Kookaburra Studio">
@@ -23,7 +27,7 @@ Kookaburra is an **embedded object database for Java 17+**. You store plain anno
 
 <p align="center">
   <a href="https://paganini2008.github.io/kookaburra/#tutorial"><img src="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial-poster.jpg" width="560" alt="Watch the 3-minute tutorial"></a><br>
-  🎬 <a href="https://paganini2008.github.io/kookaburra/#tutorial"><b>Watch the tutorial</b></a> (2:56, English subtitles) · <a href="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4">MP4</a>
+  🎬 <a href="https://paganini2008.github.io/kookaburra/#tutorial"><b>Watch the tutorial</b></a> (2:58, English subtitles) · <a href="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4">MP4</a>
 </p>
 
 ---
@@ -37,7 +41,9 @@ Kookaburra is an **embedded object database for Java 17+**. You store plain anno
 | 🧭 | **Type-safe chained queries** from method references or a generated metamodel | Refactoring-safe filters, no SQL mapping layer |
 | ⚡ | **Indexes** on the fields you filter, sort and group by | Filter, count, top-N and group 10 M objects in milliseconds |
 | 🔤 | **OQL**: `SELECT / UPDATE / DELETE` with SQL-92 core | Text queries for tools, configs and ad-hoc analysis |
-| 🎯 | **Vector search**: `float[]` embeddings, nearest neighbours by cosine, L2 or inner product | Semantic search and RAG next to your filters |
+| 🔎 | **Full-text search**: words in any language, English word forms, BM25 relevance, hybrid with vectors | Search boxes and RAG retrieval without a search server |
+| 🧭 | **Query plans**: `explainAnalyze()` and `EXPLAIN ANALYZE` with rows and time per step; a diagram in Studio | See which index answers each condition and where time goes |
+| 🎯 | **Vector search**: `float[]` embeddings, HNSW index, cosine / L2 / inner product, text queries through Ollama | Semantic search and RAG next to your filters, in about a millisecond |
 | 🧩 | **Dynamic API** on a self-describing schema | Open any database without its classes |
 
 ### Data model
@@ -47,7 +53,7 @@ Kookaburra is an **embedded object database for Java 17+**. You store plain anno
 | 🧬 | **Inheritance and nested objects**: embedded values at any depth, lists and maps of them | Rich domain models without flattening |
 | 💰 | **Exact decimals** (`BigDecimal`), compared by value | Money without rounding errors |
 | 📦 | **Large values**: long texts and binaries of tens of MiB | Documents and pictures next to their metadata |
-| 🔄 | **Schema evolution** by layouts | Add or remove fields freely |
+| 🔄 | **Schema evolution**: add, remove or widen fields; rename fields and classes with `@Renamed`; `@Comment`; export the schema as Java | Change your classes without migrating data |
 
 ### Integrity and transactions
 
@@ -181,7 +187,9 @@ try (ObjectDB db = ObjectDB.open(Path.of("data"))) {
 |---|---|---|---|
 | [Installer (.msi)](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-windows-x64.msi) · [zip](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-windows-x64.zip) | [Apple silicon (.dmg)](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-macos-arm64.dmg) · [Intel (.dmg)](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-macos-x64.dmg) | [.deb](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-linux-x64.deb) · [.tar.gz](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-linux-x64.tar.gz) | [kookaburra-studio.jar](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio.jar) |
 
-Open any database directory with **Open database…** (or start with `--data=PATH`). The installed app keeps its settings, default database and logs in `~/Kookaburra`. From source: `mvn -f kookaburra-face/pom.xml -P dist package -DskipTests` builds `bin/kookaburra-face.jar`.
+- Open any database directory with **Open database…** or `--data=PATH`.
+- The installed app keeps settings, the default database and logs in `~/Kookaburra`.
+- From source: `mvn -f kookaburra-face/pom.xml -P dist package -DskipTests` builds `bin/kookaburra-face.jar`.
 
 <p align="center">
   <img src="https://paganini2008.github.io/kookaburra/assets/studio-splash.png" width="300" alt="Studio splash">
@@ -195,13 +203,23 @@ Open any database directory with **Open database…** (or start with `--data=PAT
 | Constraint column (`UNIQUE`, `FK → Customer · CASCADE`); violations open a "Constraint violated" dialog | <img src="https://paganini2008.github.io/kookaburra/assets/studio-constraints.png" width="420" alt="Studio constraints"> |
 | Element editor for lists of embedded objects and maps (add, remove, reorder) | <img src="https://paganini2008.github.io/kookaburra/assets/studio-nested-editor.png" width="420" alt="Studio element editor"> |
 | **Stats dashboard**: objects, storage, commits per second, open transactions, conflicts; live write and transaction rates; objects and storage per collection | <img src="https://paganini2008.github.io/kookaburra/assets/studio-stats.png" width="420" alt="Studio stats dashboard"> |
+| OQL console: **Explain** / **Analyze** draw the query plan (index or scan per condition, rows and time per step, slowest step marked); **Format** tidies the statement | <img src="https://paganini2008.github.io/kookaburra/assets/studio-plan.png" width="420" alt="Studio query plan"> |
+| Vectors and text: right-click **Find similar**, **From text…** fills a vector, `MATCH` / `SCORE` on full-text fields | |
+| Menu bar (File, Edit, Query, Transaction, View, Help); **Export as Java**; field comments as column hints; About with a feature map | <img src="https://paganini2008.github.io/kookaburra/assets/studio-about.png" width="420" alt="Studio feature map"> |
 | Binary fields with image preview, long texts, exact decimals; **Flush** and **Backup** in the toolbar | <img src="https://paganini2008.github.io/kookaburra/assets/studio-binary.png" width="420" alt="Studio binary field"> |
 
-The demo database (`--demo`) contains all of these: customers with a unique e-mail, a two-level address and a map of contacts; products with a unique SKU, a decimal price and a PNG photo; purchases with order lines and foreign keys (deleting a customer deletes their purchases, a purchased product cannot be deleted).
+The demo database (`--demo`) has all of these:
+
+| Class | Shows |
+|---|---|
+| Customer | unique e-mail, two-level address, map of contacts |
+| Product | unique SKU, decimal price, PNG photo, full-text description, 4-dim embedding |
+| Purchase | order lines; foreign keys: deleting a customer deletes their purchases, a purchased product cannot be deleted |
 
 ## Examples
 
-All outputs below are from a real run on six books (Dune, Neuromancer, Foundation, The Hobbit, Hyperion, The Big Sleep); the Quick Start, transaction, constraint, isolation, backup and nested-object snippets are executed by `ReadmeExamplesTest`, in memory and on disk.
+- Outputs below are from a real run on six books (Dune, Neuromancer, Foundation, The Hobbit, Hyperion, The Big Sleep).
+- The Quick Start, transaction, constraint, isolation, backup and nested-object snippets run in `ReadmeExamplesTest`, in memory and on disk.
 
 ### Generated metamodel
 
@@ -313,7 +331,12 @@ public class Order {
   <img src="https://paganini2008.github.io/kookaburra/assets/foreign-keys.png" width="760" alt="Unique and foreign-key constraints">
 </p>
 
-Combinations go on the class: `@Unique(fields = {"tenant", "code"})` (repeatable, optional `name`; a null in any field is not compared). Constraints are checked when the write commits, against the latest data and the batch's own writes. `RESTRICT` (default) refuses the delete, `SET_NULL` clears the reference. Listeners: `db.addListener(Order.class, listener)`.
+| Rule | Behaviour |
+|---|---|
+| `@Unique(fields = {"tenant", "code"})` on the class | combination unique (repeatable, optional `name`; a null in any field is not compared) |
+| When checked | at commit, against the latest data and the batch's own writes |
+| `@ForeignKey(onDelete = …)` | `RESTRICT` (default) refuses the delete, `CASCADE` deletes, `SET_NULL` clears the reference |
+| Listeners | `db.addListener(Order.class, listener)` |
 
 ### Online backup
 
@@ -344,13 +367,89 @@ List<Doc> top = db.query(Doc.class)
         .where(Doc::getLang).eq("en")                // filters run first, on the indexes
         .nearest(Doc::getEmbedding, queryVector, 10) // the 10 closest
         .list();
+
+List<Doc> byText = db.query(Doc.class)
+        .nearest(Doc::getEmbedding, "how do I bake bread at home", 10)   // embedded by Ollama
+        .list();
 ```
 ```sql
-SELECT d.title, cosine_distance(d.embedding, :q) AS dist
+SELECT d.title, cosine_distance(d.embedding, embed('how do I bake bread at home')) AS dist
 FROM Doc d WHERE d.lang = 'en' ORDER BY dist LIMIT 10
 ```
 
-Try it in Studio: the demo database gives every product a 4-dimensional embedding (`[reading, tech, home, outdoor]`), so `ORDER BY cosine_distance(p.embedding, '[1, 0, 0, 0]')` lists the books first. `listWithDistance()` returns the distances too. The functions are named as in pgvector: `cosine_distance`, `l2_distance`, `inner_product` (larger is closer, so `ORDER BY … DESC`) and `vector_dims`. The search is exact: about 35 ms for the top 10 of 100,000 vectors of 384 dimensions, and about 1 ms when a filter leaves 1 % of them.
+| Capability | API | OQL |
+|---|---|---|
+| Nearest objects (HNSW index on every `@Vector(dim)`) | `nearest(field, vector, k)` | `ORDER BY cosine_distance(d.v, :q) LIMIT k` |
+| Search by text (Ollama, `kookaburra.embedder-model`) | `nearest(field, "text", k)` | `embed('text')` |
+| Wider search / exact answer | `.numCandidates(n)` / `.exact()` | |
+| Fewer near-duplicates (MMR) | `.diverse()` | |
+| A quarter of the memory for the index | `@Vector(dim = 384, quantization = INT8)` | |
+| Re-order by a local model (`kookaburra.reranker-model`) | `.rerank(Doc::getText)` | |
+| Vectors + words (reciprocal rank fusion) | `.hybrid(Doc::getBody)` | |
+| Distances (pgvector names) | `VectorDistance.COSINE / L2 / INNER_PRODUCT` | `cosine_distance`, `l2_distance`, `inner_product`, `vector_dims` |
+
+| Measured | Result |
+|---|---|
+| top 10 of 100,000 × 384 dims | 1.0 ms, 99.6 % same as the exact answer |
+| 10,000 real text embeddings (Ollama, 2560 dims) | 2.3 ms, 100 % same as exact |
+| filter leaving a few objects | compared directly, never misses a match |
+
+Studio: the demo products have 4-dim embeddings `[reading, tech, home, outdoor]`; right-click a product for **Find similar**, **From text…** in the editor fills a vector from a sentence.
+
+### Full-text search
+
+```java
+@Entity
+public class Article {
+    @Id long oid;
+    @FullText String body;                                   // english by default; @FullText(analyzer = "standard")
+}
+
+db.query(Article.class).where(Article::getBody).matches("bread oven").list();     // every word, stems match
+db.query(Article.class).search(Article::getBody, "baking bread", 10).list();       // most relevant first (BM25)
+db.query(Doc.class).nearest(Doc::getEmbedding, "baking bread", 10)
+        .hybrid(Doc::getBody).list();                                               // vectors + words, fused
+```
+```sql
+SELECT a.title, SCORE(a.body, 'baking bread') AS score FROM Article a
+WHERE MATCH(a.body, 'bak*') ORDER BY SCORE(a.body, 'baking bread') DESC LIMIT 10
+```
+
+| Capability | API | OQL |
+|---|---|---|
+| Every word (stems match: `baking` finds `baked`) | `where(f).matches("bread oven")` | `MATCH(a.body, 'bread oven')` |
+| Any word / word prefix | `where(f).matchesAny("…")` / `"bak*"` | `MATCH(a.body, 'bak*')` |
+| Exact phrase | `matches("\"fresh bread\"")` | `MATCH(a.body, '"fresh bread"')` |
+| Highlighted fragments (`<em>…</em>`) | `TextQuery.parse(q).highlight(text)` | `HIGHLIGHT(a.body, 'bread')` |
+| Most relevant first (BM25) | `search(f, "baking bread", k)` | `ORDER BY SCORE(a.body, '…') DESC` |
+| With vectors (RRF) | `nearest(v, "text", k).hybrid(f)` | |
+
+| Analyzer | Words |
+|---|---|
+| `english` (default) | any language; English stop words dropped, words reduced to their stem (Porter) |
+| `standard` | any language, as written (lower-cased) |
+| your own | `Analyzers.register("name", text -> words)` |
+
+Chinese, Japanese and Korean text is split into pairs of characters. Studio: demo products have descriptions, try `MATCH(p.description, 'kitchen')`.
+
+### Query plans
+
+```java
+System.out.println(db.query(Person.class).where(Person::getCity).eq("Perth")
+        .orderBy(Person::getAge).desc().limit(10).explainAnalyze());
+```
+
+| | API | OQL | Shows |
+|---|---|---|---|
+| Plan | `explain()` / `plan()` | `EXPLAIN SELECT …` | steps and the index each condition uses |
+| Plan, run | `explainAnalyze()` / `analyze()` | `EXPLAIN ANALYZE SELECT …` | also rows in → out and time per step |
+| Studio | **Explain** / **Analyze** | same | diagram, slowest step marked |
+
+A condition marked `[scan: reads each row]` is the place for an `@Index`.
+
+<p align="center">
+  <img src="https://paganini2008.github.io/kookaburra/assets/studio-plan.png" width="760" alt="Query plan in Studio">
+</p>
 
 ### Statistics
 
@@ -377,7 +476,49 @@ db.query(Shipment.class).whereAny(Shipment::getItems, Item::getSku).contains("pe
 db.oql("SELECT s.code FROM Shipment s WHERE 'kiwi' MEMBER OF s.items.sku").list();          // [S-2]
 ```
 
-Paths through lists of embedded objects mean "any element" (like MongoDB dotted paths) and are evaluated by scanning.
+| Condition on a list of embedded objects | API | OQL |
+|---|---|---|
+| any element has the value | `whereAny(Shipment::getItems, Item::getSku).contains("A")` | `'A' MEMBER OF s.items.sku` |
+| one element meets every condition (`$elemMatch`) | `whereElement(Shipment::getItems, e -> e.where(Item::getSku).eq("A").where(Item::getQty).gt(5))` | `SELECT s FROM Shipment s JOIN s.items i WHERE i.sku = 'A' AND i.qty > 5` |
+
+### Renaming fields and classes
+
+```java
+@Entity @Renamed("com.example.Client")          // the class was called Client
+public class Customer {
+    @Id long oid;
+    @Renamed("fullName") String name;            // the field was called fullName
+}
+```
+
+| Kept | |
+|---|---|
+| data | old rows read under the new names, nothing is rewritten |
+| identity | same OIDs, references and collection; the old class name still finds the class (OQL, dynamic access) |
+| indexes | used again under the new name after the next compaction |
+
+### Comments and Java export
+
+```java
+@Entity @Comment("A shop customer")
+public class Customer {
+    @Id long oid;
+    @Comment("Given and family name") String name;
+}
+
+SchemaExport java = db.exportSchema((String) null);              // the stored schema as Java source
+db.exportSchema(Path.of("src/main/java"), "com.acme.model");     // write it; classes get @Renamed
+```
+
+| | |
+|---|---|
+| `@Comment` | on classes and fields; kept in the schema; Studio shows it on the Schema page and as column hints; changing it adds no schema version |
+| `exportSchema` | entities, embeddables and enums with every annotation, comments, getters and setters; compiled, they open the same database unchanged |
+| Studio | **Export as Java**: preview each class, edit, change the package, save |
+
+<p align="center">
+  <img src="https://paganini2008.github.io/kookaburra/assets/studio-java-export.png" width="760" alt="Export as Java in Studio">
+</p>
 
 ### Large values (texts, images)
 
@@ -387,7 +528,7 @@ Paths through lists of embedded objects mean "any element" (like MongoDB dotted 
 db.insert(new Document("scan", text, Files.readAllBytes(Path.of("scan.png"))));   // MiB-sized values are fine
 ```
 
-Tested with 2 M-character Unicode texts and 5–16 MiB binaries through transactions, restarts and backups. In JSON / CSV exports binaries are Base64 (as Jackson writes `byte[]`).
+Tested with 2 M-character Unicode texts and 5 to 16 MiB binaries through transactions, restarts and backups. In JSON / CSV exports binaries are Base64 (as Jackson writes `byte[]`).
 
 ### Dynamic access (no entity class on the class path)
 
@@ -395,14 +536,6 @@ Tested with 2 M-character Unicode texts and 5–16 MiB binaries through transact
 DynamicCollection books = db.dynamic("Book");
 books.from().where("author").startsWith("J").list().get(0).get("title");   // "The Hobbit"
 ```
-
-### Explain
-
-```java
-db.query(Book.class).where(Book::getGenre).eq(Genre.SCIFI)
-  .where(Book::getYear).between(1950, 1970).explain();
-```
-The plan lists every condition with the index that answers it, cheapest first. A condition marked `RESIDUAL` has no index and reads every object: add `@Index` to that field.
 
 ### Best practices
 
@@ -424,10 +557,13 @@ All settings live in one file, [`kookaburra.properties`](kookaburra.properties):
 
 | Property | Default | Description |
 |---|---|---|
-| `kookaburra.durability` | `SYNC` | `SYNC`: a write returns once it is on disk; `ASYNC`: faster, the last moments may be lost on a power failure |
+| `kookaburra.durability` | `SYNC` | `SYNC`: a write returns once it is on disk; `ASYNC`: faster, the last moments may be lost on a power failure; per transaction `TxOptions.defaults().durability(ASYNC)`, per batch `db.batch().durability(ASYNC)` |
 | `kookaburra.transactions` | `false` | enables `begin()` / `inTransaction()`; off = every write commits directly |
 | `kookaburra.tx-isolation` | `SNAPSHOT` | isolation of `begin()` / `inTransaction`: `READ_COMMITTED`, `SNAPSHOT`, `SERIALIZABLE` |
 | `kookaburra.tx-timeout` / `tx-retries` | `60s` / `3` | transaction timeout; `inTransaction` retries after a conflict |
+| `kookaburra.embedder` / `embedder-model` / `embedder-url` | `ollama` / `nomic-embed-text` / `http://localhost:11434` | text to vector for `nearest(field, "text", k)`, `embed('…')` and Studio; `none` turns it off |
+| `kookaburra.vector-ef-search` | `100` | how widely a vector search looks; larger = more accurate, a bit slower |
+| `kookaburra.reranker` / `reranker-model` | `ollama` / `qwen3:4b` | model behind `.rerank(...)`; `none` turns it off |
 | `kookaburra.data` | `<jar dir>/data` (installed app: `~/Kookaburra/data`) | Studio: default database directory |
 | `kookaburra.log-dir` / `kookaburra.log-level` | `<jar dir>/logs` / `INFO` | Studio: log files |
 | `kookaburra.theme` / `page-size` / `console-page-size` | `NEON` / `50` / `100` | Studio UI |
@@ -436,28 +572,35 @@ Memory, file size and background-work tuning keys are listed with comments in [`
 
 ## Performance
 
-**Environment**: Apple M2 Max (12 cores), 32 GB, internal SSD, macOS, JDK 17.0.12, `-Xmx8g`. **Data**: 10,000,000 objects with indexed `name` (unique), `city` (50 values), `age` (ORDINAL) and `tags`, plus plain fields. Harness: `kookaburra-bench` (warm-up, p50 / p99, consistency checks). Full report: [docs/benchmark-10m.md](docs/benchmark-10m.md).
+| Setting | Value |
+|---|---|
+| Machine | Apple M2 Max (12 cores), 32 GB, internal SSD, macOS, JDK 17.0.12, `-Xmx8g` |
+| Data | 10,000,000 objects: indexed `name` (unique), `city` (50 values), `age` (ORDINAL), `tags`, plain fields |
+| Vectors | separate 100,000 × 384 dims (50 clusters) |
+| Harness | `kookaburra-bench`: warm-up, p50 / p99, consistency checks; [full report](docs/benchmark-10m.md) |
 
 | Operation (10 M objects) | p50 |
 |---|---|
-| bulk insert, batches of 100 (`ASYNC`) | **696 k objects/s** |
-| durable single inserts (`SYNC`), 16 / 128 threads | 3.2 k/s / **21.2 k/s** |
-| `get(oid)` | **0.6 to 1.1 µs** |
-| `count()` where `city = ?` (indexed) | **0.24 ms** |
-| `city = ? AND age BETWEEN 30 AND 40 LIMIT 100` | **0.21 ms** |
+| bulk insert, batches of 100 (`ASYNC`) | **576 k objects/s** |
+| durable single inserts (`SYNC`), 16 / 128 threads | 3.3 k/s / **24.4 k/s** |
+| `get(oid)` | **0.7 µs** |
+| `count()` where `city = ?` (indexed) | **0.23 ms** |
+| `city = ? AND age BETWEEN 30 AND 40 LIMIT 100` | **0.19 ms** |
 | top-10 by `age DESC` over 2.3 M matches | **0.39 ms** |
-| `GROUP BY city COUNT(*)` | **4.0 ms** |
-| unique-key lookup via OQL (`name = ?`) | **0.12 ms** |
-| OQL `GROUP BY city, COUNT, AVG(age) WHERE age > 40` | 244 ms |
-| full scan with an unindexed predicate | 0.81 s |
-| transfers (read 2, update 2), 16 threads: SNAPSHOT / READ COMMITTED / SERIALIZABLE | **136 / 142 / 140 k/s**, 0.023 retries / commit |
-| atomic `increment` of one hot counter, 16 threads | **265 k/s**, no lost updates |
-| insert with `@Unique` / without, batches of 100 (in memory) | **235 / 258 k/s** |
-| insert with a checked `@ForeignKey` / delete with ON DELETE CASCADE | 225 k/s / 181 k/s |
-| online backup of 10.5 M objects (1.4 GB) | **25.4 s**, writers not blocked |
-| OQL `DELETE` of all 10.5 M objects / disk space afterwards | 1.32 M objects/s / **0 B** (fully reclaimed) |
-| reopen / heap after reopen | 2.0 ms / 6.5 MiB |
+| `GROUP BY city COUNT(*)` | **3.9 ms** |
+| unique-key lookup via OQL (`name = ?`) | **0.11 ms** |
+| OQL `GROUP BY city, COUNT, AVG(age) WHERE age > 40` | 249 ms |
+| full scan with an unindexed predicate | 0.78 s |
+| transfers (read 2, update 2), 16 threads: SNAPSHOT / READ COMMITTED / SERIALIZABLE | **136 / 139 / 136 k/s**, 0.023 retries / commit |
+| atomic `increment` of one hot counter, 16 threads | **262 k/s**, no lost updates |
+| insert with `@Unique` / without, batches of 100 (in memory) | **251 / 318 k/s** |
+| insert with a checked `@ForeignKey` / delete with ON DELETE CASCADE | 266 k/s / 152 k/s |
+| online backup of 10.5 M objects (1.4 GB) | **25.7 s**, writers not blocked |
+| OQL `DELETE` of all 10.5 M objects / disk space afterwards | 1.31 M objects/s / **0 B** (fully reclaimed) |
+| reopen / heap after reopen | 2.1 ms / 7.1 MiB |
 | disk footprint | 148 B / object |
+| vector search, top 10 of 100,000 × 384 dims: HNSW / exact | **1.0 ms** (99.6 % same as exact) / 21.5 ms |
+| vector search with a filter keeping 2 % / 50 % | **1.8 ms** / 2.7 ms |
 
 | Trade-off | Consequence |
 |---|---|
@@ -470,8 +613,9 @@ Memory, file size and background-work tuning keys are listed with comments in [`
 
 | Guide | Link |
 |---|---|
-| Video tutorial | [Watch on the website](https://paganini2008.github.io/kookaburra/#tutorial) (2:56) · regenerate with `mvn -f kookaburra-face/pom.xml test -P tutorial` (needs ffmpeg) |
+| Video tutorial | [Watch on the website](https://paganini2008.github.io/kookaburra/#tutorial) (2:58) · regenerate with `mvn -f kookaburra-face/pom.xml test -P tutorial` (needs ffmpeg) |
 | Getting Started | [Quick Start](#quick-start) |
+| Architecture | [docs/architecture.md](docs/architecture.md): the layers in one picture |
 | Design notes (for contributors) | [docs/design.md](docs/design.md) |
 | Transactions | [docs/transaction-design.md](docs/transaction-design.md): three isolation levels with OCC, decisions T1 to T17 |
 | Storage design | [docs/storage-design.md](docs/storage-design.md): files, write path, compaction, recovery, backup |
@@ -494,7 +638,11 @@ Memory, file size and background-work tuning keys are listed with comments in [`
 
 ## Contributing & License
 
-Issues and pull requests are welcome at <https://github.com/paganini2008/kookaburra>. Please run `mvn verify` before submitting. The build enforces **≥ 90 % line and instruction coverage** (JaCoCo) in every module, and the differential tests compare every query path against `java.util.stream`.
+Issues and pull requests are welcome at <https://github.com/paganini2008/kookaburra>. Run `mvn verify` before submitting:
+
+- every test suite runs in memory and on disk;
+- differential tests compare every query path with `java.util.stream`;
+- a coverage gate keeps new code tested.
 
 | Module | Build |
 |---|---|

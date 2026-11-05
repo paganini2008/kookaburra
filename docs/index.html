@@ -4,108 +4,186 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kookaburra</title>
-<meta name="description" content="Kookaburra: an embedded object database for Java 17+ with type-safe Stream-like queries, OQL, transactions, constraints and online backup, plus the Kookaburra Studio admin tool.">
+<meta name="description" content="Kookaburra: the embedded object database for Java 17+. Type-safe queries, OQL, indexes, transactions, constraints, full-text and vector search, online backup, and the Kookaburra Studio desktop tool.">
 <link rel="icon" href="https://paganini2008.github.io/kookaburra/assets/logo_64.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg0: #0B0E14; --bg1: #11151F; --bg2: #1A2030; --border: #26304A;
-  --fg: #E6EDF7; --muted: #7A8BA8; --accent: #00E5FF; --accent2: #FF2BD6; --ok: #39FF88; --warn: #FFC14D;
+  --bg0: #07090E; --bg1: #0E121B; --bg2: #161C2A; --border: #232C44; --border2: #2E3A5A;
+  --fg: #FFFFFF; --accent: #00E5FF; --accent2: #FF2BD6; --ok: #39FF88; --warn: #FFC14D; --violet: #8B5CFF;
   --mono: "JetBrains Mono", Menlo, Consolas, monospace;
+  --glow: 0 0 0 1px rgba(0,229,255,.35), 0 12px 40px rgba(0,229,255,.18);
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
-body { margin: 0; background: var(--bg0); color: var(--fg); font: 16px/1.6 Inter, system-ui, -apple-system, sans-serif; }
+body { margin: 0; background: var(--bg0); color: var(--fg); font: 16px/1.65 Inter, system-ui, -apple-system, sans-serif; overflow-x: hidden; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 code, pre { font-family: var(--mono); }
-.wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px; }
-section { padding: 72px 0; border-top: 1px solid var(--border); }
-h2 { font-size: 30px; margin: 0 0 8px; letter-spacing: -.01em; }
-.lead { color: var(--muted); margin: 0 0 32px; max-width: 720px; }
-.kicker { color: var(--accent2); font: 600 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; margin-bottom: 10px; }
+code { font-size: .92em; color: var(--accent); }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 16px; }
+section { padding: 96px 0; position: relative; }
+section + section { border-top: 1px solid var(--border); }
+h2 { font-size: clamp(28px, 4vw, 42px); line-height: 1.1; margin: 0 0 12px; letter-spacing: -.02em; font-weight: 800; }
+h3 { font-weight: 700; }
+.lead { color: var(--fg); margin: 0 0 36px; max-width: 760px; font-size: 18px; }
+.kicker { display: inline-block; color: var(--accent); font: 600 12px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; margin-bottom: 14px; padding: 6px 10px; border: 1px solid rgba(0,229,255,.35); border-radius: 999px; background: rgba(0,229,255,.06); }
+.grad { background: linear-gradient(92deg, #FFFFFF 0%, var(--accent) 45%, var(--accent2) 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+/* reveal on scroll */
+.reveal { opacity: 0; transform: translateY(18px); transition: opacity .7s ease, transform .7s ease; }
+.reveal.in { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) { .reveal { opacity: 1; transform: none; transition: none; } .orb, .gridbg { animation: none !important; } }
 
 /* nav */
-nav { position: sticky; top: 0; z-index: 10; background: rgba(11,14,20,.86); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); }
-nav .wrap { display: flex; align-items: center; gap: 20px; height: 58px; }
-nav .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--fg); }
-nav .links { margin-left: auto; display: flex; gap: 18px; font-size: 14px; }
-nav .links a { color: var(--muted); }
-nav .links a:hover { color: var(--fg); text-decoration: none; }
-@media (max-width: 760px) { nav .links a.opt { display: none; } }
+nav { position: sticky; top: 0; z-index: 20; background: rgba(7,9,14,.78); backdrop-filter: saturate(160%) blur(14px); border-bottom: 1px solid var(--border); }
+nav .wrap { display: flex; align-items: center; gap: 18px; height: 62px; }
+nav .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; color: var(--fg); font-size: 17px; }
+nav .brand:hover { text-decoration: none; }
+nav .ver { font: 600 11px/1 var(--mono); color: var(--bg0); background: var(--accent); border-radius: 999px; padding: 4px 8px; }
+nav .links { margin-left: auto; display: flex; gap: 20px; font-size: 14px; align-items: center; }
+nav .links a { color: var(--fg); opacity: 1; position: relative; }
+nav .links a:hover, nav .links a.on { color: var(--accent); text-decoration: none; }
+nav .links a.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -21px; height: 2px; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+nav .gh { border: 1px solid var(--border2); border-radius: 8px; padding: 6px 12px; }
+@media (max-width: 900px) { nav .links a.opt { display: none; } }
 
 /* hero */
-.hero { padding: 72px 0 56px; border-top: 0; background: radial-gradient(900px 420px at 50% -10%, rgba(0,229,255,.16), transparent 70%), radial-gradient(700px 360px at 90% 10%, rgba(255,43,214,.10), transparent 70%); }
-.hero .top { display: flex; align-items: center; gap: 28px; flex-wrap: wrap; }
-.hero img.logo { width: 120px; height: auto; filter: drop-shadow(0 0 24px rgba(0,229,255,.35)); }
-.hero h1 { font-size: clamp(38px, 7vw, 62px); line-height: 1.05; margin: 0; letter-spacing: -.02em; }
-.hero .slogan { font-size: clamp(18px, 2.6vw, 24px); color: var(--accent); margin: 8px 0 0; font-weight: 600; }
-.hero p.pos { max-width: 760px; color: #C3CEE0; font-size: 18px; margin: 24px 0 28px; }
+.hero { padding: 88px 0 72px; overflow: hidden; }
+.gridbg { position: absolute; inset: 0; background-image: linear-gradient(rgba(0,229,255,.07) 1px, transparent 1px), linear-gradient(90deg, rgba(0,229,255,.07) 1px, transparent 1px); background-size: 48px 48px; mask-image: radial-gradient(ellipse 80% 70% at 50% 20%, #000 30%, transparent 75%); -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 20%, #000 30%, transparent 75%); animation: drift 30s linear infinite; pointer-events: none; }
+@keyframes drift { to { background-position: 48px 48px, 48px 48px; } }
+.orb { position: absolute; border-radius: 50%; filter: blur(80px); opacity: .55; pointer-events: none; animation: float 14s ease-in-out infinite alternate; }
+.orb.a { width: 520px; height: 520px; background: rgba(0,229,255,.35); top: -220px; left: -120px; }
+.orb.b { width: 460px; height: 460px; background: rgba(255,43,214,.28); top: -120px; right: -160px; animation-delay: -6s; }
+@keyframes float { to { transform: translate(40px, 30px) scale(1.08); } }
+.hero .cols { position: relative; display: grid; grid-template-columns: 1.05fr 1fr; gap: 48px; align-items: center; }
+@media (max-width: 980px) { .hero .cols { grid-template-columns: 1fr; } }
+.hero .brandline { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+.hero .brandline img { width: 64px; height: auto; filter: drop-shadow(0 0 22px rgba(0,229,255,.45)); }
+.hero .brandline span { font: 600 13px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+.hero h1 { font-size: clamp(40px, 6.4vw, 72px); line-height: 1.02; margin: 0; letter-spacing: -.035em; font-weight: 900; }
+.hero p.pos { color: var(--fg); font-size: 19px; margin: 22px 0 28px; max-width: 600px; }
 .btns { display: flex; gap: 12px; flex-wrap: wrap; }
-.btn { display: inline-block; padding: 11px 20px; border-radius: 10px; font-weight: 600; border: 1px solid var(--border); color: var(--fg); background: var(--bg2); }
-.btn:hover { text-decoration: none; border-color: var(--accent); box-shadow: 0 0 18px rgba(0,229,255,.25); }
-.btn.primary { background: var(--accent); color: #001018; border-color: var(--accent); }
-.video { width: 100%; height: auto; display: block; margin-top: 28px; border-radius: 14px; border: 1px solid var(--border); background: #000; box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 40px rgba(0,229,255,.08); }
-.shots { margin-top: 28px; }
-.shots figure { margin: 0; }
-.shots img { width: 100%; height: auto; display: block; border-radius: 10px; border: 1px solid var(--border); }
-.shots figcaption { color: var(--muted); font-size: 14px; margin-top: 8px; }
-.shot { margin-top: 44px; border-radius: 14px; border: 1px solid var(--border); box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 40px rgba(0,229,255,.08); width: 100%; height: auto; display: block; }
+.btn { display: inline-flex; align-items: center; gap: 8px; padding: 13px 22px; border-radius: 12px; font-weight: 700; border: 1px solid var(--border2); color: var(--fg); background: var(--bg2); transition: transform .15s, box-shadow .2s, border-color .2s; }
+.btn:hover { text-decoration: none; border-color: var(--accent); box-shadow: var(--glow); transform: translateY(-1px); }
+.btn.primary { background: linear-gradient(92deg, var(--accent), #6CF3FF); color: #00131A; border-color: transparent; }
+.install { margin-top: 22px; display: flex; align-items: center; gap: 10px; background: var(--bg1); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; max-width: 600px; font: 13px/1.4 var(--mono); }
+.install .p { color: var(--accent2); }
+.install code { color: var(--fg); flex: 1; overflow-x: auto; white-space: nowrap; font-size: 13px; }
 .badges { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
-.badge { font: 600 12px/1 var(--mono); color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 6px 10px; }
+.badge { font: 600 12px/1 var(--mono); color: var(--fg); border: 1px solid var(--border2); border-radius: 999px; padding: 7px 11px; background: rgba(255,255,255,.02); }
+
+/* code window */
+.win { background: #0A0E18; border: 1px solid var(--border2); border-radius: 16px; box-shadow: 0 40px 100px rgba(0,0,0,.6), 0 0 60px rgba(0,229,255,.10); overflow: hidden; }
+.win .bar { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); background: #0D1220; }
+.win .dot { width: 11px; height: 11px; border-radius: 50%; }
+.win .tabs { display: flex; gap: 4px; margin-left: 10px; flex-wrap: wrap; }
+.win .tab { font: 600 12px/1 var(--mono); color: var(--fg); background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 7px 10px; cursor: pointer; }
+.win .tab.on { border-color: rgba(0,229,255,.45); background: rgba(0,229,255,.10); color: var(--accent); }
+.win pre { margin: 0; padding: 18px 20px; font-size: 13.5px; line-height: 1.65; color: var(--fg); overflow-x: auto; min-height: 330px; }
+.win .pane { display: none; }
+.win .pane.on { display: block; }
+.win .res { border-top: 1px solid var(--border); padding: 10px 20px; font: 12.5px/1.5 var(--mono); color: var(--ok); }
+
+/* stats strip */
+.stats { position: relative; display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; margin-top: 64px; border: 1px solid var(--border); border-radius: 16px; background: linear-gradient(180deg, rgba(14,18,27,.9), rgba(7,9,14,.9)); overflow: hidden; }
+@media (max-width: 860px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+.stat { padding: 22px 20px; border-right: 1px solid var(--border); }
+.stat:last-child { border-right: 0; }
+.stat b { display: block; font: 800 30px/1.1 Inter, sans-serif; letter-spacing: -.02em; }
+.stat span { font-size: 13px; color: var(--fg); }
+.shot { margin-top: 56px; border-radius: 16px; border: 1px solid var(--border2); box-shadow: 0 40px 100px rgba(0,0,0,.6), 0 0 60px rgba(0,229,255,.10); width: 100%; height: auto; display: block; }
+.tilt { perspective: 1600px; }
+.tilt img { transform: rotateX(8deg); transform-origin: top center; transition: transform .8s ease; }
+.tilt img.in { transform: rotateX(0); }
 
 /* cards */
 .grid { display: grid; gap: 16px; }
-.g4 { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
-.g2 { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
-@media (max-width: 520px) { .g2 { grid-template-columns: 1fr; } }
-.g3 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
-.card { background: var(--bg1); border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
-.card h3 { margin: 0 0 6px; font-size: 17px; }
-.card p { margin: 0; color: var(--muted); font-size: 15px; }
-.card .ico { font-size: 22px; width: 42px; height: 42px; display: grid; place-items: center; border-radius: 10px; background: rgba(0,229,255,.08); border: 1px solid rgba(0,229,255,.25); margin-bottom: 14px; }
-.pain .ico { background: rgba(255,43,214,.08); border-color: rgba(255,43,214,.3); }
-a.card:hover { text-decoration: none; border-color: var(--accent); }
+.g4 { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.g3 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.g2 { grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); }
+@media (max-width: 520px) { .g2, .g3 { grid-template-columns: 1fr; } }
+.card { position: relative; background: linear-gradient(180deg, var(--bg1), #0B0F17); border: 1px solid var(--border); border-radius: 16px; padding: 24px; transition: border-color .2s, transform .2s, box-shadow .2s; }
+.card:hover { border-color: rgba(0,229,255,.5); transform: translateY(-3px); box-shadow: 0 18px 50px rgba(0,0,0,.45), 0 0 30px rgba(0,229,255,.10); }
+.card h3 { margin: 0 0 8px; font-size: 17px; }
+.card p { margin: 0; color: var(--fg); font-size: 15px; }
+.card .ico { font-size: 22px; width: 46px; height: 46px; display: grid; place-items: center; border-radius: 12px; background: linear-gradient(135deg, rgba(0,229,255,.16), rgba(139,92,255,.16)); border: 1px solid rgba(0,229,255,.3); margin-bottom: 16px; }
+.pain .ico { background: linear-gradient(135deg, rgba(255,43,214,.16), rgba(255,193,77,.12)); border-color: rgba(255,43,214,.35); }
+.pain .fix { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border2); font-size: 14px; color: var(--ok); }
+a.card { color: var(--fg); }
+a.card:hover { text-decoration: none; }
+.tag { display: inline-block; font: 600 11px/1 var(--mono); color: var(--accent2); border: 1px solid rgba(255,43,214,.4); border-radius: 999px; padding: 4px 8px; margin-left: 6px; vertical-align: 2px; }
+
+/* group headings in features */
+.group { display: flex; align-items: center; gap: 12px; margin: 44px 0 16px; font: 700 13px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
+.group::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--border2), transparent); }
+
+/* facts */
+.facts { width: 100%; border-collapse: separate; border-spacing: 0; border: 1px solid var(--border); border-radius: 16px; overflow: hidden; background: var(--bg1); }
+.facts th, .facts td { text-align: left; padding: 14px 18px; border-bottom: 1px solid var(--border); vertical-align: top; font-size: 15px; }
+.facts tr:last-child th, .facts tr:last-child td { border-bottom: 0; }
+.facts th { width: 220px; color: var(--accent); font-weight: 700; background: rgba(0,229,255,.04); }
 
 /* how */
-.how { display: grid; grid-template-columns: 1.4fr 1fr; gap: 28px; align-items: center; }
-@media (max-width: 860px) { .how { grid-template-columns: 1fr; } }
-.diagram { background: var(--bg1); border: 1px solid var(--border); border-radius: 14px; padding: 18px; overflow-x: auto; text-align: center; }
-.diagram svg { max-width: 100% !important; height: auto; min-height: 380px; }
-.how ul { color: #C3CEE0; padding-left: 18px; }
-.how li { margin: 8px 0; }
+.how { display: grid; grid-template-columns: 1.3fr 1fr; gap: 32px; align-items: center; }
+@media (max-width: 900px) { .how { grid-template-columns: 1fr; } }
+.how img { width: 100%; height: auto; border-radius: 14px; border: 1px solid var(--border); background: var(--bg1); }
+.steps { list-style: none; padding: 0; margin: 0; counter-reset: s; }
+.steps li { counter-increment: s; position: relative; padding: 0 0 18px 52px; }
+.steps li::before { content: counter(s); position: absolute; left: 0; top: 0; width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; font: 800 15px Inter; color: #00131A; background: linear-gradient(135deg, var(--accent), var(--violet)); }
 
-/* code */
-.code { position: relative; background: #0E1220; border: 1px solid var(--border); border-radius: 12px; margin: 0 0 14px; }
-.code .label { font: 600 11px/1 var(--mono); color: var(--muted); padding: 12px 16px 0; letter-spacing: .08em; text-transform: uppercase; }
-.code pre { margin: 0; padding: 12px 16px 16px; overflow-x: auto; font-size: 13.5px; line-height: 1.55; color: #D6E2F5; }
-.copy { position: absolute; top: 8px; right: 8px; font: 600 12px/1 Inter, sans-serif; color: var(--fg); background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; cursor: pointer; }
-.copy:hover { border-color: var(--accent); }
-.k { color: var(--accent2); } .s { color: var(--ok); } .c { color: var(--muted); } .a { color: var(--warn); } .t { color: var(--accent); }
+/* code blocks */
+.code { position: relative; background: #0A0E18; border: 1px solid var(--border); border-radius: 14px; margin: 0 0 16px; }
+.code .label { font: 600 11px/1 var(--mono); color: var(--accent); padding: 14px 18px 0; letter-spacing: .1em; text-transform: uppercase; }
+.code pre { margin: 0; padding: 12px 18px 18px; overflow-x: auto; font-size: 13.5px; line-height: 1.6; color: var(--fg); }
+.copy { position: absolute; top: 9px; right: 9px; font: 600 12px/1 Inter, sans-serif; color: var(--fg); background: var(--bg2); border: 1px solid var(--border2); border-radius: 8px; padding: 7px 10px; cursor: pointer; }
+.copy:hover { border-color: var(--accent); color: var(--accent); }
+.install .copy { position: static; }
+.k { color: var(--accent2); } .s { color: var(--ok); } .c { color: #9AD1FF; font-style: italic; } .a { color: var(--warn); } .t { color: var(--accent); }
 .out { border-left: 3px solid var(--ok); }
+.out pre { color: var(--ok); }
+.qs { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 900px) { .qs { grid-template-columns: 1fr; } }
 
-/* examples */
-.ex .card pre { background: #0E1220; border: 1px solid var(--border); border-radius: 10px; padding: 12px; font-size: 12.5px; overflow-x: auto; margin: 12px 0 0; color: #D6E2F5; }
-.ex .card .res { font: 12.5px/1.5 var(--mono); color: var(--ok); margin-top: 8px; white-space: pre-wrap; }
+/* use cases */
+.ex .card pre { background: #0A0E18; border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; font-size: 12.5px; line-height: 1.55; overflow-x: auto; margin: 14px 0 0; color: var(--fg); }
+.ex .card .res { font: 12.5px/1.5 var(--mono); color: var(--ok); margin-top: 10px; white-space: pre-wrap; }
+.filters { display: flex; gap: 8px; flex-wrap: wrap; margin: -12px 0 24px; }
+.filters button { font: 600 13px/1 Inter, sans-serif; color: var(--fg); background: var(--bg1); border: 1px solid var(--border2); border-radius: 999px; padding: 9px 14px; cursor: pointer; }
+.filters button.on { color: #00131A; background: var(--accent); border-color: var(--accent); }
+.ex .card.hide { display: none; }
+
+/* studio */
+.shots figure { margin: 0; }
+.shots img { width: 100%; height: auto; display: block; border-radius: 12px; border: 1px solid var(--border); transition: transform .3s, box-shadow .3s; }
+.shots img:hover { transform: scale(1.01); box-shadow: 0 0 40px rgba(0,229,255,.15); }
+.shots figcaption { color: var(--fg); font-size: 14px; margin-top: 10px; }
+.dl { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 36px; }
 
 /* perf */
 .perf { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-@media (max-width: 860px) { .perf { grid-template-columns: 1fr; } }
-.bars .row { display: grid; grid-template-columns: 170px 1fr 82px; gap: 10px; align-items: center; margin: 10px 0; font-size: 14px; }
+@media (max-width: 900px) { .perf { grid-template-columns: 1fr; } }
+.bars .row { display: grid; grid-template-columns: 170px 1fr 82px; gap: 10px; align-items: center; margin: 12px 0; font-size: 14px; }
 @media (max-width: 520px) { .bars .row { grid-template-columns: 120px 1fr 70px; font-size: 13px; } }
 .bars .bar { height: 12px; border-radius: 6px; background: var(--bg2); overflow: hidden; }
-.bars .bar span { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+.bars .bar span { display: block; height: 100%; width: 0; border-radius: 6px; background: linear-gradient(90deg, var(--accent), var(--accent2)); box-shadow: 0 0 12px rgba(0,229,255,.4); transition: width 1.2s cubic-bezier(.2,.8,.2,1); }
 .bars .v { font: 600 13px var(--mono); color: var(--fg); text-align: right; }
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); }
-th { color: var(--muted); font-weight: 600; }
-td.n { font-family: var(--mono); color: var(--accent); white-space: nowrap; }
-.env { color: var(--muted); font-size: 13px; margin-top: 14px; }
+table.t { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.t th, table.t td { text-align: left; padding: 10px; border-bottom: 1px solid var(--border); }
+table.t th { color: var(--accent); font-weight: 700; }
+table.t td.n { font-family: var(--mono); color: var(--accent); white-space: nowrap; }
+.env { color: var(--fg); font-size: 13px; margin-top: 14px; }
 
-footer { border-top: 1px solid var(--border); padding: 32px 0 48px; color: var(--muted); font-size: 14px; }
-footer .wrap { display: flex; gap: 20px; flex-wrap: wrap; align-items: center; }
+/* cta */
+.cta { text-align: center; padding: 64px 24px; border: 1px solid var(--border2); border-radius: 24px; background: radial-gradient(600px 200px at 50% 0%, rgba(0,229,255,.18), transparent 70%), radial-gradient(500px 200px at 50% 100%, rgba(255,43,214,.12), transparent 70%), var(--bg1); }
+.cta h2 { margin-bottom: 14px; }
+.cta .btns { justify-content: center; }
+
+footer { border-top: 1px solid var(--border); padding: 36px 0 52px; font-size: 14px; }
+footer .wrap { display: flex; gap: 22px; flex-wrap: wrap; align-items: center; }
+footer a { color: var(--fg); }
 footer .sp { margin-left: auto; }
 </style>
 </head>
@@ -113,55 +191,141 @@ footer .sp { margin-left: auto; }
 
 <nav>
   <div class="wrap">
-    <a class="brand" href="#"><img src="https://paganini2008.github.io/kookaburra/assets/logo_64.png" width="30" height="24" alt="">Kookaburra</a>
+    <a class="brand" href="#"><img src="https://paganini2008.github.io/kookaburra/assets/logo_64.png" width="30" height="24" alt="">Kookaburra <span class="ver">1.0</span></a>
     <div class="links">
       <a href="#tutorial">Video</a>
       <a class="opt" href="#features">Features</a>
       <a class="opt" href="#how">How it works</a>
       <a href="#start">Quick start</a>
+      <a class="opt" href="#examples">Use cases</a>
+      <a class="opt" href="#studio">Studio</a>
       <a class="opt" href="#performance">Performance</a>
       <a href="#docs">Docs</a>
-      <a href="https://github.com/paganini2008/kookaburra">GitHub</a>
+      <a class="gh" href="https://github.com/paganini2008/kookaburra">★ GitHub</a>
     </div>
   </div>
 </nav>
 
 <!-- 1. Hero -->
 <header class="hero">
+  <div class="gridbg"></div><div class="orb a"></div><div class="orb b"></div>
   <div class="wrap">
-    <div class="top">
-      <img class="logo" src="https://paganini2008.github.io/kookaburra/assets/logo_256.png" alt="Kookaburra logo">
+    <div class="cols">
       <div>
-        <h1>Kookaburra</h1>
-        <p class="slogan">Query Java objects like a database, right inside your application.</p>
+        <div class="brandline"><img src="https://paganini2008.github.io/kookaburra/assets/logo_256.png" alt="Kookaburra logo"><span>Embedded object database for Java</span></div>
+        <h1>Query Java objects <span class="grad">like a database.</span></h1>
+        <p class="pos">Store plain annotated objects in your application, then query them with a type-safe API or SQL-style <b>OQL</b>. Indexes, transactions, constraints, full-text and vector search in one library. No server, no ORM, no schema scripts.</p>
+        <div class="btns">
+          <a class="btn primary" href="#start">Get started →</a>
+          <a class="btn" href="#tutorial">▶ Watch 3 min</a>
+          <a class="btn" href="#studio">Download Studio</a>
+        </div>
+        <div class="install"><span class="p">maven</span><code>com.github.paganini2008:kookaburra-core:1.0.0-SNAPSHOT</code><button class="copy" data-text="&lt;dependency&gt;&lt;groupId&gt;com.github.paganini2008&lt;/groupId&gt;&lt;artifactId&gt;kookaburra-core&lt;/artifactId&gt;&lt;version&gt;1.0.0-SNAPSHOT&lt;/version&gt;&lt;/dependency&gt;">Copy</button></div>
+        <div class="badges">
+          <span class="badge">Java 17+</span><span class="badge">Apache-2.0</span><span class="badge">Embedded or in memory</span>
+          <span class="badge">ACID</span><span class="badge">HNSW · BM25</span><span class="badge">Windows · Linux · macOS</span>
+        </div>
+      </div>
+      <div class="win reveal" id="hero-code">
+        <div class="bar"><span class="dot" style="background:#FF5F57"></span><span class="dot" style="background:#FEBC2E"></span><span class="dot" style="background:#28C840"></span>
+          <div class="tabs">
+            <button class="tab on" data-pane="0">Java API</button><button class="tab" data-pane="1">OQL</button><button class="tab" data-pane="2">Vectors</button><button class="tab" data-pane="3">Full-text</button><button class="tab" data-pane="4">Transactions</button>
+          </div>
+        </div>
+<div class="pane on"><pre><span class="a">@Entity</span>
+<span class="k">public class</span> <span class="t">Book</span> {
+    <span class="a">@Id</span> <span class="k">long</span> oid;
+    <span class="a">@Index</span> String title;
+    <span class="a">@Index</span> Genre genre;
+    <span class="a">@Index</span> <span class="k">int</span> year;
+}
+
+<span class="k">try</span> (ObjectDB db = ObjectDB.open(Path.of(<span class="s">"data"</span>))) {
+    db.insert(<span class="k">new</span> Book(<span class="s">"Dune"</span>, SCIFI, <span class="a">1965</span>));
+    List&lt;Book&gt; books = db.query(Book.<span class="k">class</span>)
+        .where(Book::getGenre).eq(SCIFI)
+        .where(Book::getYear).ge(<span class="a">1960</span>)
+        .orderBy(Book::getYear).desc()
+        .list();
+}</pre><div class="res">→ [Hyperion, Neuromancer, Dune]   answered by indexes</div></div>
+<div class="pane"><pre><span class="k">SELECT</span> b.genre, <span class="k">COUNT</span>(*) <span class="k">AS</span> books, <span class="k">AVG</span>(b.price) <span class="k">AS</span> avg_price
+<span class="k">FROM</span> Book b
+<span class="k">WHERE</span> b.year &gt;= <span class="a">1960</span>
+    <span class="k">AND</span> b.title <span class="k">LIKE</span> <span class="s">'H%'</span>
+<span class="k">GROUP BY</span> b.genre
+<span class="k">HAVING</span> <span class="k">COUNT</span>(*) &gt; <span class="a">0</span>
+<span class="k">ORDER BY</span> books <span class="k">DESC</span>;
+
+<span class="k">UPDATE</span> Book b <span class="k">SET</span> b.price = b.price * <span class="a">0.9</span>
+<span class="k">WHERE</span> b.year &lt; <span class="a">1970</span>;
+
+<span class="k">EXPLAIN ANALYZE</span> <span class="k">SELECT</span> b <span class="k">FROM</span> Book b
+<span class="k">WHERE</span> b.genre = <span class="s">'SCIFI'</span> <span class="k">LIMIT</span> <span class="a">10</span>;</pre><div class="res">→ rows in → out and time of every step</div></div>
+<div class="pane"><pre><span class="a">@Entity</span>
+<span class="k">public class</span> <span class="t">Doc</span> {
+    <span class="a">@Id</span> <span class="k">long</span> oid;
+    <span class="a">@Index</span> String lang;
+    <span class="a">@FullText</span> String body;
+    <span class="a">@Vector</span>(dim = <span class="a">384</span>) <span class="k">float</span>[] embedding;
+}
+
+List&lt;Doc&gt; top = db.query(Doc.<span class="k">class</span>)
+    .where(Doc::getLang).eq(<span class="s">"en"</span>)
+    .nearest(Doc::getEmbedding, <span class="s">"bake bread at home"</span>, <span class="a">10</span>)
+    .hybrid(Doc::getBody)       <span class="c">// vectors + words</span>
+    .diverse()                  <span class="c">// fewer near-duplicates</span>
+    .list();</pre><div class="res">→ top 10 of 100,000 vectors in about 1 ms (HNSW)</div></div>
+<div class="pane"><pre><span class="a">@FullText</span> String body;   <span class="c">// english stems, or analyzer = "standard"</span>
+
+db.query(Article.<span class="k">class</span>)
+    .where(Article::getBody).matches(<span class="s">"\"sourdough bread\" oven"</span>)
+    .list();
+
+db.query(Article.<span class="k">class</span>)
+    .search(Article::getBody, <span class="s">"baking bread"</span>, <span class="a">10</span>)   <span class="c">// BM25</span>
+    .list();
+
+<span class="k">SELECT</span> a.title, <span class="k">HIGHLIGHT</span>(a.body, <span class="s">'bread'</span>)
+<span class="k">FROM</span> Article a
+<span class="k">WHERE</span> <span class="k">MATCH</span>(a.body, <span class="s">'bak*'</span>)
+<span class="k">ORDER BY</span> <span class="k">SCORE</span>(a.body, <span class="s">'baking bread'</span>) <span class="k">DESC</span>;</pre><div class="res">→ "… fresh &lt;em&gt;bread&lt;/em&gt; every morning …"</div></div>
+<div class="pane"><pre>db.inTransaction(TxOptions.defaults()
+        .isolation(Isolation.SERIALIZABLE), tx -&gt; {
+    Account a = tx.get(Account.<span class="k">class</span>, from);
+    Account b = tx.get(Account.<span class="k">class</span>, to);
+    tx.update(a.withdraw(<span class="a">30</span>));
+    tx.update(b.deposit(<span class="a">30</span>));
+});                             <span class="c">// commit, retried on conflict</span>
+
+<span class="a">@Unique</span> String number;
+<span class="a">@ForeignKey</span>(onDelete = OnDelete.CASCADE)
+Ref&lt;Customer&gt; customer;      <span class="c">// checked at commit</span>
+
+db.backup(Path.of(<span class="s">"backups/today"</span>));   <span class="c">// while writing</span></pre><div class="res">→ atomic, isolated, durable; never blocks readers</div></div>
       </div>
     </div>
-    <p class="pos">An <b>embedded object database for Java 17+</b>. Store plain annotated objects and query them with a type-safe,
-      Stream-like API or SQL-style <b>OQL</b>, answered from indexes in milliseconds. Data is crash-safe on disk, with transactions at three
-      isolation levels, unique and foreign-key constraints, exact decimals and online backup.</p>
-    <div class="btns">
-      <a class="btn primary" href="#start">Get Started</a>
-      <a class="btn" href="https://github.com/paganini2008/kookaburra">GitHub</a>
-      <a class="btn" href="design.html">Documentation</a>
+
+    <div class="stats reveal">
+      <div class="stat"><b class="grad" data-count="0.7" data-unit=" µs">0.7 µs</b><span>get by id, 10 M objects</span></div>
+      <div class="stat"><b class="grad" data-count="0.2" data-unit=" ms">0.2 ms</b><span>indexed query, 10 M objects</span></div>
+      <div class="stat"><b class="grad" data-count="1" data-unit=" ms">1 ms</b><span>vector top 10 of 100 k</span></div>
+      <div class="stat"><b class="grad" data-count="576" data-unit=" k/s">576 k/s</b><span>bulk inserts</span></div>
+      <div class="stat"><b class="grad" data-count="148" data-unit=" B">148 B</b><span>on disk per object</span></div>
     </div>
-    <div class="badges">
-      <span class="badge">Java 17+</span><span class="badge">Apache-2.0</span><span class="badge">Embedded, no server</span>
-      <span class="badge">ANTLR 4 OQL</span><span class="badge">coverage ≥ 90%</span><span class="badge">Windows · Linux · macOS</span>
-    </div>
-    <img class="shot" src="https://paganini2008.github.io/kookaburra/assets/studio-data.png" alt="Kookaburra Studio: data grid" width="1320" height="820">
+    <div class="tilt"><img class="shot" src="https://paganini2008.github.io/kookaburra/assets/studio-data.png" alt="Kookaburra Studio: data grid" width="1320" height="820"></div>
   </div>
 </header>
 
 <!-- Tutorial video -->
 <section id="tutorial">
-  <div class="wrap">
+  <div class="wrap reveal">
     <div class="kicker">Tutorial</div>
     <h2>Kookaburra in three minutes</h2>
-    <p class="lead">First Studio, operated with the mouse: browse, filter, inspect, export, follow references, edit (form and JSON), constraints, delete with cascade, transactions with commit and rollback, OQL with EXPLAIN, and backup. Then the same features as Java code. English subtitles.</p>
-    <video class="video" controls preload="metadata" playsinline width="1920" height="1080"
+    <p class="lead">Studio with the mouse, then the same features as Java code. English subtitles.</p>
+    <video class="shot" style="margin-top:0" controls preload="metadata" playsinline width="1920" height="1080"
            poster="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial-poster.jpg">
       <source src="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4" type="video/mp4">
-      <a href="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4">Download the tutorial (MP4, 2:56)</a>
+      <a href="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4">Download the tutorial (MP4)</a>
     </video>
   </div>
 </section>
@@ -170,17 +334,17 @@ footer .sp { margin-left: auto; }
 <section id="why">
   <div class="wrap">
     <div class="kicker">Why Kookaburra</div>
-    <h2>Local data shouldn't need a server or an ORM</h2>
-    <p class="lead">Typical pain points when an application needs to keep and query its own objects:</p>
+    <h2>Local data shouldn't need <span class="grad">a server or an ORM</span></h2>
+    <p class="lead">Typical pain points when an application keeps and queries its own objects, and what Kookaburra does instead.</p>
     <div class="grid g4">
-      <div class="card pain"><div class="ico">🧱</div><h3>ORM + SQL for local state</h3><p>Mapping layers, schemas and a database server just to persist and filter your own objects.</p></div>
-      <div class="card pain"><div class="ico">🐢</div><h3>Streams over lists don't scale</h3><p><code>list.stream().filter(...)</code> scans everything, every time, and lives only in the heap.</p></div>
-      <div class="card pain"><div class="ico">🔤</div><h3>Stringly-typed queries</h3><p>Field names in strings break silently when you refactor.</p></div>
-      <div class="card pain"><div class="ico">🔍</div><h3>No way to look inside</h3><p>Binary stores give you nothing to browse, fix or export data with.</p></div>
-      <div class="card pain"><div class="ico">🧹</div><h3>Integrity by hand</h3><p>Duplicate keys and dangling references slip in when every check lives in application code.</p></div>
-      <div class="card pain"><div class="ico">⚖️</div><h3>Races between checks and writes</h3><p>"Check, then write" breaks under concurrency: two writers both see the old state.</p></div>
-      <div class="card pain"><div class="ico">💸</div><h3>Floating-point money</h3><p><code>0.1 + 0.2</code> is not <code>0.3</code> in a double.</p></div>
-      <div class="card pain"><div class="ico">💾</div><h3>Backing up a live store</h3><p>Copying files while the application writes gives an inconsistent copy.</p></div>
+      <div class="card pain reveal"><div class="ico">🧱</div><h3>ORM + SQL for local state</h3><p>Mapping layers, schemas and a server just to persist your own objects.</p><div class="fix">✓ annotate the class, call <code>insert</code></div></div>
+      <div class="card pain reveal"><div class="ico">🐢</div><h3>Streams over lists don't scale</h3><p><code>list.stream().filter(...)</code> scans everything, every time.</p><div class="fix">✓ indexes answer in milliseconds</div></div>
+      <div class="card pain reveal"><div class="ico">🔤</div><h3>Stringly-typed queries</h3><p>Field names in strings break silently when you refactor.</p><div class="fix">✓ method references and a generated metamodel</div></div>
+      <div class="card pain reveal"><div class="ico">🔍</div><h3>No way to look inside</h3><p>Binary stores give you nothing to browse, fix or export.</p><div class="fix">✓ Kookaburra Studio for every database</div></div>
+      <div class="card pain reveal"><div class="ico">🧹</div><h3>Integrity by hand</h3><p>Duplicate keys and dangling references slip in.</p><div class="fix">✓ <code>@Unique</code> and <code>@ForeignKey</code>, checked at commit</div></div>
+      <div class="card pain reveal"><div class="ico">⚖️</div><h3>Races between checks and writes</h3><p>Two writers both see the old state.</p><div class="fix">✓ transactions up to SERIALIZABLE</div></div>
+      <div class="card pain reveal"><div class="ico">🧠</div><h3>A separate search stack</h3><p>A search server and a vector database next to your data.</p><div class="fix">✓ BM25 and HNSW built in, local Ollama models</div></div>
+      <div class="card pain reveal"><div class="ico">💾</div><h3>Backing up a live store</h3><p>Copying files while writing gives a broken copy.</p><div class="fix">✓ <code>db.backup(dir)</code>, consistent, online</div></div>
     </div>
   </div>
 </section>
@@ -189,25 +353,53 @@ footer .sp { margin-left: auto; }
 <section id="features">
   <div class="wrap">
     <div class="kicker">Features</div>
-    <h2>Everything in one small library</h2>
-    <p class="lead">Embedded, durable, indexed and queryable, with a desktop tool to look inside.</p>
+    <h2>Everything in <span class="grad">one small library</span></h2>
+    <p class="lead">Embedded, durable, indexed and searchable, with a desktop tool to look inside.</p>
+
+    <div class="group">Store objects</div>
     <div class="grid g4">
-      <div class="card"><div class="ico">🧭</div><h3>Type-safe chained queries</h3><p><code>query(Book.class).where(Book::getYear).ge(1960).list()</code> or the generated <code>Book_</code> metamodel. Refactoring-safe.</p></div>
-      <div class="card"><div class="ico">⚡</div><h3>Indexes</h3><p>Index the fields you filter, sort and group by: milliseconds on 10 M objects.</p></div>
-      <div class="card"><div class="ico">🎯</div><h3>Vector search</h3><p><code>float[]</code> embeddings with <code>@Vector</code>; <code>nearest(...)</code> by cosine, L2 or inner product, after your filters.</p></div>
-      <div class="card"><div class="ico">🔤</div><h3>OQL</h3><p>SELECT / UPDATE / DELETE with the SQL-92 core: CASE, LIKE, DISTINCT, GROUP BY … HAVING.</p></div>
-      <div class="card"><div class="ico">🧬</div><h3>Nested objects</h3><p>Inheritance, embedded objects at any depth, lists and maps of them (<code>whereAny</code>, <code>MEMBER OF</code>), references with fetch.</p></div>
-      <div class="card"><div class="ico">🔁</div><h3>Transactions</h3><p>READ COMMITTED, SNAPSHOT, SERIALIZABLE; optimistic, never blocking; retries built in.</p></div>
-      <div class="card"><div class="ico">🔑</div><h3>Unique constraints</h3><p><code>@Unique</code> on a field or a combination of fields; checked atomically at commit.</p></div>
-      <div class="card"><div class="ico">🔗</div><h3>Foreign keys</h3><p><code>@ForeignKey</code> with RESTRICT, CASCADE or SET_NULL; backlinks with <code>referrers</code>.</p></div>
-      <div class="card"><div class="ico">💰</div><h3>Exact decimals</h3><p><code>BigDecimal</code> fields, indexed and compared by value; exact SUM and arithmetic.</p></div>
-      <div class="card"><div class="ico">🪝</div><h3>Lifecycle callbacks</h3><p><code>@PrePersist</code>, <code>@PostLoad</code> and friends, plus entity listeners.</p></div>
-      <div class="card"><div class="ico">💾</div><h3>Online backup</h3><p>A consistent snapshot while writers keep going; restore = open.</p></div>
-      <div class="card"><div class="ico">📦</div><h3>Large values</h3><p>Long texts and binaries such as images, several MiB per value.</p></div>
-      <div class="card"><div class="ico">🛡</div><h3>Durable &amp; compact</h3><p>Committed data survives crashes; readers see consistent snapshots; about 150 B per object on disk; opens in milliseconds.</p></div>
-      <div class="card"><div class="ico">🧩</div><h3>Dynamic API</h3><p>A self-describing schema with evolution. Open any database without its classes.</p></div>
-      <div class="card"><div class="ico">🖥</div><h3>Kookaburra Studio</h3><p>Several databases, transactions at any level, backlinks, constraints, image preview, OQL console, backup. One jar for every OS.</p></div>
-      <div class="card"><div class="ico">💽</div><h3>Tested on disk</h3><p>Every shared suite runs in memory and on disk; ≥ 90% coverage; a 10 M-object stress run.</p></div>
+      <div class="card reveal"><div class="ico">🧬</div><h3>Plain Java classes</h3><p><code>@Entity</code>, inheritance, embedded objects at any depth, lists, sets and maps of them, references with <code>Ref&lt;T&gt;</code>.</p></div>
+      <div class="card reveal"><div class="ico">💰</div><h3>Exact decimals</h3><p><code>BigDecimal</code> indexed and compared by value; exact SUM and arithmetic.</p></div>
+      <div class="card reveal"><div class="ico">📦</div><h3>Large values</h3><p>Long texts and binaries such as images, several MiB per value.</p></div>
+      <div class="card reveal"><div class="ico">🔄</div><h3>Schema evolution</h3><p>Add, remove or widen fields; <code>@Renamed</code> fields and classes keep their data.</p></div>
+      <div class="card reveal"><div class="ico">📝</div><h3>Comments <span class="tag">new</span></h3><p><code>@Comment</code> on classes and fields, kept in the schema and shown in Studio.</p></div>
+      <div class="card reveal"><div class="ico">☕</div><h3>Export as Java <span class="tag">new</span></h3><p><code>db.exportSchema(dir, pkg)</code> writes the stored schema as ready-to-compile entity classes.</p></div>
+      <div class="card reveal"><div class="ico">🧩</div><h3>Dynamic API</h3><p>Open any database without its classes: <code>db.dynamic("Book")</code>.</p></div>
+      <div class="card reveal"><div class="ico">🪝</div><h3>Lifecycle callbacks</h3><p><code>@PrePersist</code>, <code>@PostLoad</code> and friends, plus entity listeners.</p></div>
+    </div>
+
+    <div class="group">Query</div>
+    <div class="grid g4">
+      <div class="card reveal"><div class="ico">🧭</div><h3>Type-safe chained queries</h3><p><code>where(Book::getYear).ge(1960)</code> or the generated <code>Book_</code> metamodel.</p></div>
+      <div class="card reveal"><div class="ico">🔤</div><h3>OQL</h3><p>SELECT, UPDATE, DELETE: CASE, LIKE, DISTINCT, GROUP BY … HAVING, parameters.</p></div>
+      <div class="card reveal"><div class="ico">⚡</div><h3>Indexes</h3><p><code>@Index</code> on what you filter, sort and group by: bitmap, ordinal, multi-value.</p></div>
+      <div class="card reveal"><div class="ico">🎛</div><h3>Nested conditions</h3><p><code>whereAny</code>, <code>MEMBER OF</code>, one-element matches with <code>whereElement</code> or <code>JOIN</code>.</p></div>
+      <div class="card reveal"><div class="ico">📊</div><h3>Aggregates</h3><p>count, sum, avg, min, max, grouped, from the typed API or OQL.</p></div>
+      <div class="card reveal"><div class="ico">🗺</div><h3>Query plans</h3><p><code>explainAnalyze()</code> / <code>EXPLAIN ANALYZE</code>: rows and time of every step.</p></div>
+    </div>
+
+    <div class="group">Search</div>
+    <div class="grid g4">
+      <div class="card reveal"><div class="ico">🔎</div><h3>Full-text</h3><p><code>@FullText</code>: any language, English stems, phrases, prefixes, highlight, BM25.</p></div>
+      <div class="card reveal"><div class="ico">🎯</div><h3>Vector search</h3><p><code>@Vector</code>: HNSW index, cosine, L2 or inner product, int8 option, after your filters.</p></div>
+      <div class="card reveal"><div class="ico">🔀</div><h3>Hybrid &amp; rerank</h3><p><code>hybrid</code> (vectors + words), <code>diverse</code> (MMR), <code>rerank</code> with a local model.</p></div>
+      <div class="card reveal"><div class="ico">🦙</div><h3>Local embeddings</h3><p>Text to vector through Ollama: <code>nearest(f, "text", k)</code>, <code>embed('…')</code>.</p></div>
+    </div>
+
+    <div class="group">Keep data safe</div>
+    <div class="grid g4">
+      <div class="card reveal"><div class="ico">🔁</div><h3>Transactions</h3><p>READ COMMITTED, SNAPSHOT, SERIALIZABLE; optimistic, never blocking, retried.</p></div>
+      <div class="card reveal"><div class="ico">🔑</div><h3>Constraints</h3><p><code>@Unique</code> on fields or combinations, <code>@ForeignKey</code> with RESTRICT, CASCADE, SET_NULL.</p></div>
+      <div class="card reveal"><div class="ico">🛡</div><h3>Durable</h3><p>Committed data survives crashes; choose SYNC or ASYNC per database, transaction or batch.</p></div>
+      <div class="card reveal"><div class="ico">💾</div><h3>Online backup</h3><p>A consistent snapshot while writers keep going; restore = open.</p></div>
+    </div>
+
+    <div class="group">Tools</div>
+    <div class="grid g4">
+      <div class="card reveal"><div class="ico">🖥</div><h3>Kookaburra Studio</h3><p>Data grid, editor, OQL console, plans, transactions, backup. Installers for every OS.</p></div>
+      <div class="card reveal"><div class="ico">📈</div><h3>Statistics</h3><p><code>db.stats()</code>: objects, storage, commits, conflicts, for your monitoring.</p></div>
+      <div class="card reveal"><div class="ico">⚙️</div><h3>One config file</h3><p>Every setting in <code>kookaburra.properties</code>, or in code with <code>Config</code>.</p></div>
+      <div class="card reveal"><div class="ico">💽</div><h3>Tested on disk</h3><p>Every suite runs in memory and on disk, plus crash tests and a 10 M-object stress run.</p></div>
     </div>
   </div>
 </section>
@@ -216,18 +408,31 @@ footer .sp { margin-left: auto; }
 <section id="how">
   <div class="wrap">
     <div class="kicker">How it works</div>
-    <h2>A library inside your application</h2>
-    <div class="how" style="grid-template-columns:1fr">
-      <div class="diagram">
-        <img class="shot" src="https://paganini2008.github.io/kookaburra/assets/how-it-fits.png" alt="Your application uses the ObjectDB API; data lives in a directory that Studio and backups use" loading="lazy">
-      </div>
-      <ul>
-        <li><b>Annotate plain classes</b>: Kookaburra stores them in a data directory, or in memory. No server, no schema scripts.</li>
-        <li><b>Query</b> with method references or OQL; indexes answer, and <code>explain()</code> shows which one.</li>
-        <li><b>Write</b> objects, batches or transactions: commits are atomic and durable, constraints are checked at commit.</li>
-        <li><b>Look inside</b> with Studio, or call <code>db.backup(dir)</code> for a consistent copy while the application runs.</li>
-      </ul>
+    <h2>A library <span class="grad">inside your application</span></h2>
+    <p class="lead">Kookaburra runs in your JVM. Data lives in one directory, or only in memory.</p>
+    <div class="how">
+      <img class="reveal" src="https://paganini2008.github.io/kookaburra/assets/architecture.png" alt="Kookaburra architecture" loading="lazy">
+      <ol class="steps reveal">
+        <li><b>Annotate plain classes.</b> No server, no schema scripts.</li>
+        <li><b>Query</b> with method references or OQL; indexes answer, <code>explain()</code> shows which one.</li>
+        <li><b>Write</b> objects, batches or transactions: atomic and durable, constraints checked at commit.</li>
+        <li><b>Search</b> words and meanings in the same query.</li>
+        <li><b>Look inside</b> with Studio; <code>db.backup(dir)</code> while the application runs.</li>
+      </ol>
     </div>
+    <h3 style="margin:56px 0 16px;font-size:22px">At a glance</h3>
+    <table class="facts reveal">
+      <tr><th>Type</th><td>Embedded object database (in process), on disk or in memory</td></tr>
+      <tr><th>Platform</th><td>Java 17+, any OS; one jar plus ANTLR, RoaringBitmap and SLF4J</td></tr>
+      <tr><th>Data model</th><td>Java classes: inheritance, embedded objects, lists, sets, maps, references, decimals, binaries, vectors</td></tr>
+      <tr><th>Query languages</th><td>Type-safe chained API, generated metamodel, OQL (SELECT, UPDATE, DELETE)</td></tr>
+      <tr><th>Indexes</th><td>Bitmap, ordinal, multi-value, unique, full-text (BM25), vector (HNSW, int8)</td></tr>
+      <tr><th>Transactions</th><td>ACID; READ COMMITTED, SNAPSHOT, SERIALIZABLE; optimistic locking with <code>@Version</code></td></tr>
+      <tr><th>Integrity</th><td>Unique constraints (single and composite), foreign keys with ON DELETE actions</td></tr>
+      <tr><th>Operations</th><td>Crash recovery, online backup, compaction, statistics, schema export as Java</td></tr>
+      <tr><th>Tooling</th><td>Kookaburra Studio (Windows, macOS, Linux)</td></tr>
+      <tr><th>License</th><td>Apache License 2.0</td></tr>
+    </table>
   </div>
 </section>
 
@@ -235,14 +440,18 @@ footer .sp { margin-left: auto; }
 <section id="start">
   <div class="wrap">
     <div class="kicker">Quick start</div>
-    <h2>Three steps</h2>
+    <h2>Running in <span class="grad">three steps</span></h2>
     <p class="lead">Add the dependency, annotate a class, query it.</p>
-    <div class="code"><div class="label">1 · pom.xml</div><button class="copy">Copy</button><pre>&lt;dependency&gt;
+    <div class="qs">
+      <div>
+        <div class="code"><div class="label">1 · pom.xml</div><button class="copy">Copy</button><pre>&lt;dependency&gt;
     &lt;groupId&gt;com.github.paganini2008&lt;/groupId&gt;
     &lt;artifactId&gt;kookaburra-core&lt;/artifactId&gt;
     &lt;version&gt;1.0.0-SNAPSHOT&lt;/version&gt;
 &lt;/dependency&gt;</pre></div>
-    <div class="code"><div class="label">2 · Entity</div><button class="copy">Copy</button><pre><span class="a">@Entity</span>
+        <div class="code"><div class="label">1 · build.gradle</div><button class="copy">Copy</button><pre>implementation <span class="s">'com.github.paganini2008:kookaburra-core:1.0.0-SNAPSHOT'</span></pre></div>
+        <div class="code"><div class="label">2 · Entity</div><button class="copy">Copy</button><pre><span class="a">@Entity</span>
+<span class="a">@Comment</span>(<span class="s">"A book in the shop"</span>)
 <span class="k">public class</span> <span class="t">Book</span> {
     <span class="a">@Id</span> <span class="k">long</span> oid;
     <span class="a">@Version</span> <span class="k">long</span> version;
@@ -252,7 +461,9 @@ footer .sp { margin-left: auto; }
     <span class="k">double</span> price;
     <span class="c">// constructors, getters …</span>
 }</pre></div>
-    <div class="code"><div class="label">3 · Store &amp; query</div><button class="copy">Copy</button><pre><span class="k">try</span> (ObjectDB db = ObjectDB.open(Path.of(<span class="s">"data"</span>))) {
+      </div>
+      <div>
+        <div class="code"><div class="label">3 · Store &amp; query</div><button class="copy">Copy</button><pre><span class="k">try</span> (ObjectDB db = ObjectDB.open(Path.of(<span class="s">"data"</span>))) {
     db.batch()
       .insert(<span class="k">new</span> Book(<span class="s">"Dune"</span>, Genre.SCIFI, <span class="a">1965</span>, <span class="a">9.99</span>))
       .insert(<span class="k">new</span> Book(<span class="s">"Neuromancer"</span>, Genre.SCIFI, <span class="a">1984</span>, <span class="a">12.50</span>))
@@ -266,19 +477,32 @@ footer .sp { margin-left: auto; }
             .limit(<span class="a">2</span>)
             .list();
     System.out.println(books.stream().map(Book::getTitle).toList());
+
+    System.out.println(db.oql(<span class="s">"SELECT b.title FROM Book b WHERE b.year &lt; 1970"</span>).list());
 }</pre></div>
-    <div class="code out"><div class="label">Output</div><pre>[Hyperion, Neuromancer]</pre></div>
+        <div class="code out"><div class="label">Output</div><pre>[Hyperion, Neuromancer]
+[Dune]</pre></div>
+        <div class="code"><div class="label">Optional · kookaburra.properties</div><button class="copy">Copy</button><pre>kookaburra.durability=SYNC
+kookaburra.transactions=true
+kookaburra.tx-isolation=SNAPSHOT
+kookaburra.embedder=ollama
+kookaburra.embedder-model=nomic-embed-text</pre></div>
+      </div>
+    </div>
   </div>
 </section>
 
-<!-- 6. Examples / Use cases -->
+<!-- 6. Use cases -->
 <section id="examples" class="ex">
   <div class="wrap">
-    <div class="kicker">Examples</div>
-    <h2>Use cases</h2>
-    <p class="lead">Each example: input → code → output, from a real run on six books.</p>
+    <div class="kicker">Use cases</div>
+    <h2>Real code, <span class="grad">real output</span></h2>
+    <p class="lead">Each example: code → output, from real runs.</p>
+    <div class="filters" id="filters">
+      <button class="on" data-f="all">All</button><button data-f="query">Query</button><button data-f="search">Search</button><button data-f="safe">Integrity &amp; transactions</button><button data-f="schema">Schema</button><button data-f="ops">Operations</button>
+    </div>
     <div class="grid g3">
-      <div class="card"><h3>Group &amp; aggregate</h3><p>Count and average price per genre.</p>
+      <div class="card reveal" data-f="query"><h3>Group &amp; aggregate</h3><p>Count and average price per genre.</p>
 <pre>db.query(Book.class)
   .groupBy(where(Book::getGenre))
   .agg(Q.count().as("books"),
@@ -287,37 +511,75 @@ footer .sp { margin-left: auto; }
         <div class="res">SCIFI   books=4 avg=11.36
 FANTASY books=1 avg=10.00
 CRIME   books=1 avg=7.40</div></div>
-      <div class="card"><h3>OQL for tools &amp; scripts</h3><p>Text queries with parameters.</p>
+      <div class="card reveal" data-f="query"><h3>OQL for tools &amp; scripts</h3><p>Text queries with parameters.</p>
 <pre>db.oql("SELECT b.author, b.year FROM Book b " +
        "WHERE b.year &lt; :y ORDER BY b.year")
   .param("y", 1950).rows();</pre>
         <div class="res">J.R.R. Tolkien 1937
 Raymond Chandler 1939</div></div>
-      <div class="card"><h3>Generated metamodel</h3><p>Compile-time field constants from the annotation processor.</p>
+      <div class="card reveal" data-f="query"><h3>Generated metamodel</h3><p>Compile-time field constants from the annotation processor.</p>
 <pre>db.query(Book.class)
   .filter(Book_.tags.contains("classic"))
   .filter(Book_.price.lt(10.0))
   .count();</pre>
         <div class="res">2</div></div>
-      <div class="card"><h3>Admin without classes</h3><p>Dynamic access to any stored class.</p>
-<pre>DynamicCollection books = db.dynamic("Book");
-books.from()
-  .where("author").startsWith("J")
-  .list().get(0).get("title");</pre>
-        <div class="res">"The Hobbit"</div></div>
-      <div class="card"><h3>Safe concurrent edits</h3><p>Optimistic locking with <code>@Version</code>.</p>
-<pre>dune.setPrice(11.99);
-db.update(dune);
-// OptimisticLockException if changed meanwhile</pre>
-        <div class="res">dune=11.99</div></div>
-      <div class="card"><h3>See the plan</h3><p>Which index answers each condition.</p>
-<pre>db.query(Book.class)
-  .where(Book::getGenre).eq(SCIFI)
-  .where(Book::getYear).between(1950, 1970)
-  .explain();</pre>
-        <div class="res">genre = 'SCIFI'  [sorted docs card=3]
-year IN [1950, 1970]  [sorted docs card=6]</div></div>
-      <div class="card"><h3>Transactions</h3><p>Opt-in transactions; conflicts are detected at commit.</p>
+      <div class="card reveal" data-f="query"><h3>Nested objects</h3><p>Paths into embedded objects, lists and maps.</p>
+<pre>db.query(Shipment.class)
+  .whereAny(Shipment::getItems, Item::getSku)
+  .contains("pear").list();
+db.oql("SELECT s FROM Shipment s " +
+       "WHERE 'kiwi' MEMBER OF s.items.sku").list();</pre>
+        <div class="res">[S-1]   [S-2]</div></div>
+      <div class="card reveal" data-f="query"><h3>One element, every condition</h3><p>Like <code>$elemMatch</code>: the same list element matches.</p>
+<pre>db.query(Shipment.class)
+  .whereElement(Shipment::getItems, e -&gt; e
+      .where(Item::getSku).eq("A")
+      .where(Item::getQty).gt(5))
+  .list();
+// OQL: ... FROM Shipment s JOIN s.items i
+//      WHERE i.sku = 'A' AND i.qty &gt; 5</pre>
+        <div class="res">only shipments with one item "A" × more than 5</div></div>
+      <div class="card reveal" data-f="query"><h3>Query plans</h3><p>Which index answers, rows in → out, time per step.</p>
+<pre>db.query(Person.class)
+    .where(Person::getCity).eq("Perth")
+    .limit(10)
+    .explainAnalyze();</pre>
+        <div class="res">a tree of steps: index or scan, rows in → out, time, slowest marked</div></div>
+      <div class="card reveal" data-f="search"><h3>Vector search</h3><p>The closest documents to an embedding, after a filter.</p>
+<pre>List&lt;Doc&gt; top = db.query(Doc.class)
+    .where(Doc::getLang).eq("en")
+    .nearest(Doc::getEmbedding, q, 10)
+    .list();</pre>
+        <div class="res">top 10 of 100,000 vectors (384 dims): about 1 ms, 99.6 % same as exact</div></div>
+      <div class="card reveal" data-f="search"><h3>Search by text</h3><p>Distance functions named as in pgvector; <code>embed</code> asks a local Ollama model.</p>
+<pre>SELECT d.title,
+  cosine_distance(d.embedding,
+    embed('bread at home')) AS dist
+FROM Doc d WHERE d.lang = 'en'
+ORDER BY dist LIMIT 10</pre>
+        <div class="res">runs as the same vector search</div></div>
+      <div class="card reveal" data-f="search"><h3>Hybrid, diverse, rerank</h3><p>Words and meanings fused, near-duplicates dropped, a local model re-orders.</p>
+<pre>db.query(Doc.class)
+  .nearest(Doc::getEmbedding, "baking bread", 10)
+  .hybrid(Doc::getBody)     // RRF
+  .diverse()                // MMR
+  .rerank(Doc::getBody)     // Ollama model
+  .list();</pre>
+        <div class="res">RAG retrieval without a search server</div></div>
+      <div class="card reveal" data-f="search"><h3>Full-text search</h3><p>Every word, a phrase, or the most relevant first (BM25).</p>
+<pre>db.query(Article.class)
+    .where(Article::getBody)
+    .matches("\"sourdough bread\"").list();
+db.query(Article.class)
+    .search(Article::getBody, "baking bread", 10)
+    .list();</pre>
+        <div class="res">OQL: MATCH(a.body, 'bak*'), SCORE(…), HIGHLIGHT(…)</div></div>
+      <div class="card reveal" data-f="search"><h3>Int8 vectors</h3><p>A quarter of the memory for the index, re-ranked exactly.</p>
+<pre>@Vector(dim = 384,
+        quantization = VectorQuantization.INT8)
+float[] embedding;</pre>
+        <div class="res">same answers, 4 × smaller index</div></div>
+      <div class="card reveal" data-f="safe"><h3>Transactions</h3><p>Opt-in transactions; conflicts are detected at commit.</p>
 <pre>try (Transaction tx = db.begin(Isolation.SNAPSHOT)) {
   Account a = tx.get(Account.class, from);
   tx.update(a.balance(a.getBalance() - 30));
@@ -325,28 +587,7 @@ year IN [1950, 1970]  [sorted docs card=6]</div></div>
   tx.commit();
 }</pre>
         <div class="res">ConflictException if `a` changed meanwhile</div></div>
-      <div class="card"><h3>Nested objects</h3><p>Paths into embedded objects, lists and maps.</p>
-<pre>db.query(Shipment.class)
-  .whereAny(Shipment::getItems, Item::getSku)
-  .contains("pear").list();
-db.oql("SELECT s FROM Shipment s " +
-       "WHERE 'kiwi' MEMBER OF s.items.sku").list();</pre>
-        <div class="res">[S-1]   [S-2]</div></div>
-      <div class="card"><h3>Texts &amp; images</h3><p>Large values next to their metadata.</p>
-<pre>db.insert(new Document("scan", text,
-    Files.readAllBytes(Path.of("scan.png"))));
-// Base64 in JSON / CSV exports</pre>
-        <div class="res">tested to 16 MiB per value</div></div>
-      <div class="card"><h3>Constraints &amp; decimals</h3><p>Unique numbers, cascading foreign keys, exact totals.</p>
-<pre>@Unique String number;
-@ForeignKey(onDelete = OnDelete.CASCADE)
-Ref&lt;Customer&gt; customer;
-@Index BigDecimal total;
-
-db.query(Order.class).sum(where(Order::getTotal));</pre>
-        <div class="res">duplicate 'A-1' → ConstraintViolationException
-sum of 19.90 + 10.15 → 30.05</div></div>
-      <div class="card"><h3>SERIALIZABLE</h3><p>Two on-call doctors both try to go off call.</p>
+      <div class="card reveal" data-f="safe"><h3>SERIALIZABLE</h3><p>Two on-call doctors both try to go off call.</p>
 <pre>db.inTransaction(TxOptions.defaults()
     .isolation(Isolation.SERIALIZABLE), tx -&gt; {
   if (tx.query(Doctor.class).where(Doctor::isOnCall)
@@ -355,36 +596,69 @@ sum of 19.90 + 10.15 → 30.05</div></div>
 });</pre>
         <div class="res">second commit: serialization failure, retried
 one doctor stays on call</div></div>
-      <div class="card"><h3>Vector search</h3><p>The closest documents to an embedding, after a filter.</p>
-<pre>List&lt;Doc&gt; top = db.query(Doc.class)
-    .where(Doc::getLang).eq("en")
-    .nearest(Doc::getEmbedding, q, 10)
-    .list();</pre>
-        <div class="res">top 10 of 100,000 vectors (384 dims): about 35 ms</div></div>
-      <div class="card"><h3>Vectors in OQL</h3><p>Distance functions named as in pgvector.</p>
-<pre>SELECT d.title,
-  cosine_distance(d.embedding, :q) AS dist
-FROM Doc d WHERE d.lang = 'en'
-ORDER BY dist LIMIT 10</pre>
-        <div class="res">runs as the same vector search</div></div>
-      <div class="card"><h3>Statistics</h3><p>Numbers for your own monitoring.</p>
-<pre>DatabaseStats s = db.stats();
-s.objects();
-s.transactions().total().conflicts();</pre>
-        <div class="res">objects, storage, commits, conflicts</div></div>
-      <div class="card"><h3>Online backup</h3><p>Back up while writing; open the copy to restore.</p>
+      <div class="card reveal" data-f="safe"><h3>Constraints &amp; decimals</h3><p>Unique numbers, cascading foreign keys, exact totals.</p>
+<pre>@Unique String number;
+@ForeignKey(onDelete = OnDelete.CASCADE)
+Ref&lt;Customer&gt; customer;
+@Index BigDecimal total;
+
+db.query(Order.class).sum(where(Order::getTotal));</pre>
+        <div class="res">duplicate 'A-1' → ConstraintViolationException
+sum of 19.90 + 10.15 → 30.05</div></div>
+      <div class="card reveal" data-f="safe"><h3>Safe concurrent edits</h3><p>Optimistic locking with <code>@Version</code>.</p>
+<pre>dune.setPrice(11.99);
+db.update(dune);
+// OptimisticLockException if changed meanwhile</pre>
+        <div class="res">dune=11.99</div></div>
+      <div class="card reveal" data-f="safe"><h3>Durability per write</h3><p>Fast bulk loads, safe payments, in the same database.</p>
+<pre>WriteBatch b = db.batch().durability(Durability.ASYNC);
+events.forEach(b::insert);
+b.commit();
+db.inTransaction(TxOptions.defaults()
+    .durability(Durability.SYNC), tx -&gt; pay(tx));</pre>
+        <div class="res">one disk flush per batch; payments on disk at commit</div></div>
+      <div class="card reveal" data-f="schema"><h3>Rename without migration</h3><p>Fields and classes keep their stored data.</p>
+<pre>@Entity @Renamed("com.example.Client")
+public class Customer {
+    @Id long oid;
+    @Renamed("fullName") String name;
+}</pre>
+        <div class="res">old data read under the new names</div></div>
+      <div class="card reveal" data-f="schema"><h3>Export the schema as Java</h3><p>Entity classes with annotations, comments, getters and setters.</p>
+<pre>db.exportSchema(Path.of("src/main/java"), null);
+// or another package (classes get @Renamed):
+db.exportSchema(Path.of("src/main/java"),
+                "com.acme.model");</pre>
+        <div class="res">compiles and opens the same database, no new schema version</div></div>
+      <div class="card reveal" data-f="schema"><h3>Admin without classes</h3><p>Dynamic access to any stored class.</p>
+<pre>DynamicCollection books = db.dynamic("Book");
+books.from()
+  .where("author").startsWith("J")
+  .list().get(0).get("title");</pre>
+        <div class="res">"The Hobbit"</div></div>
+      <div class="card reveal" data-f="ops"><h3>Online backup</h3><p>Back up while writing; open the copy to restore.</p>
 <pre>BackupInfo info = db.backup(
-    Path.of("backups/2026-10-17"));
+    Path.of("backups/2026-11-06"));
 try (ObjectDB copy = ObjectDB.open(info.path())) {
   …
 }</pre>
         <div class="res">a complete copy as of one moment</div></div>
+      <div class="card reveal" data-f="ops"><h3>Statistics</h3><p>Numbers for your own monitoring.</p>
+<pre>DatabaseStats s = db.stats();
+s.objects();
+s.transactions().total().conflicts();</pre>
+        <div class="res">objects, storage, commits, conflicts</div></div>
+      <div class="card reveal" data-f="ops"><h3>Texts &amp; images</h3><p>Large values next to their metadata.</p>
+<pre>db.insert(new Document("scan", text,
+    Files.readAllBytes(Path.of("scan.png"))));
+// Base64 in JSON / CSV exports</pre>
+        <div class="res">tested to 16 MiB per value</div></div>
     </div>
-    <div class="grid shots" style="grid-template-columns:1fr">
-      <figure><img src="https://paganini2008.github.io/kookaburra/assets/isolation.png" alt="Isolation levels" loading="lazy"><figcaption>Three isolation levels and the anomalies each one prevents.</figcaption></figure>
-      <figure><img src="https://paganini2008.github.io/kookaburra/assets/foreign-keys.png" alt="Constraints" loading="lazy"><figcaption>@Unique and @ForeignKey with ON DELETE actions.</figcaption></figure>
-      <figure><img src="https://paganini2008.github.io/kookaburra/assets/backup-overview.png" alt="Online backup" loading="lazy"><figcaption>Online backup while the application keeps writing.</figcaption></figure>
-      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-query.png" alt="Studio OQL console" loading="lazy"><figcaption>OQL console with completion and transaction scripts.</figcaption></figure>
+    <div class="grid g2 shots" style="margin-top:36px">
+      <figure class="reveal"><img src="https://paganini2008.github.io/kookaburra/assets/isolation.png" alt="Isolation levels" loading="lazy"><figcaption>Three isolation levels and the anomalies each one prevents.</figcaption></figure>
+      <figure class="reveal"><img src="https://paganini2008.github.io/kookaburra/assets/foreign-keys.png" alt="Constraints" loading="lazy"><figcaption>@Unique and @ForeignKey with ON DELETE actions.</figcaption></figure>
+      <figure class="reveal"><img src="https://paganini2008.github.io/kookaburra/assets/backup-overview.png" alt="Online backup" loading="lazy"><figcaption>Online backup while the application keeps writing.</figcaption></figure>
+      <figure class="reveal"><img src="https://paganini2008.github.io/kookaburra/assets/studio-plan.png" alt="Query plan" loading="lazy"><figcaption>Query plan diagram: index, full-text, vector, scan; rows and time bars.</figcaption></figure>
     </div>
   </div>
 </section>
@@ -393,23 +667,28 @@ try (ObjectDB copy = ObjectDB.open(info.path())) {
 <section id="studio">
   <div class="wrap">
     <div class="kicker">Kookaburra Studio</div>
-    <h2>See inside every database</h2>
-    <p class="lead">A standalone desktop tool: several databases side by side, transactions, constraints and backlinks, nested objects and binaries, an OQL console, backups.</p>
-    <p class="lead"><b>Download the latest version</b> (installers bring their own Java):
-      <a href="https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-windows-x64.msi">Windows</a> ·
-      <a href="https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-macos-arm64.dmg">macOS Apple silicon</a> ·
-      <a href="https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-macos-x64.dmg">macOS Intel</a> ·
-      <a href="https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-linux-x64.deb">Linux (.deb)</a> ·
-      <a href="https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio.jar">jar for Java 17+</a></p>
+    <h2>See inside <span class="grad">every database</span></h2>
+    <p class="lead">A desktop tool for your data: browse, edit, query, explain, search, back up. Installers bring their own Java.</p>
+    <div class="dl">
+      <a class="btn primary" href="https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-windows-x64.msi">⬇ Windows</a>
+      <a class="btn" href="https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-macos-arm64.dmg">⬇ macOS Apple silicon</a>
+      <a class="btn" href="https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-macos-x64.dmg">⬇ macOS Intel</a>
+      <a class="btn" href="https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-linux-x64.deb">⬇ Linux (.deb)</a>
+      <a class="btn" href="https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio.jar">⬇ jar for Java 17+</a>
+    </div>
     <div class="grid g2 shots">
-      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-transaction.png" alt="Studio transaction" loading="lazy"><figcaption>Begin (pick the isolation level), Commit, Rollback per database, or <code>BEGIN ISOLATION LEVEL …; COMMIT</code> in the console.</figcaption></figure>
-      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-backlinks.png" alt="Studio backlinks" loading="lazy"><figcaption>"Referenced by": the objects pointing at the selected one; double-click opens one.</figcaption></figure>
-      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-constraints.png" alt="Studio constraints" loading="lazy"><figcaption>Constraint column: <code>UNIQUE</code>, <code>FK → Customer · CASCADE</code>.</figcaption></figure>
-      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-nested.png" alt="Studio nested inspector" loading="lazy"><figcaption>Lists of embedded objects as <code>[ n elements ]</code>; the Key / Value / Type inspector expands every level.</figcaption></figure>
-      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-nested-editor.png" alt="Studio element editor" loading="lazy"><figcaption>Element tables for lists and maps: add, remove, reorder.</figcaption></figure>
-      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-binary.png" alt="Studio binary field" loading="lazy"><figcaption>Binary fields: format, size, image preview, load / save.</figcaption></figure>
-      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-stats.png" alt="Studio stats dashboard" loading="lazy"><figcaption>Stats dashboard: key figures, live write and transaction rates, objects and storage per collection.</figcaption></figure>
-      <figure><img src="https://paganini2008.github.io/kookaburra/assets/studio-query.png" alt="Studio OQL console" loading="lazy"><figcaption>OQL console with completion, paging, EXPLAIN and export.</figcaption></figure>
+      <figure class="reveal"><img src="https://paganini2008.github.io/kookaburra/assets/studio-query.png" alt="Studio OQL console" loading="lazy"><figcaption>OQL console: completion, Format, paging, export, transaction scripts.</figcaption></figure>
+      <figure class="reveal"><img src="https://paganini2008.github.io/kookaburra/assets/studio-plan.png" alt="Studio query plan" loading="lazy"><figcaption>Explain / Analyze: steps coloured by index or scan, slowest step marked.</figcaption></figure>
+      <figure class="reveal"><img src="https://paganini2008.github.io/kookaburra/assets/studio-java-export.png" alt="Studio export as Java" loading="lazy"><figcaption>Export as Java: preview every class, edit, change the package, save.</figcaption></figure>
+      <figure class="reveal"><img src="https://paganini2008.github.io/kookaburra/assets/studio-schema.png" alt="Studio schema" loading="lazy"><figcaption>Schema: fields, indexes, constraints and comments; storage per collection.</figcaption></figure>
+      <figure class="reveal"><img src="https://paganini2008.github.io/kookaburra/assets/studio-transaction.png" alt="Studio transaction" loading="lazy"><figcaption>Begin (pick the isolation level), Commit, Rollback per database.</figcaption></figure>
+      <figure class="reveal"><img src="https://paganini2008.github.io/kookaburra/assets/studio-backlinks.png" alt="Studio backlinks" loading="lazy"><figcaption>"Referenced by": the objects pointing at the selected one.</figcaption></figure>
+      <figure class="reveal"><img src="https://paganini2008.github.io/kookaburra/assets/studio-constraints.png" alt="Studio constraints" loading="lazy"><figcaption>Constraint column: <code>UNIQUE</code>, <code>FK → Customer · CASCADE</code>.</figcaption></figure>
+      <figure class="reveal"><img src="https://paganini2008.github.io/kookaburra/assets/studio-nested.png" alt="Studio nested inspector" loading="lazy"><figcaption>Nested objects: the inspector expands every level.</figcaption></figure>
+      <figure class="reveal"><img src="https://paganini2008.github.io/kookaburra/assets/studio-binary.png" alt="Studio binary field" loading="lazy"><figcaption>Binary fields: format, size, image preview, load / save.</figcaption></figure>
+      <figure class="reveal"><img src="https://paganini2008.github.io/kookaburra/assets/studio-stats.png" alt="Studio stats dashboard" loading="lazy"><figcaption>Stats dashboard: live write and transaction rates.</figcaption></figure>
+      <figure class="reveal"><img src="https://paganini2008.github.io/kookaburra/assets/studio-about.png" alt="Studio feature map" loading="lazy"><figcaption>About: the feature map of everything Kookaburra does.</figcaption></figure>
+      <figure class="reveal"><img src="https://paganini2008.github.io/kookaburra/assets/studio-nested-editor.png" alt="Studio element editor" loading="lazy"><figcaption>Element tables for lists and maps: add, remove, reorder.</figcaption></figure>
     </div>
   </div>
 </section>
@@ -418,38 +697,38 @@ try (ObjectDB copy = ObjectDB.open(info.path())) {
 <section id="performance">
   <div class="wrap">
     <div class="kicker">Performance</div>
-    <h2>10 million objects, milliseconds</h2>
-    <p class="lead">p50 latency from the <code>kookaburra-bench</code> stress harness (warm-up, repeated runs, consistency checks after every phase).</p>
+    <h2>10 million objects, <span class="grad">milliseconds</span></h2>
+    <p class="lead">p50 latency from the <code>kookaburra-bench</code> stress harness: warm-up, repeated runs, consistency checks after every phase.</p>
     <div class="perf">
-      <div class="card bars">
+      <div class="card bars reveal">
         <h3>Query latency (lower is better, log scale)</h3>
-        <div class="row"><span>get(oid)</span><div class="bar"><span style="width:6%"></span></div><span class="v">0.6 µs</span></div>
-        <div class="row"><span>unique key (OQL)</span><div class="bar"><span style="width:28%"></span></div><span class="v">0.12 ms</span></div>
-        <div class="row"><span>eq + range + limit</span><div class="bar"><span style="width:32%"></span></div><span class="v">0.2 ms</span></div>
-        <div class="row"><span>count(city = ?)</span><div class="bar"><span style="width:35%"></span></div><span class="v">0.24 ms</span></div>
-        <div class="row"><span>top-10 of 2.3 M</span><div class="bar"><span style="width:38%"></span></div><span class="v">0.39 ms</span></div>
-        <div class="row"><span>GROUP BY count</span><div class="bar"><span style="width:52%"></span></div><span class="v">4.0 ms</span></div>
-        <div class="row"><span>OQL GROUP BY + AVG</span><div class="bar"><span style="width:80%"></span></div><span class="v">244 ms</span></div>
-        <div class="row"><span>unindexed full scan</span><div class="bar"><span style="width:95%"></span></div><span class="v">0.81 s</span></div>
+        <div class="row"><span>get(oid)</span><div class="bar"><span data-w="6%"></span></div><span class="v">0.7 µs</span></div>
+        <div class="row"><span>unique key (OQL)</span><div class="bar"><span data-w="28%"></span></div><span class="v">0.11 ms</span></div>
+        <div class="row"><span>eq + range + limit</span><div class="bar"><span data-w="32%"></span></div><span class="v">0.2 ms</span></div>
+        <div class="row"><span>count(city = ?)</span><div class="bar"><span data-w="35%"></span></div><span class="v">0.23 ms</span></div>
+        <div class="row"><span>top-10 of 2.3 M</span><div class="bar"><span data-w="38%"></span></div><span class="v">0.39 ms</span></div>
+        <div class="row"><span>vector top 10 (HNSW)</span><div class="bar"><span data-w="45%"></span></div><span class="v">1.0 ms</span></div>
+        <div class="row"><span>GROUP BY count</span><div class="bar"><span data-w="52%"></span></div><span class="v">3.9 ms</span></div>
+        <div class="row"><span>OQL GROUP BY + AVG</span><div class="bar"><span data-w="80%"></span></div><span class="v">249 ms</span></div>
+        <div class="row"><span>unindexed full scan</span><div class="bar"><span data-w="95%"></span></div><span class="v">0.78 s</span></div>
       </div>
-      <div class="card">
+      <div class="card reveal">
         <h3>Writes, storage, recovery</h3>
-        <table>
+        <table class="t">
           <tr><th>Metric</th><th>Result</th></tr>
-          <tr><td>bulk insert, batches of 100 (ASYNC)</td><td class="n">696 k/s</td></tr>
-          <tr><td>durable inserts, 16 / 128 threads (SYNC)</td><td class="n">3.2 / 21.2 k/s</td></tr>
-          <tr><td>compact 10 M objects (1.4 GB)</td><td class="n">10.4 s</td></tr>
-          <tr><td>online backup of 10.5 M objects, writers running</td><td class="n">25.4 s</td></tr>
-          <tr><td>transfers, 16 threads: SNAPSHOT / RC / SERIALIZABLE</td><td class="n">136 / 142 / 140 k/s</td></tr>
-          <tr><td>insert with @Unique / without</td><td class="n">235 / 258 k/s</td></tr>
-          <tr><td>atomic increments on one hot counter</td><td class="n">265 k/s</td></tr>
-          <tr><td>OQL DELETE of 10.5 M objects, disk after compact</td><td class="n">1.32 M/s, 0 B</td></tr>
-          <tr><td>reopen</td><td class="n">2.0 ms</td></tr>
-          <tr><td>heap after reopen</td><td class="n">6.5 MiB</td></tr>
+          <tr><td>bulk insert, batches of 100 (ASYNC)</td><td class="n">576 k/s</td></tr>
+          <tr><td>durable inserts, 16 / 128 threads (SYNC)</td><td class="n">3.3 / 24.4 k/s</td></tr>
+          <tr><td>compact 10 M objects (1.4 GB)</td><td class="n">11.2 s</td></tr>
+          <tr><td>online backup of 10.5 M objects, writers running</td><td class="n">25.7 s</td></tr>
+          <tr><td>transfers, 16 threads: SNAPSHOT / RC / SERIALIZABLE</td><td class="n">136 / 139 / 136 k/s</td></tr>
+          <tr><td>insert with @Unique / without</td><td class="n">251 / 318 k/s</td></tr>
+          <tr><td>atomic increments on one hot counter</td><td class="n">262 k/s</td></tr>
+          <tr><td>OQL DELETE of 10.5 M objects, disk after compact</td><td class="n">1.31 M/s, 0 B</td></tr>
+          <tr><td>reopen</td><td class="n">2.1 ms</td></tr>
+          <tr><td>heap after reopen</td><td class="n">7.1 MiB</td></tr>
           <tr><td>disk footprint</td><td class="n">148 B / obj</td></tr>
         </table>
-        <p class="env">Apple M2 Max · 32 GB · SSD · JDK 17 · -Xmx8g. Durable single writes scale with concurrent writers, which share disk flushes.
-          <a href="benchmark-10m.md">Full report →</a></p>
+        <p class="env">Apple M2 Max · 32 GB · SSD · JDK 17 · -Xmx8g. <a href="benchmark-10m.md">Full report →</a></p>
       </div>
     </div>
   </div>
@@ -461,14 +740,14 @@ try (ObjectDB copy = ObjectDB.open(info.path())) {
     <div class="kicker">Documentation</div>
     <h2>Learn more</h2>
     <div class="grid g4" style="margin-top:24px">
-      <a class="card" href="#tutorial"><div class="ico">🎬</div><h3>Video tutorial</h3><p>Three minutes from entity to Studio.</p></a>
-      <a class="card" href="#start"><div class="ico">🚀</div><h3>Getting Started</h3><p>Dependency, first entity, first query.</p></a>
-      <a class="card" href="https://github.com/paganini2008/kookaburra#examples"><div class="ico">🧪</div><h3>Examples</h3><p>Typed API, OQL, constraints, isolation, backup.</p></a>
-      <a class="card" href="https://github.com/paganini2008/kookaburra#configuration"><div class="ico">⚙️</div><h3>Configuration</h3><p>One <code>kookaburra.properties</code> for every setting.</p></a>
-      <a class="card" href="design.html"><div class="ico">📘</div><h3>API Reference</h3><p>QueryStream, fields, OQL grammar, dynamic API.</p></a>
-      <a class="card" href="design.html"><div class="ico">🏗</div><h3>Design notes</h3><p>Overall and storage design, for contributors.</p></a>
-      <a class="card" href="https://github.com/paganini2008/kookaburra/blob/main/docs/transaction-design.md"><div class="ico">🔁</div><h3>Transactions</h3><p>Three isolation levels with OCC, decisions T1 to T17.</p></a>
-      <a class="card" href="https://github.com/paganini2008/kookaburra/blob/main/docs/developer-guide.md"><div class="ico">🛠</div><h3>Developer guide</h3><p>Build, test, conventions and docs tooling.</p></a>
+      <a class="card reveal" href="#tutorial"><div class="ico">🎬</div><h3>Video tutorial</h3><p>Three minutes from entity to Studio.</p></a>
+      <a class="card reveal" href="#start"><div class="ico">🚀</div><h3>Getting started</h3><p>Dependency, first entity, first query.</p></a>
+      <a class="card reveal" href="https://github.com/paganini2008/kookaburra/blob/main/docs/developer-guide.md"><div class="ico">🛠</div><h3>Developer guide</h3><p>Every API with code: queries, search, transactions, schema.</p></a>
+      <a class="card reveal" href="https://github.com/paganini2008/kookaburra#configuration"><div class="ico">⚙️</div><h3>Configuration</h3><p>Every setting of <code>kookaburra.properties</code>.</p></a>
+      <a class="card reveal" href="https://github.com/paganini2008/kookaburra/blob/main/docs/architecture.md"><div class="ico">🏛</div><h3>Architecture</h3><p>The parts of the engine on one page.</p></a>
+      <a class="card reveal" href="design.html"><div class="ico">📘</div><h3>Design &amp; API reference</h3><p>QueryStream, OQL grammar, dynamic API, decisions.</p></a>
+      <a class="card reveal" href="https://github.com/paganini2008/kookaburra/blob/main/docs/transaction-design.md"><div class="ico">🔁</div><h3>Transactions</h3><p>Three isolation levels with optimistic concurrency.</p></a>
+      <a class="card reveal" href="benchmark-10m.md"><div class="ico">📊</div><h3>Benchmark</h3><p>The 10 M-object report, every phase.</p></a>
     </div>
   </div>
 </section>
@@ -479,10 +758,15 @@ try (ObjectDB copy = ObjectDB.open(info.path())) {
     <div class="kicker">Community</div>
     <h2>Get involved</h2>
     <div class="grid g4" style="margin-top:24px">
-      <a class="card" href="https://github.com/paganini2008/kookaburra"><div class="ico">⭐</div><h3>GitHub</h3><p>Source, releases, stars.</p></a>
-      <a class="card" href="https://github.com/paganini2008/kookaburra/issues"><div class="ico">🐞</div><h3>Issues</h3><p>Bugs and feature requests.</p></a>
-      <a class="card" href="https://github.com/paganini2008/kookaburra/discussions"><div class="ico">💬</div><h3>Discussions</h3><p>Questions and ideas.</p></a>
-      <a class="card" href="https://github.com/paganini2008/kookaburra#contributing--license"><div class="ico">🤝</div><h3>Contributing</h3><p><code>mvn verify</code>: tests and ≥ 90% coverage.</p></a>
+      <a class="card reveal" href="https://github.com/paganini2008/kookaburra"><div class="ico">⭐</div><h3>GitHub</h3><p>Source, releases, stars.</p></a>
+      <a class="card reveal" href="https://github.com/paganini2008/kookaburra/issues"><div class="ico">🐞</div><h3>Issues</h3><p>Bugs and feature requests.</p></a>
+      <a class="card reveal" href="https://github.com/paganini2008/kookaburra/discussions"><div class="ico">💬</div><h3>Discussions</h3><p>Questions and ideas.</p></a>
+      <a class="card reveal" href="https://github.com/paganini2008/kookaburra#contributing--license"><div class="ico">🤝</div><h3>Contributing</h3><p><code>mvn verify</code> runs every test, in memory and on disk.</p></a>
+    </div>
+    <div class="cta reveal" style="margin-top:56px">
+      <h2>Your objects deserve <span class="grad">a real database.</span></h2>
+      <p class="lead" style="margin:0 auto 28px">Add one dependency and query them in milliseconds.</p>
+      <div class="btns"><a class="btn primary" href="#start">Get started →</a><a class="btn" href="https://github.com/paganini2008/kookaburra">★ Star on GitHub</a></div>
     </div>
   </div>
 </section>
@@ -492,15 +776,18 @@ try (ObjectDB copy = ObjectDB.open(info.path())) {
   <div class="wrap">
     <img src="https://paganini2008.github.io/kookaburra/assets/logo_64.png" width="30" height="24" alt="">
     <a href="https://github.com/paganini2008/kookaburra">GitHub</a>
-    <a href="design.html">Docs</a>
+    <a href="https://github.com/paganini2008/kookaburra/blob/main/docs/developer-guide.md">Developer guide</a>
+    <a href="design.html">Design</a>
     <a href="https://github.com/paganini2008/kookaburra/blob/main/LICENSE">License (Apache-2.0)</a>
     <span class="sp">© 2026 Fred Feng</span>
   </div>
 </footer>
 
 <script>
+  // copy buttons: data-text or the block's code
   document.querySelectorAll(".copy").forEach(b => b.addEventListener("click", () => {
-    const text = b.parentElement.querySelector("pre").innerText;
+    const pre = b.parentElement.querySelector("pre");
+    const text = b.dataset.text ? new DOMParser().parseFromString(b.dataset.text, "text/html").body.textContent : pre.innerText;
     const done = () => { b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy", 1400); };
     if (navigator.clipboard) {
       navigator.clipboard.writeText(text).then(done, () => b.textContent = "Select & copy");
@@ -508,6 +795,47 @@ try (ObjectDB copy = ObjectDB.open(info.path())) {
       b.textContent = "Select & copy";
     }
   }));
+
+  // hero code tabs
+  const tabs = document.querySelectorAll("#hero-code .tab"), panes = document.querySelectorAll("#hero-code .pane");
+  tabs.forEach(t => t.addEventListener("click", () => {
+    tabs.forEach(x => x.classList.toggle("on", x === t));
+    panes.forEach((p, i) => p.classList.toggle("on", String(i) === t.dataset.pane));
+  }));
+
+  // use-case filters
+  document.querySelectorAll("#filters button").forEach(b => b.addEventListener("click", () => {
+    document.querySelectorAll("#filters button").forEach(x => x.classList.toggle("on", x === b));
+    document.querySelectorAll("#examples .card[data-f]").forEach(c =>
+      c.classList.toggle("hide", b.dataset.f !== "all" && c.dataset.f !== b.dataset.f));
+  }));
+
+  // reveal, bars, counters, tilt
+  const io = "IntersectionObserver" in window ? new IntersectionObserver(es => es.forEach(e => {
+    if (!e.isIntersecting) return;
+    const el = e.target;
+    el.classList.add("in");
+    el.querySelectorAll(".bar span[data-w]").forEach(s => s.style.width = s.dataset.w);
+    el.querySelectorAll("[data-count]").forEach(n => {
+      const end = parseFloat(n.dataset.count), unit = n.dataset.unit, dec = (n.dataset.count.split(".")[1] || "").length;
+      const t0 = performance.now();
+      const step = now => { const k = Math.min(1, (now - t0) / 1100); n.textContent = (end * (1 - Math.pow(1 - k, 3))).toFixed(dec) + unit; if (k < 1) requestAnimationFrame(step); };
+      requestAnimationFrame(step);
+    });
+    io.unobserve(el);
+  }), { threshold: .12 }) : null;
+  document.querySelectorAll(".reveal, .tilt img").forEach(el => io ? io.observe(el) : el.classList.add("in"));
+  if (!io) document.querySelectorAll(".bar span[data-w]").forEach(s => s.style.width = s.dataset.w);
+
+  // active nav link
+  const links = [...document.querySelectorAll("nav .links a[href^='#']")];
+  const onScroll = () => {
+    let cur = "";
+    links.forEach(a => { const s = document.querySelector(a.getAttribute("href")); if (s && s.getBoundingClientRect().top < 120) cur = a.getAttribute("href"); });
+    links.forEach(a => a.classList.toggle("on", a.getAttribute("href") === cur));
+  };
+  addEventListener("scroll", onScroll, { passive: true });
+  onScroll();
 </script>
 </body>
 </html>

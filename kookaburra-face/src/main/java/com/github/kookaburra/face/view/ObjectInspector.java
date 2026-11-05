@@ -200,7 +200,7 @@ public class ObjectInspector extends BorderPane {
             case BYTES -> "Bytes";
             case VECTOR -> "Vector(" + (t.dim() == 0 ? "" : t.dim() + ", ") + t.name() + ")";
             case ENUM, EMBEDDED, OBJECT -> simple(t.name());
-            case REF -> "→ " + simple(t.name());
+            case REF -> "Ref<" + simple(t.name()) + ">";                  // generics shown as declared
             case MULTI, EMBEDDED_LIST -> (t.set() ? "Set<" : "List<") + typeName(t.element()) + ">";
             case MAP -> "Map<" + typeName(t.key()) + ", " + typeName(t.element()) + ">";
         };

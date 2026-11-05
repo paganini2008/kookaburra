@@ -4,6 +4,9 @@ import com.github.kookaburra.Ref;
 import com.github.kookaburra.annotation.VectorDistance;
 import com.github.kookaburra.mapping.ValueType;
 import com.github.kookaburra.mapping.Vectors;
+import com.github.kookaburra.text.Analyzer;
+import com.github.kookaburra.text.Analyzers;
+import com.github.kookaburra.text.TextQuery;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
@@ -38,6 +41,21 @@ class Eval {
 
         /** Stored class name of the current object (for TYPE()). */
         String className(String alias);
+
+        /** Embedding of a text by the database's embedder (for EMBED()). */
+        default float[] embed(String text) {
+            throw new OqlException("EMBED() is not available here");
+        }
+
+        /** The analyzer of the text field read by {@code arg} (its {@code @FullText} analyzer), else the default one. */
+        default Analyzer analyzer(Ast.Expr arg) {
+            return Analyzers.get(null);
+        }
+
+        /** BM25 relevance of the current object (for SCORE()), known when ORDER BY SCORE(…) DESC was pushed down. */
+        default double score(Ast.Func f) {
+            throw new OqlException("SCORE() needs ORDER BY " + Render.render(f) + " DESC on the queried class", f.line(), f.column());
+        }
     }
 
     private Eval() {
@@ -334,6 +352,34 @@ class Eval {
                     case "L2_DISTANCE" -> VectorDistance.L2.distance(a, b);
                     default -> VectorDistance.dot(a, b);
                 };
+            }
+            case "MATCH" -> {
+                arity(f, 2);
+                try {
+                    yield TextQuery.parse(text(v[1]), env.analyzer(f.args().get(0))).matches(text(v[0]), true);
+                } catch (IllegalArgumentException e) {
+                    throw new OqlException("MATCH: " + e.getMessage(), f.line(), f.column());
+                }
+            }
+            case "HIGHLIGHT" -> {
+                arity(f, 2);
+                try {
+                    yield TextQuery.parse(text(v[1]), env.analyzer(f.args().get(0))).highlight(text(v[0]));
+                } catch (IllegalArgumentException e) {
+                    throw new OqlException("HIGHLIGHT: " + e.getMessage(), f.line(), f.column());
+                }
+            }
+            case "SCORE" -> {
+                arity(f, 2);
+                yield env.score(f);
+            }
+            case "EMBED" -> {
+                arity(f, 1);
+                try {
+                    yield env.embed(text(v[0]));
+                } catch (RuntimeException e) {
+                    throw e instanceof OqlException o ? o : new OqlException("EMBED: " + e.getMessage(), f.line(), f.column());
+                }
             }
             case "VECTOR_DIMS" -> {
                 arity(f, 1);

@@ -10,6 +10,8 @@ import com.github.kookaburra.mapping.TypeDef;
 import com.github.kookaburra.mapping.ValueType;
 import com.github.kookaburra.query.Order;
 import com.github.kookaburra.query.Pred;
+import com.github.kookaburra.text.Analyzers;
+import com.github.kookaburra.text.TextQuery;
 
 import java.util.Arrays;
 import java.util.Collection;
@@ -149,6 +151,15 @@ public class DynField implements Field<DynamicObject, Object> {
             throw new IllegalArgumentException(path + " is not a string field");
         }
         return new Pred.StartsWith<>((Field) this, prefix);
+    }
+
+    /** Full-text match (every word, or any word with {@code all == false}) on a string field. */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public Pred<DynamicObject> matches(String query, boolean all) {
+        if (type.kind() != ValueType.STRING) {
+            throw new IllegalArgumentException(path + " is not a string field");
+        }
+        return new Pred.Match<>((Field) this, TextQuery.parse(query, Analyzers.get(type.name())), all);
     }
 
     public Pred<DynamicObject> contains(Object v) {

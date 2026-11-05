@@ -5,9 +5,11 @@ import com.github.kookaburra.face.model.Completion;
 import com.github.kookaburra.face.model.Display;
 import com.github.kookaburra.face.model.Export;
 import com.github.kookaburra.face.model.Highlight;
+import com.github.kookaburra.face.model.OqlFormat;
 import com.github.kookaburra.face.model.QueryOutcome;
 import com.github.kookaburra.face.model.Session;
 import com.github.kookaburra.oql.OqlException;
+import com.github.kookaburra.query.QueryPlan;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
@@ -35,6 +37,7 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.stage.FileChooser;
+import javafx.scene.control.ToggleButton;
 import org.fxmisc.flowless.VirtualizedScrollPane;
 import org.fxmisc.richtext.CodeArea;
 import org.fxmisc.richtext.LineNumberFactory;
@@ -61,12 +64,16 @@ public class QueryView extends BorderPane {
     final CodeArea editor = new CodeArea();
     final Button run = new Button("Run");
     final Button explain = new Button("Explain");
+    final Button format = new Button("Format");
     final MenuButton export = new MenuButton("Export");
     /** Picks the target file of a result export; null = cancelled. Replaceable in tests. */
     Function<Export.Format, File> exportChooser = this::chooseExportFile;
     final Label message = new Label();
     final TableView<List<Object>> results = new TableView<>();
     final TextArea plan = new TextArea();
+    final PlanView planView = new PlanView();
+    final ToggleButton planText = new ToggleButton("Text");
+    final Button analyze = new Button("Analyze");
     final ListView<String> history = new ListView<>();
     final TabPane output = new TabPane();
     final ContextMenu completions = new ContextMenu();
@@ -108,6 +115,10 @@ public class QueryView extends BorderPane {
         run.setGraphic(Icons.of("mdi2p-play"));
         run.getStyleClass().add("accent");
         run.setOnAction(e -> runQuery());
+        format.setId("format");
+        format.setGraphic(Icons.of("mdi2f-format-align-left"));
+        format.setTooltip(new Tooltip("Format the statement: keywords upper-case, one clause per line"));
+        format.setOnAction(e -> formatQuery());
         explain.setId("explain");
         explain.setGraphic(Icons.of("mdi2l-lightbulb-on-outline"));
         explain.setOnAction(e -> explainQuery());
@@ -124,7 +135,11 @@ public class QueryView extends BorderPane {
             item.setOnAction(e -> exportAs(f));
             export.getItems().add(item);
         }
-        HBox bar = new HBox(8, run, explain, export, gap, message);
+        analyze.setId("analyze");
+        analyze.setGraphic(Icons.of("mdi2t-timer-outline"));
+        analyze.setTooltip(new Tooltip("EXPLAIN ANALYZE: run the SELECT and show rows and time of every step"));
+        analyze.setOnAction(e -> explainOrAnalyze(true));
+        HBox bar = new HBox(8, run, explain, analyze, format, export, gap, message);
         bar.setAlignment(Pos.CENTER_LEFT);
         bar.setPadding(new Insets(8));
         bar.getStyleClass().add("k-console-bar");
@@ -159,7 +174,20 @@ public class QueryView extends BorderPane {
         resultPane.setBottom(pager);
         updatePager(null);
         Tab resultTab = new Tab("Result", resultPane);
-        Tab planTab = new Tab("Plan", plan);
+        planView.setId("plan-view");
+        planText.setId("plan-text");
+        planText.setTooltip(new Tooltip("Show the plan as text"));
+        BorderPane planPane = new BorderPane(planView);
+        planText.selectedProperty().addListener((o, a, b) -> planPane.setCenter(b ? plan : planView));
+        Region planGap = new Region();
+        HBox.setHgrow(planGap, Priority.ALWAYS);
+        Label planHint = new Label("Explain: plan only · Analyze: runs the query and measures every step");
+        planHint.getStyleClass().add("k-muted");
+        HBox planBar = new HBox(8, planHint, planGap, planText);
+        planBar.setAlignment(Pos.CENTER_LEFT);
+        planBar.setPadding(new Insets(6, 8, 6, 8));
+        planPane.setTop(planBar);
+        Tab planTab = new Tab("Plan", planPane);
         output.getTabs().addAll(resultTab, planTab);
         output.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
 
@@ -235,17 +263,51 @@ public class QueryView extends BorderPane {
                 : r.rows().size() + " rows");
     }
 
+    /** Formats the editor's text in place (one undo step); the caret goes to the end. */
+    public void formatQuery() {
+        String text = editor.getText();
+        String formatted = OqlFormat.format(text);
+        if (!formatted.equals(text)) {
+            editor.getUndoManager().preventMerge();             // formatting is its own undo step
+            editor.replaceText(formatted);
+            editor.getUndoManager().preventMerge();
+            editor.moveTo(formatted.length());
+        }
+        message.getStyleClass().remove("k-error");
+        message.setText(formatted.equals(text) ? "already formatted" : "formatted");
+    }
+
     public void explainQuery() {
+        explainOrAnalyze(false);
+    }
+
+    /** Explain (plan only) or analyze (run and measure) the statement; UPDATE / DELETE show their plan as text. */
+    public void explainOrAnalyze(boolean measure) {
         Session s = session.get();
         String text = editor.getText().strip();
         if (s == null || text.isEmpty()) {
             return;
         }
-        tasks.run(() -> s.explain(text), p -> {
-            plan.setText(p);
-            output.getSelectionModel().select(1);
-            message.setText("plan");
+        message.getStyleClass().remove("k-error");
+        tasks.run(() -> {
+            QueryPlan tree = s.plan(text, measure);
+            return tree != null ? tree : s.explain(text);
+        }, p -> {
+            if (p instanceof QueryPlan tree) {
+                showPlan(tree, tree.render());
+                message.setText(tree.analyzed() ? "analyzed · " + QueryPlan.time(Math.max(0, tree.root().nanos())) : "plan");
+            } else {
+                showPlan(null, (String) p);
+                message.setText("plan");
+            }
         }, this::fail);
+    }
+
+    private void showPlan(QueryPlan tree, String text) {
+        plan.setText(text);
+        planView.show(tree);
+        planText.setSelected(tree == null);
+        output.getSelectionModel().select(1);
     }
 
     void show(QueryOutcome r) {
@@ -255,8 +317,7 @@ public class QueryView extends BorderPane {
         message.setText(r.summary());
         status.accept(r.summary());
         if (r.plan() != null) {
-            plan.setText(r.plan());
-            output.getSelectionModel().select(1);
+            showPlan(r.tree(), r.plan());
             return;
         }
         results.getColumns().clear();

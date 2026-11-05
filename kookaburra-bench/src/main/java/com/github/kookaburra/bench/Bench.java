@@ -23,9 +23,11 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -40,7 +42,8 @@ import static com.github.kookaburra.query.Q.where;
  * Load and stress test: bulk load, durable single writes, point reads, indexed queries, aggregation, OQL,
  * a mixed read/write phase, compaction and crash-free reopen. Prints a Markdown report with targets.
  *
- * <pre>java -Xmx8g -jar kookaburra-bench.jar --n=10000000 --threads=16 --seconds=20 --dir=target/bench-db [--keep]</pre>
+ * <pre>java -Xmx8g -jar kookaburra-bench.jar --n=10000000 --threads=16 --seconds=20 --dir=target/bench-db [--vectors=100000] [--keep]</pre>
+ * {@code --vectors} sets the size of the vector search phase (384 dimensions, own database; 0 skips it).
  * The database directory is deleted after the run unless {@code --keep} is given.
  *
  * @Author: Fred Feng
@@ -50,7 +53,7 @@ import static com.github.kookaburra.query.Q.where;
 public class Bench {
 
     /** Run parameters. */
-    public record Options(long n, Path dir, int threads, int seconds, int iterations, Path out, boolean keep) {
+    public record Options(long n, Path dir, int threads, int seconds, int iterations, Path out, boolean keep, int vectors) {
 
         public static Options parse(String... args) {
             long n = 1_000_000;
@@ -60,6 +63,7 @@ public class Bench {
             int iterations = 30;
             Path out = Path.of("target", "bench-results.md");
             boolean keep = false;
+            int vectors = 100_000;
             for (String a : args) {
                 String[] kv = a.replaceFirst("^--", "").split("=", 2);
                 String v = kv.length > 1 ? kv[1] : "";
@@ -71,10 +75,11 @@ public class Bench {
                     case "iterations" -> iterations = Integer.parseInt(v);
                     case "out" -> out = Path.of(v);
                     case "keep" -> keep = true;
+                    case "vectors" -> vectors = Integer.parseInt(v.replace("_", ""));
                     default -> throw new IllegalArgumentException("unknown option: " + a);
                 }
             }
-            return new Options(n, dir, threads, seconds, iterations, out, keep);
+            return new Options(n, dir, threads, seconds, iterations, out, keep, vectors);
         }
     }
 
@@ -148,6 +153,9 @@ public class Bench {
             deleteEverything(db);
         } finally {
             db.close();
+        }
+        if (opt.vectors > 0) {
+            vectors();
         }
         if (!opt.keep) {
             delete(opt.dir);                           // test data is not needed after the report
@@ -556,6 +564,88 @@ public class Bench {
         if (count != expected || scanned != expected || viaOql != expected) {
             problem("count mismatch " + when + ": expected " + expected + ", count=" + count + ", scan=" + scanned + ", oql=" + viaOql);
         }
+    }
+
+    /**
+     * Vector search on its own database ({@code <dir>-vectors}): {@code --vectors} clustered 384-dimensional vectors
+     * (50 clusters, like embeddings of 50 topics), HNSW graphs built at flush, top-10 queries approximate and exact,
+     * with filters of 2 % and 50 %, and recall@10 of the approximate search against the exact one.
+     */
+    private void vectors() {
+        Path dir = opt.dir.resolveSibling(opt.dir.getFileName() + "-vectors");
+        delete(dir);
+        int n = opt.vectors;
+        int dim = Passage.DIM;
+        Random r = new Random(7);
+        float[][] centres = new float[50][dim];
+        for (float[] c : centres) {
+            for (int j = 0; j < dim; j++) {
+                c[j] = (float) r.nextGaussian();
+            }
+        }
+        float[][] queries = new float[100][];
+        for (int q = 0; q < queries.length; q++) {
+            queries[q] = near(centres[r.nextInt(50)], r);
+        }
+        try (ObjectDB db = ObjectDB.open(dir, Config.defaults().withDurability(Durability.ASYNC))) {
+            long t = System.nanoTime();
+            WriteBatch b = db.batch();
+            for (int i = 0; i < n; i++) {
+                int topic = r.nextInt(50);
+                b.insert(new Passage(topic, near(centres[topic], r)));
+                if (b.size() == 100) {
+                    b.commit();
+                    b = db.batch();
+                }
+            }
+            if (b.size() > 0) {
+                b.commit();
+            }
+            double secs = (System.nanoTime() - t) / 1e9;
+            String label = String.format(Locale.ROOT, "%,d × %d", n, dim);
+            record("Vector", "insert " + label + ", batches of 100, ASYNC", rate(n / secs), "", null);
+            long f = System.nanoTime();
+            db.flush();
+            record("Vector", "flush() incl. HNSW graphs (m=16, ef_construction=100)", Stats.format(System.nanoTime() - f), "", null);
+            long[] bytes = {0};
+            io(() -> {
+                try (Stream<Path> files = Files.walk(dir)) {
+                    files.filter(Files::isRegularFile).forEach(p -> bytes[0] += p.toFile().length());
+                }
+            });
+            record("Vector", "disk per vector (float32 data " + dim * 4 + " B)", String.format(Locale.ROOT, "%,d B", bytes[0] / n), "", null);
+
+            int[] qi = {0};
+            bench("Vector", "top-10 HNSW, ef=100", "≤ 10 ms", 10,
+                    () -> db.from(Passage.class).nearest(Passage::getEmbedding, queries[qi[0]++ % queries.length], 10).list());
+            bench("Vector", "top-10 exact scan", null, 0,
+                    () -> db.from(Passage.class).nearest(Passage::getEmbedding, queries[qi[0]++ % queries.length], 10).exact().list());
+            bench("Vector", "top-10 HNSW, filter topic = t (2 %)", "≤ 10 ms", 10,
+                    () -> db.from(Passage.class).where(Passage::getTopic).eq(qi[0] % 50)
+                            .nearest(Passage::getEmbedding, queries[qi[0]++ % queries.length], 10).list());
+            bench("Vector", "top-10 HNSW, filter topic < 25 (50 %)", "≤ 10 ms", 10,
+                    () -> db.from(Passage.class).where(Passage::getTopic).lt(25)
+                            .nearest(Passage::getEmbedding, queries[qi[0]++ % queries.length], 10).list());
+            double recall = 0;
+            for (float[] q : queries) {
+                Set<Long> exact = new HashSet<>();
+                db.from(Passage.class).nearest(Passage::getEmbedding, q, 10).exact().list().forEach(p -> exact.add(p.getOid()));
+                recall += db.from(Passage.class).nearest(Passage::getEmbedding, q, 10).list().stream()
+                        .filter(p -> exact.contains(p.getOid())).count() / 10.0;
+            }
+            recall /= queries.length;
+            record("Vector", "recall@10 of HNSW vs exact (" + queries.length + " queries)", String.format(Locale.ROOT, "%.3f", recall),
+                    "≥ 0.95", recall >= 0.95);
+        }
+        delete(dir);
+    }
+
+    private static float[] near(float[] centre, Random r) {
+        float[] v = new float[centre.length];
+        for (int j = 0; j < v.length; j++) {
+            v[j] = centre[j] + (float) r.nextGaussian() * 0.6f;
+        }
+        return v;
     }
 
     // ------------------------------------------------------------------ helpers

@@ -97,7 +97,7 @@ public class Ast {
 
     public record Select(boolean explain, boolean distinct, Shape shape, String newClass, List<SelectItem> items,
                          From from, List<Join> joins, Expr where, List<Expr> groupBy, Expr having,
-                         List<OrderItem> orderBy, Expr limit, Expr offset) implements Statement {
+                         List<OrderItem> orderBy, Expr limit, Expr offset, boolean analyze) implements Statement {
     }
 
     public record SetItem(Path path, Expr value) {

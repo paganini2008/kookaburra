@@ -42,7 +42,7 @@ class Sequencer implements Runnable {
      * One atomic batch and its completion (results: insert → OID, update → new version, delete → 1 / 0),
      * or a maintenance task ({@code ops == null}) that must run on the sequencer thread.
      */
-    record Request(List<WriteOp> ops, Runnable task, CompletableFuture<long[]> done, TxCommit tx) {
+    record Request(List<WriteOp> ops, Runnable task, CompletableFuture<long[]> done, TxCommit tx, Durability durability) {
     }
 
     /**
@@ -138,6 +138,11 @@ class Sequencer implements Runnable {
     }
 
     CompletableFuture<long[]> submit(List<WriteOp> ops) {
+        return submit(ops, null);
+    }
+
+    /** Submits one batch; {@code durability} null = the database's. */
+    CompletableFuture<long[]> submit(List<WriteOp> ops, Durability durability) {
         CompletableFuture<long[]> f = new CompletableFuture<>();
         if (!running) {
             f.completeExceptionally(new KookaburraException("database is closed"));
@@ -147,16 +152,16 @@ class Sequencer implements Runnable {
             f.completeExceptionally(new KookaburraException("database failed; reopen it", failure));
             return f;
         }
-        queue.add(new Request(List.copyOf(ops), null, f, null));
+        queue.add(new Request(List.copyOf(ops), null, f, null, durability));
         return f;
     }
 
     /** Submits a transaction's writes; they are checked against commits after its snapshot first. */
-    CompletableFuture<long[]> submitTx(List<WriteOp> ops, TxCommit tx) {
+    CompletableFuture<long[]> submitTx(List<WriteOp> ops, TxCommit tx, Durability durability) {
         CompletableFuture<long[]> f = submitCheck();
         if (f == null) {
             f = new CompletableFuture<>();
-            queue.add(new Request(List.copyOf(ops), null, f, tx));
+            queue.add(new Request(List.copyOf(ops), null, f, tx, durability));
         }
         return f;
     }
@@ -178,7 +183,7 @@ class Sequencer implements Runnable {
             f.completeExceptionally(new KookaburraException("database is closed or failed", failure));
             return f;
         }
-        queue.add(new Request(null, task, f, null));
+        queue.add(new Request(null, task, f, null, null));
         return f;
     }
 
@@ -220,7 +225,7 @@ class Sequencer implements Runnable {
                 int max = db.config().sequencerMaxGroup();
                 queue.drainTo(group, max - 1);
                 long wait = db.config().groupCommitMicros();
-                if (wait > 0 && group.size() < max && db.config().durability() == Durability.SYNC) {
+                if (wait > 0 && group.size() < max && group.stream().anyMatch(this::durable)) {
                     // group commit: give concurrent writers a moment to join this fsync
                     Request more = queue.poll(wait, TimeUnit.MICROSECONDS);
                     if (more != null) {
@@ -231,7 +236,7 @@ class Sequencer implements Runnable {
                 for (Request r : group) {
                     results.add(process(r));
                 }
-                wal.sync();
+                wal.flush(group.stream().anyMatch(this::durable));
                 if (group.stream().anyMatch(r -> r.ops() != null)) {
                     db.metrics.groupCommits.increment();
                 }
@@ -262,6 +267,25 @@ class Sequencer implements Runnable {
                 results.clear();
             }
         }
+    }
+
+    /** Whether the caller is the sequencer thread. */
+    boolean onThread() {
+        return Thread.currentThread() == thread;
+    }
+
+    /** WAL forces so far (diagnostics, tests). */
+    long walForces() {
+        return wal.forces();
+    }
+
+    /** Whether a request's commit waits for the disk (its own durability, else the database's; tasks never). */
+    private boolean durable(Request r) {
+        if (r.ops() == null) {
+            return false;
+        }
+        Durability d = r.durability() != null ? r.durability() : db.config().durability();
+        return d == Durability.SYNC;
     }
 
     /** Validates and applies one batch; returns null if it was rejected (its future is completed). */

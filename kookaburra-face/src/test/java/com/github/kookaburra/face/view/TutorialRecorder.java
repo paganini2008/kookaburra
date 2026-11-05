@@ -11,13 +11,16 @@ import javafx.application.Platform;
 import javafx.geometry.Bounds;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.geometry.Side;
 import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.SnapshotParameters;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.ContextMenu;
 import javafx.scene.control.DialogPane;
 import javafx.scene.control.Labeled;
+import javafx.scene.control.MenuItem;
 import javafx.scene.control.TableRow;
 import javafx.scene.control.TextField;
 import javafx.scene.control.Toggle;
@@ -371,7 +374,7 @@ class TutorialRecorder {
             if (m.start() > at) {
                 flow.getChildren().add(code(code.substring(at, m.start()), "#E6EDF7"));
             }
-            String color = m.group("comment") != null ? "#7A8BA8" : m.group("str") != null ? "#39FF88"
+            String color = m.group("comment") != null ? "#9AD1FF" : m.group("str") != null ? "#39FF88"
                     : m.group("ann") != null ? "#00E5FF" : m.group("kw") != null ? "#FF2BD6" : "#FFC14D";
             flow.getChildren().add(code(m.group(), color));
             at = m.end();
@@ -421,6 +424,15 @@ class TutorialRecorder {
                 .filter(i -> i.getValue().key().equals(key)).findFirst().orElseThrow();
     }
 
+    /** Closes the Export as Java dialog left open by the previous clip. */
+    private static void closeJavaExport() {
+        for (Window w : new ArrayList<>(Window.getWindows())) {
+            if (w.getScene() != null && w.getScene().lookup(".k-java-export") != null) {
+                w.hide();
+            }
+        }
+    }
+
     private void select(String simpleName) {
         TreeItem<NavNode> item = StudioUiTest.findClass(view, simpleName);
         Platform.runLater(() -> view.tree.getSelectionModel().select(item));
@@ -455,9 +467,9 @@ class TutorialRecorder {
         logoView.setFitHeight(180);
         logoView.setPreserveRatio(true);
 
-        slide("title", 4, "Kookaburra: an embedded object database for Java 17+, with type-safe queries and a desktop Studio",
+        slide("title", 3.5, "Kookaburra: an embedded object database for Java 17+, with type-safe queries and a desktop Studio",
                 "TUTORIAL", "Kookaburra in three minutes", null, logoView,
-                text("Query Java objects like a database, right inside your application.", 34, FontWeight.NORMAL, "#7A8BA8"));
+                text("Query Java objects like a database, right inside your application.", 34, FontWeight.NORMAL, "#FFFFFF"));
 
         // ---- part 1: Studio, operated with the mouse
         StudioApplication app = new StudioApplication();
@@ -516,7 +528,7 @@ class TutorialRecorder {
                 () -> inspectorRow(links), 0.25, () -> links.setExpanded(true), () -> links.getChildren().size() > 0
                         && !links.getChildren().get(0).getValue().key().equals("…"));
 
-        click("export-menu", 3.5, "Export writes every object that matches the filter",
+        click("export-menu", 3, "Export writes every object that matches the filter",
                 () -> view.data.export, () -> view.data.export.show(), () -> overlay(false) != null);
         Window exportMenu = overlay(false);
         click("export-csv", 4, "as JSON, JSONL or CSV, read in chunks so large exports stay small in memory",
@@ -525,7 +537,7 @@ class TutorialRecorder {
                     view.data.exportAs(Export.Format.CSV);
                 }, () -> view.status.getText().startsWith("exported"));
 
-        click("purchases", 3.5, "Purchases hold a list of order lines and references to products",
+        click("purchases", 3, "Purchases hold a list of order lines and references to products",
                 () -> treeCell("Purchase"), () -> view.tree.getSelectionModel().select(StudioUiTest.findClass(view, "Purchase")));
         int withLines = rowWhere(o -> ((List<?>) o.get("lines")).size() >= 3);
         click("lines", 4, "Lists of embedded objects show as [ n elements ] and expand element by element",
@@ -540,7 +552,7 @@ class TutorialRecorder {
                 () -> inspectorRow(productRef), 0.25, () -> view.openRef(productRef.getValue().refClass(), productRef.getValue().refOid()),
                 () -> overlay(true) != null);
         DialogPane refPane = dialog();
-        click("reference-close", 2, "",
+        click("reference-close", 1.5, "",
                 () -> refPane.lookupButton(ButtonType.CANCEL), () -> ((Button) refPane.lookupButton(ButtonType.CANCEL)).fire());
 
         click("edit", 4.5, "Double-click a row to edit it: lists of embedded objects get an element table",
@@ -561,11 +573,11 @@ class TutorialRecorder {
                 });
         click("json", 4, "The JSON tab edits the whole nested document, checked against the schema on save",
                 () -> fx(() -> editor.tabs.lookupAll(".tab").stream().toList().get(1)), () -> editor.tabs.getSelectionModel().select(1));
-        click("cancel", 2, "",
+        click("cancel", 1.5, "",
                 () -> editorPane.lookupButton(ButtonType.CANCEL), () -> ((Button) editorPane.lookupButton(ButtonType.CANCEL)).fire());
 
         // a unique e-mail
-        click("customers-again", 2.5, "Back to the customers",
+        click("customers-again", 2, "Back to the customers",
                 () -> treeCell("Customer"), () -> {
                     view.data.filter.setText("");
                     view.tree.getSelectionModel().select(StudioUiTest.findClass(view, "Customer"));
@@ -584,7 +596,7 @@ class TutorialRecorder {
                 () -> newPane.lookupButton(ButtonType.OK), () -> ((Button) newPane.lookupButton(ButtonType.OK)).fire(),
                 () -> overlay(true) != null && overlay(true).getScene().getRoot() != newPane);
         DialogPane error = dialog();
-        click("close-error", 2, "",
+        click("close-error", 1.5, "",
                 () -> error.lookupButton(ButtonType.OK), () -> ((Button) error.lookupButton(ButtonType.OK)).fire());
 
         // delete with ON DELETE CASCADE
@@ -649,19 +661,41 @@ class TutorialRecorder {
         settle();
         click("explain", 4, "Explain shows the plan: which index answers each condition, cheapest first",
                 () -> view.query.explain, () -> view.query.explain.fire());
-        Platform.runLater(() -> view.query.setText("SELECT p.title, cosine_distance(p.embedding, '[1, 0, 0, 0]') AS distance\n"
-                + "FROM Product p\nORDER BY distance LIMIT 5"));
+        // vector search from the grid: right-click a book, Find similar
+        Platform.runLater(() -> {
+            view.tree.getSelectionModel().select(StudioUiTest.findClass(view, "Product"));
+            view.tabs.getSelectionModel().select(0);
+        });
         settle();
-        click("vector", 5, "Vector search: the products whose embedding is closest to [1, 0, 0, 0], the \"reading\" axis",
-                () -> view.query.run, () -> view.query.run.fire());
+        await(() -> !view.data.table.getItems().isEmpty());
+        int bookRow = rowWhere(o -> String.valueOf(o.get("title")).startsWith("Book #"));
+        DynamicObject book = view.data.table.getItems().get(bookRow);
+        ContextMenu[] similarMenu = new ContextMenu[1];
+        click("similar-menu", 3, "Vector search: right-click a product, Find similar by its embedding",
+                () -> tableRow(bookRow), 0.3, () -> {
+                    view.data.table.getSelectionModel().clearAndSelect(bookRow);
+                    similarMenu[0] = view.data.rowMenu(book);
+                    similarMenu[0].show(tableRow(bookRow), Side.BOTTOM, 120, -8);
+                }, () -> overlay(false) != null);
+        click("similar", 4, "The console lists the closest products: books like this one, nearest first",
+                () -> labeled(overlay(false).getScene().getRoot(), "Find similar"), () -> {
+                    MenuItem item = similarMenu[0].getItems().get(1);
+                    similarMenu[0].hide();
+                    item.fire();
+                }, () -> view.tabs.getSelectionModel().getSelectedIndex() == 1 && !view.query.results.getItems().isEmpty()
+                        && view.query.results.getColumns().get(view.query.results.getColumns().size() - 1).getText().contains("distance"));
 
         // schema with constraints
-        click("schema", 4, "The Schema tab: fields, indexes and constraints such as UNIQUE and foreign keys",
+        click("schema", 4, "The Schema tab: fields, indexes, constraints such as UNIQUE, and @Comment descriptions",
                 () -> tab(2), () -> {
-                    view.tree.getSelectionModel().select(StudioUiTest.findClass(view, "Purchase"));
+                    view.tree.getSelectionModel().select(StudioUiTest.findClass(view, "Product"));
                     view.tabs.getSelectionModel().select(2);
                     view.schema.split.setDividerPositions(0.62);
                 });
+
+        // schema as Java code
+        click("export-java", 4.5, "Export as Java turns the stored schema into entity classes: preview, edit, pick a package, save",
+                () -> view.exportJava, () -> view.exportJava.fire(), () -> overlay(true) != null);
 
         // statistics dashboard, with some activity for the live rates
         DynamicCollection customers = view.session().db().dynamic("Customer");
@@ -686,7 +720,10 @@ class TutorialRecorder {
             customers.insert(customers.newObject().set("name", "Visitor 5-" + i).set("email", "visitor.5." + i + "@example.com"));
         }
         click("stats", 5, "The Stats dashboard: key figures, live write and transaction rates, storage per collection",
-                () -> tab(3), () -> view.tabs.getSelectionModel().select(3));
+                () -> tab(3), () -> {
+                    closeJavaExport();
+                    view.tabs.getSelectionModel().select(3);
+                });
 
         // backup
         click("backup", 4.5, "Backup copies the database as of now while it keeps running; open the copy to restore",
@@ -717,17 +754,17 @@ class TutorialRecorder {
                                     .limit(10)
                                     .list();
                         }""", null, null);
-        slide("vectors", 5.5, "Vector search: a float[] embedding with @Vector, filters first, then the k nearest",
+        slide("vectors", 5.5, "Vector search: an HNSW index on every @Vector field, and text turned into vectors by Ollama",
                 "VECTOR SEARCH", "Embeddings next to your data", """
                         @Entity
                         public class Doc {
                             @Index String lang;
-                            @Vector(dim = 384) float[] embedding;          // cosine by default
+                            @Vector(dim = 768) float[] embedding;          // HNSW index, cosine by default
                         }
 
                         List<Doc> top = db.query(Doc.class)
                                 .where(Doc::getLang).eq("en")             // filters run first, on the indexes
-                                .nearest(Doc::getEmbedding, question, 10) // then the 10 closest
+                                .nearest(Doc::getEmbedding, "how to bake bread", 10)   // text, embedded by Ollama
                                 .list();""", null, null);
         slide("oql", 5, "OQL is a SQL-style text language for the console, scripts and bulk updates",
                 "OQL", "SQL-style text queries", """
@@ -750,31 +787,32 @@ class TutorialRecorder {
 
                         db.referrers(Purchase.class, annOid);                 // her purchases
                         db.delete(Customer.class, annOid);                    // purchases go too (CASCADE)""", null, null);
-        slide("backup-code", 4.5, "Online backup in one call; restoring is opening the directory",
-                "BACKUP", "A consistent copy while writing", """
-                        BackupInfo info = db.backup(Path.of("backups/2026-10-17"));
-
+        slide("backup-code", 4.5, "Online backup in one call, restore by opening it; the schema exports as Java classes",
+                "OPERATIONS", "Backup and schema export", """
+                        BackupInfo info = db.backup(Path.of("backups/2026-11-06"));
                         try (ObjectDB copy = ObjectDB.open(info.path())) {
                             copy.query(Order.class).count();
-                        }""", null, null);
+                        }
+
+                        db.exportSchema(Path.of("src/main/java"), null);   // entity classes""", null, null);
 
         HBox perf = new HBox(26);
         perf.setAlignment(Pos.CENTER);
-        for (String[] kv : new String[][]{{"0.6 µs", "get(oid)"}, {"0.24 ms", "indexed count"}, {"0.39 ms", "top-10 of 2.3 M"},
-                {"696 k/s", "bulk insert"}, {"140 k/s", "serializable tx"}}) {
-            VBox card = new VBox(8, text(kv[0], 54, FontWeight.BOLD, "#00E5FF"), text(kv[1], 26, FontWeight.NORMAL, "#7A8BA8"));
+        for (String[] kv : new String[][]{{"0.7 µs", "get(oid)"}, {"0.23 ms", "indexed count"}, {"1.0 ms", "vector top 10"},
+                {"576 k/s", "bulk insert"}, {"136 k/s", "serializable tx"}}) {
+            VBox card = new VBox(8, text(kv[0], 54, FontWeight.BOLD, "#00E5FF"), text(kv[1], 26, FontWeight.NORMAL, "#FFFFFF"));
             card.setPadding(new Insets(26, 30, 26, 30));
             card.setStyle("-fx-background-color: #11151F; -fx-background-radius: 14; -fx-border-color: #26304A; -fx-border-radius: 14;");
             card.setAlignment(Pos.CENTER);
             perf.getChildren().add(card);
         }
-        slide("performance", 5.5, "On 10 million objects: get in 0.6 µs, indexed counts in 0.24 ms, 140 k serializable transactions per second",
+        slide("performance", 5, "On 10 million objects: get in 0.7 µs, indexed counts in 0.23 ms, 136 k serializable transactions per second",
                 "PERFORMANCE", "10 million objects, milliseconds", null, null, centred(36, perf,
-                        text("Apple M2 Max · SSD · JDK 17 · full report in docs/benchmark-10m.md", 28, FontWeight.NORMAL, "#7A8BA8")));
+                        text("Apple M2 Max · SSD · JDK 17 · full report in docs/benchmark-10m.md", 28, FontWeight.NORMAL, "#FFFFFF")));
         ImageView endLogo = new ImageView(logo);
         endLogo.setFitHeight(150);
         endLogo.setPreserveRatio(true);
-        slide("outro", 5, "Download Studio for Windows, macOS and Linux from the latest release; Apache-2.0 at github.com/paganini2008/kookaburra",
+        slide("outro", 4.5, "Download Studio for Windows, macOS and Linux from the latest release; Apache-2.0 at github.com/paganini2008/kookaburra",
                 "GET STARTED", "github.com/paganini2008/kookaburra", null, endLogo,
                 text("com.github.paganini2008 : kookaburra-core  ·  paganini2008.github.io/kookaburra", 34, FontWeight.NORMAL, "#39FF88"));
         Platform.runLater(view::close);

@@ -117,6 +117,33 @@ public class Where<T, V> {
         throw unsupported("startsWith", "string");
     }
 
+    /**
+     * Full-text match: the text contains every word of {@code query} (words as split by the full-text analyzer;
+     * {@code bre*} matches a word prefix). Uses the {@code @FullText} index, else reads the rows.
+     */
+    @SuppressWarnings("unchecked")
+    public QueryStream<T> matches(String query) {
+        if (dyn() != null) {
+            return stream.filter(cast(dyn().matches(query, true)));
+        }
+        if (field instanceof StringField<?> s) {
+            return stream.filter(((StringField<T>) s).matches(query));
+        }
+        throw unsupported("matches", "string");
+    }
+
+    /** Full-text match: the text contains at least one word of {@code query}. */
+    @SuppressWarnings("unchecked")
+    public QueryStream<T> matchesAny(String query) {
+        if (dyn() != null) {
+            return stream.filter(cast(dyn().matches(query, false)));
+        }
+        if (field instanceof StringField<?> s) {
+            return stream.filter(((StringField<T>) s).matchesAny(query));
+        }
+        throw unsupported("matchesAny", "string");
+    }
+
     /** For collection fields: any element equals {@code element}. */
     @SuppressWarnings("unchecked")
     public QueryStream<T> contains(V element) {

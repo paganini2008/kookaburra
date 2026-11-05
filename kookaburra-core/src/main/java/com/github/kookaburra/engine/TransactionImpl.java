@@ -573,7 +573,7 @@ class TransactionImpl implements Transaction {
             ReadSet reads = serializable() ? new ReadSet(Set.copyOf(readOids), new LinkedHashMap<>(readQueries))
                     : null;
             long[] res = db.commitTransaction(ops, new Sequencer.TxCommit(reg, snapshot, longs(check), longs(checkSeqs),
-                    longs(vanished), reads));
+                    longs(vanished), reads), options.durability());
             db.writeBack(ops, res);
             finish(State.COMMITTED);
             db.firePost(ops, res);

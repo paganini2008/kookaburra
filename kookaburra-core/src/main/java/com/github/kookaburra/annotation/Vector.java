@@ -25,4 +25,7 @@ public @interface Vector {
 
     /** Default distance of {@code nearest(...)} on this field. */
     VectorDistance distance() default VectorDistance.COSINE;
+
+    /** How the vector index keeps the vectors for its search ({@code INT8}: a quarter of the memory). */
+    VectorQuantization quantization() default VectorQuantization.NONE;
 }

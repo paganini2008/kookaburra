@@ -292,12 +292,12 @@ class QueryApiTest {
                 .filter(where(Person::getCity).eq("Sydney").and(where(Person::getAge).gt(10)).and(p -> true)
                         .or(where(Person::getTags).contains("vip").negate()))
                 .sorted(where(Person::getAge).desc()).skip(1).limit(5).explain();
-        assertThat(plan).contains("QUERY Person", "mem postings", "scan", "decode rows", "OR", "AND", "NOT",
-                "SORT age DESC", "top-N", "SLICE skip=1 limit=5");
-        assertThat(db.from(Person.class).explain()).contains("FILTER none");
-        assertThat(db.from(Person.class).sorted(where(Person::getAge).asc()).explain()).contains("full sort");
-        assertThat(db.from(Dog.class).filter(where(Dog::getBreed).eq("x")).explain()).contains("TYPE IN", "segments=0");
-        assertThat(db.from(Animal.class).filter(Q.instanceOf(Dog.class)).explain()).contains("FILTER");
+        assertThat(plan).contains("Query  Person", "mem postings", "scan", "decode rows", "OR", "AND", "NOT",
+                "Top-N sort  age DESC", "Limit  skip 1, then 5", "a Java predicate");
+        assertThat(db.from(Person.class).explain()).contains("Filter  all objects");
+        assertThat(db.from(Person.class).sorted(where(Person::getAge).asc()).explain()).contains("Sort  age ASC");
+        assertThat(db.from(Dog.class).filter(where(Dog::getBreed).eq("x")).explain()).contains("TYPE IN [Dog] AND breed = 'x'", "0 segments");
+        assertThat(db.from(Animal.class).filter(Q.instanceOf(Dog.class)).explain()).contains("Filter  TYPE IN");
         db.insert(new Dog("Rex", 1, "Lab"));
         assertThat(db.from(Animal.class).filter(Q.instanceOf(Dog.class)).filter(where(Animal::getAge).in(1, 2)).explain())
                 .contains("[$type]");

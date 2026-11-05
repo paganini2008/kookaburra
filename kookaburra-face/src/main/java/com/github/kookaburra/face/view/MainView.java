@@ -23,6 +23,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
+import javafx.scene.control.MenuBar;
 import javafx.scene.control.MenuButton;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.ProgressIndicator;
@@ -48,6 +49,7 @@ import javafx.scene.layout.VBox;
 import javafx.stage.DirectoryChooser;
 import javafx.stage.Stage;
 import javafx.stage.Window;
+import javafx.stage.WindowEvent;
 import javafx.util.Duration;
 
 import java.io.File;
@@ -115,11 +117,27 @@ public class MainView extends BorderPane {
         c.setTitle("Back up into (an empty folder, or a new sub-folder is created)");
         return c.showDialog(window());
     };
+    final Button exportJava = button("export-java", "mdi2l-language-java",
+            "Export the schema as Java classes: preview, edit, then save");
+    /** Chooses the source folder for exported Java classes (replaceable in tests). */
+    Supplier<File> javaChooser = () -> {
+        DirectoryChooser c = new DirectoryChooser();
+        c.setTitle("Save the Java classes under (a source folder such as src/main/java)");
+        return c.showDialog(window());
+    };
     final Button txCommit = button("tx-commit", "mdi2c-check-circle-outline", "Commit the transaction");
     final Button txRollback = button("tx-rollback", "mdi2u-undo-variant", "Roll back the transaction (discard its changes)");
     final Label txStatus = new Label();
     /** Status text of the open transaction as of the last refresh, or null (autocommit). */
     private String txLabel;
+    /** Quits Studio like the window's close button (replaceable in tests). */
+    Runnable quit = () -> {
+        Window w = window();
+        if (w != null) {
+            w.fireEvent(new WindowEvent(w, WindowEvent.WINDOW_CLOSE_REQUEST));
+        }
+    };
+    final MenuBar menuBar;
     /** Opens a URL in the system browser (set by the application; no-op in tests). */
     Consumer<String> browser = url -> { };
     final MenuButton themes = new MenuButton();
@@ -156,6 +174,7 @@ public class MainView extends BorderPane {
         tasks = new Tasks(b -> busy.setVisible(b));
         data = new DataView(() -> session, tasks, this::status, this::error, this::editObject, this::openRef);
         query = new QueryView(() -> session, tasks, this::status, this::refresh);
+        data.onSimilar = this::findSimilar;
 
         open.setOnAction(e -> {
             File dir = directoryChooser.get();
@@ -222,6 +241,7 @@ public class MainView extends BorderPane {
         isolation.selectedToggleProperty().addListener((o, a, b) -> updateBeginTip());
         updateBeginTip();
         backup.setOnAction(e -> backupCurrent());
+        exportJava.setOnAction(e -> exportJava());
         txBegin.setText("Begin");
         txCommit.setText("Commit");
         txRollback.setText("Rollback");
@@ -230,10 +250,11 @@ public class MainView extends BorderPane {
         txBegin.setOnAction(e -> beginTransaction());
         txCommit.setOnAction(e -> commitTransaction());
         txRollback.setOnAction(e -> rollbackTransaction());
-        ToolBar toolbar = new ToolBar(logo, brand, new Region(), open, demo, closeDb, refresh, flush, backup, add, edit, delete, run, new Separator(),
+        ToolBar toolbar = new ToolBar(logo, brand, new Region(), open, demo, closeDb, refresh, flush, backup, exportJava, add, edit, delete, run, new Separator(),
                 txBegin, txCommit, txRollback, gap, busy, themes, about);
         toolbar.getStyleClass().add("k-toolbar");
-        setTop(toolbar);
+        menuBar = StudioMenu.build(this);
+        setTop(new VBox(menuBar, toolbar));
 
         tree.setId("classes");
         tree.setShowRoot(false);
@@ -690,8 +711,30 @@ public class MainView extends BorderPane {
         }, this::error);
     }
 
+    /**
+     * "Find similar": the console runs a nearest-neighbour query for the object's vector at {@code path} (bound as
+     * {@code :vector}), the object itself left out.
+     */
+    void findSimilar(DynamicObject o, String path) {
+        Session s = session;
+        if (s == null) {
+            return;
+        }
+        String oql;
+        try {
+            oql = s.similar(o, path, 10);
+        } catch (IllegalArgumentException e) {
+            error(e);
+            return;
+        }
+        tabs.getSelectionModel().select(1);
+        query.setText(oql);
+        query.runQuery();
+    }
+
     private void edit(DynamicObject o) {
-        ObjectEditor editor = new ObjectEditor(session.classDef(o.className()), o);
+        Session s = session;
+        ObjectEditor editor = new ObjectEditor(s.classDef(o.className()), o, s.embedder() == null ? null : s::embed);
         editorDialog.apply(editor).ifPresent(this::save);
     }
 
@@ -769,6 +812,7 @@ public class MainView extends BorderPane {
         refresh.setDisable(none);
         flush.setDisable(none);
         backup.setDisable(none);
+        exportJava.setDisable(none);
         add.setDisable(none);
         edit.setDisable(none);
         delete.setDisable(none);
@@ -890,5 +934,13 @@ public class MainView extends BorderPane {
         sessions.clear();
         session = null;
         tasks.close();
+    }
+
+    /** Export as Java for the current database. */
+    void exportJava() {
+        Session s = session;
+        if (s != null) {
+            JavaExport.show(window(), s::javaCode, () -> javaChooser.get());
+        }
     }
 }

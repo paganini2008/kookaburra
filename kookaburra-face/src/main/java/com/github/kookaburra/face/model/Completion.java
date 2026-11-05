@@ -29,7 +29,7 @@ public class Completion {
             "DELETE", "EXPLAIN", "AND", "OR", "NOT", "BETWEEN", "IN", "LIKE", "ESCAPE", "IS NULL", "IS NOT NULL", "IS EMPTY",
             "MEMBER OF", "TYPE", "CASE", "WHEN", "THEN", "ELSE", "END", "TRUE", "FALSE", "NULL", "DATE", "TIMESTAMP", "INSTANT",
             "COUNT", "SUM", "AVG", "MIN", "MAX", "UPPER", "LOWER", "TRIM", "LENGTH", "SUBSTRING", "ABS", "MOD", "COALESCE",
-            "NULLIF", "SIZE", "CONCAT", "COSINE_DISTANCE", "L2_DISTANCE", "INNER_PRODUCT", "VECTOR_DIMS", "BEGIN", "COMMIT", "ROLLBACK", "ISOLATION LEVEL SNAPSHOT");
+            "NULLIF", "SIZE", "CONCAT", "COSINE_DISTANCE", "L2_DISTANCE", "INNER_PRODUCT", "VECTOR_DIMS", "EMBED", "MATCH", "SCORE", "HIGHLIGHT", "BEGIN", "COMMIT", "ROLLBACK", "ISOLATION LEVEL SNAPSHOT");
 
     private static final Pattern ALIAS = Pattern.compile(
             "(?i)\\b(?:from|join|update)\\s+([\\w.$]+)(?:\\s+(?:as\\s+)?(?!where\\b|join\\b|left\\b|inner\\b|set\\b|order\\b|group\\b)(\\w+))?");

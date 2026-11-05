@@ -1,5 +1,7 @@
 package com.github.kookaburra.face.model;
 
+import com.github.kookaburra.query.QueryPlan;
+
 import java.util.List;
 
 /**
@@ -11,7 +13,17 @@ import java.util.List;
  * @Version 1.0.0
  */
 public record QueryOutcome(List<String> columns, List<List<Object>> rows, String plan, long affected, long millis,
-                           long offset, int pageSize, String note) {
+                           long offset, int pageSize, String note, QueryPlan tree) {
+
+    public QueryOutcome(List<String> columns, List<List<Object>> rows, String plan, long affected, long millis,
+                        long offset, int pageSize, String note) {
+        this(columns, rows, plan, affected, millis, offset, pageSize, note, null);
+    }
+
+    /** Outcome of an EXPLAIN [ANALYZE] SELECT: the plan as text and as a tree. */
+    public static QueryOutcome plan(QueryPlan tree, String text, long millis) {
+        return new QueryOutcome(List.of(), List.of(), text, -1, millis, 0, -1, null, tree);
+    }
 
     /** Unpaged outcome. */
     public QueryOutcome(List<String> columns, List<List<Object>> rows, String plan, long affected, long millis) {

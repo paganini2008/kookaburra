@@ -66,7 +66,7 @@ public class SchemaView extends BorderPane {
         right.setDividerPositions(0.6);
         storage.setCenter(right);
         split = new SplitPane(metadata, storage);
-        split.setDividerPositions(0.5);                   // the field table has five columns
+        split.setDividerPositions(0.57);                  // the field table has six columns
         setCenter(split);
     }
 

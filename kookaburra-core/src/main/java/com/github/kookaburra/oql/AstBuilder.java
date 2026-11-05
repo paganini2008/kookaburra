@@ -93,8 +93,15 @@ public class AstBuilder extends OqlBaseVisitor<Object> {
     @Override
     public Object visitStatement(OqlParser.StatementContext ctx) {
         boolean explain = ctx.EXPLAIN() != null;
+        boolean analyze = ctx.ANALYZE() != null;
         if (ctx.selectStmt() != null) {
-            return select(ctx.selectStmt(), explain);
+            Ast.Select q = select(ctx.selectStmt(), explain);
+            return analyze ? new Ast.Select(true, q.distinct(), q.shape(), q.newClass(), q.items(), q.from(), q.joins(), q.where(),
+                    q.groupBy(), q.having(), q.orderBy(), q.limit(), q.offset(), true) : q;
+        }
+        if (analyze) {
+            throw new OqlException("EXPLAIN ANALYZE runs SELECT statements only (an UPDATE or DELETE would change data)",
+                    ctx.start.getLine(), ctx.start.getCharPositionInLine());
         }
         if (ctx.updateStmt() != null) {
             OqlParser.UpdateStmtContext u = ctx.updateStmt();
@@ -165,7 +172,7 @@ public class AstBuilder extends OqlBaseVisitor<Object> {
         return new Ast.Select(explain, s.DISTINCT() != null, shape, newClass, items,
                 from(f.qualifiedName(), f.identifier(), f.start.getLine(), f.start.getCharPositionInLine()), joins,
                 s.whereClause() == null ? null : expr(s.whereClause().expr()), groupBy,
-                s.havingClause() == null ? null : expr(s.havingClause().expr()), orderBy, limit, offset);
+                s.havingClause() == null ? null : expr(s.havingClause().expr()), orderBy, limit, offset, false);
     }
 
     private Ast.SelectItem item(OqlParser.SelectItemContext i) {

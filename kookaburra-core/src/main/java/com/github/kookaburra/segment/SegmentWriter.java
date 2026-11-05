@@ -8,6 +8,7 @@ import com.github.kookaburra.mapping.ColumnDef;
 import com.github.kookaburra.mapping.Record;
 import com.github.kookaburra.mapping.TypeDef;
 import com.github.kookaburra.mapping.ValueType;
+import com.github.kookaburra.text.Analyzers;
 import org.roaringbitmap.RoaringBitmap;
 
 import java.math.BigDecimal;
@@ -39,10 +40,27 @@ import java.util.zip.CRC32C;
 public class SegmentWriter {
 
     static final long MAGIC = 0x3130474553424B4BL;   // "KKBSEG01" little-endian
-    static final int FORMAT = 1;
+    /**
+     * 4: vector columns may hold int8 copies of their vectors; 3: full-text indexes after the vector columns; 2: vector columns after the indexed columns; format 1 and 2
+     * files are still read.
+     */
+    static final int FORMAT = 4;
 
     /** One row to write. */
     public record Entry(long oid, long version, Record record, byte[] row) {
+    }
+
+    /**
+     * Vector columns to write: the {@code @Vector(dim = N)} paths of the collection and the HNSW parameters
+     * ({@code kookaburra.vector-*}).
+     */
+    public record VectorSpec(Map<String, TypeDef> paths, int m, int efConstruction, int minRows) {
+
+        public static final VectorSpec NONE = new VectorSpec(Map.of(), 16, 100, 0);
+
+        public static VectorSpec of(Map<String, TypeDef> paths, Config config) {
+            return new VectorSpec(paths, config.vectorM(), config.vectorEfConstruction(), config.vectorIndexMinRows());
+        }
     }
 
     private SegmentWriter() {
@@ -60,6 +78,14 @@ public class SegmentWriter {
      * @param autoPostingsRatio AUTO columns get postings when cardinality &lt;= rows / ratio
      */
     public static byte[] write(List<Entry> entries, Collection<ColumnDef> columns, double bloomFpp, int autoPostingsRatio) {
+        return write(entries, columns, VectorSpec.NONE, bloomFpp, autoPostingsRatio);
+    }
+
+    /**
+     * @param vectors vector columns (and their graphs) to build
+     */
+    public static byte[] write(List<Entry> entries, Collection<ColumnDef> columns, VectorSpec vectors, double bloomFpp,
+                               int autoPostingsRatio) {
         int n = entries.size();
         ByteSink out = new ByteSink(Math.max(1024, n * 64));
         out.writeLong(MAGIC).writeInt(FORMAT).writeInt(0);
@@ -119,9 +145,22 @@ public class SegmentWriter {
             footer.writeVarInt(t.getKey()).writeVarLong(at[0]).writeVarInt((int) at[1]);
         }
 
-        footer.writeVarInt(columns.size());
-        for (ColumnDef c : columns) {
+        List<ColumnDef> plain = columns.stream().filter(c -> c.kind() != IndexKind.FULLTEXT).toList();
+        footer.writeVarInt(plain.size());
+        for (ColumnDef c : plain) {
             writeColumn(out, footer, c, entries, autoPostingsRatio);
+        }
+
+        Hnsw.Params params = new Hnsw.Params(vectors.m(), vectors.efConstruction(), vectors.minRows());
+        footer.writeVarInt(vectors.paths().size());
+        for (Map.Entry<String, TypeDef> v : vectors.paths().entrySet()) {
+            SegmentVectors.write(out, footer, v.getKey(), v.getValue(), entries, params);
+        }
+
+        List<ColumnDef> text = columns.stream().filter(c -> c.kind() == IndexKind.FULLTEXT).toList();
+        footer.writeVarInt(text.size());
+        for (ColumnDef c : text) {
+            SegmentText.write(out, footer, c.path(), Analyzers.get(c.type().name()), entries);
         }
 
         long footerOffset = out.size();

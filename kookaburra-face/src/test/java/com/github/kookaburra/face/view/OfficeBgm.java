@@ -7,9 +7,11 @@ import java.nio.file.Path;
 import java.util.Random;
 
 /**
- * Synthesises the background music of the tutorial video: an original, relaxed "office" lo-fi loop
- * (electric piano chords Fmaj7 – Em7 – Dm7 – Cmaj7, soft pad, bass, brushed drums, a sparse bell melody) at 84 BPM.
- * Nothing is sampled, so the track carries no third-party rights. Used by {@link TutorialVideo}.
+ * Synthesises the background music of the tutorial video: an original, light and cheerful "office" track (upbeat
+ * corporate / ukulele pop) at 116 BPM in C major over I – V – vi – IV (C, G, Am, F): a plucked ukulele-like strum
+ * on the off-beats, a bouncy eighth-note bass, kick, hand claps on 2 and 4, a shaker, and a composed marimba melody
+ * with a glockenspiel answer. Nothing is sampled, so the track carries no third-party rights. Used by
+ * {@link TutorialVideo}.
  *
  * @Author: Fred Feng
  * @Date: 15/10/2026
@@ -21,19 +23,33 @@ class OfficeBgm {
     }
 
     static final int RATE = 44_100;
-    static final double BPM = 84;
+    static final double BPM = 116;
     static final double BEAT = 60.0 / BPM;
     static final double BAR = 4 * BEAT;
 
-    /** Chords as MIDI notes (voicings around middle C). */
+    /** C, G, Am, F as MIDI notes (bright ukulele-like voicings above middle C). */
     static final int[][] CHORDS = {
-            {53, 57, 60, 64},   // Fmaj7
-            {52, 55, 59, 62},   // Em7
-            {50, 53, 57, 60},   // Dm7
-            {48, 52, 55, 59},   // Cmaj7
+            {60, 64, 67, 72},   // C
+            {59, 62, 67, 71},   // G
+            {60, 64, 69, 72},   // Am
+            {60, 65, 69, 72},   // F
     };
-    static final int[] ROOTS = {41, 40, 38, 36};
-    static final int[] PENTA = {72, 74, 76, 79, 81, 84};
+    static final int[] ROOTS = {36, 43, 45, 41};
+
+    /**
+     * The melody over two times four bars: (beat offset in eighths, MIDI note, length in eighths) per note; a question
+     * phrase and an answer that ends on the tonic.
+     */
+    static final int[][][] MELODY = {
+            {{0, 76, 2}, {2, 79, 1}, {3, 76, 1}, {4, 74, 2}, {6, 72, 2}},
+            {{0, 74, 3}, {3, 71, 1}, {4, 74, 2}, {6, 79, 2}},
+            {{0, 76, 2}, {2, 72, 1}, {3, 76, 1}, {4, 81, 3}},
+            {{0, 79, 2}, {2, 77, 2}, {4, 76, 2}, {6, 74, 2}},
+            {{0, 76, 2}, {2, 79, 1}, {3, 76, 1}, {4, 74, 2}, {6, 72, 2}},
+            {{0, 74, 3}, {3, 71, 1}, {4, 74, 2}, {6, 77, 2}},
+            {{0, 76, 1}, {1, 77, 1}, {2, 79, 2}, {4, 81, 2}, {6, 79, 2}},
+            {{0, 77, 2}, {2, 74, 2}, {4, 72, 4}},
+    };
 
     static double hz(double midi) {
         return 440 * Math.pow(2, (midi - 69) / 12);
@@ -46,64 +62,133 @@ class OfficeBgm {
         double[] r = new double[n];
         Random rnd = new Random(2026);
         int bars = (int) Math.ceil(seconds / BAR) + 1;
+        double eighth = BEAT / 2;
 
         for (int bar = 0; bar < bars; bar++) {
             double t0 = bar * BAR;
             int[] chord = CHORDS[bar % 4];
-            boolean drums = bar >= 2 && t0 < seconds - 2 * BAR;
-            // pad: whole bar, slow attack
-            for (int note : chord) {
-                tone(l, r, t0, BAR + 0.4, hz(note - 12), 0.022, 0.6, 0.8, 0.0, -0.2, true);
-            }
-            // electric piano: beat 1 and the "and" of 2, with a little humanised timing
-            double[] hits = {0, 1.5 * BEAT, 3 * BEAT};
-            for (int h = 0; h < hits.length; h++) {
-                double jitter = rnd.nextGaussian() * 0.008;
+            boolean full = bar >= 2 && t0 < seconds - 2 * BAR;          // two bars of intro, the end thins out
+            // ukulele strum: down on the beat, up on the "and", accents on the off-beats (island / office feel)
+            for (int e = 0; e < 8; e++) {
+                boolean up = e % 2 == 1;
+                double accent = up ? 0.11 : 0.07;
+                double jitter = rnd.nextGaussian() * 0.004;
                 for (int k = 0; k < chord.length; k++) {
-                    double strum = k * 0.012;
-                    tone(l, r, t0 + hits[h] + jitter + strum, 1.6, hz(chord[k]), h == 0 ? 0.055 : 0.04, 0.008, 1.1, 0.35, 0.25, false);
+                    int string = up ? chord.length - 1 - k : k;
+                    pluck(l, r, t0 + e * eighth + jitter + k * 0.009, 0.9, hz(chord[string]), accent, (k - 1.5) * 0.15, rnd);
                 }
             }
-            // bass on 1 and 3 (and a pickup)
-            tone(l, r, t0, 1.4 * BEAT, hz(ROOTS[bar % 4]), 0.11, 0.01, 0.9, 0.12, 0, false);
-            tone(l, r, t0 + 2 * BEAT, 1.2 * BEAT, hz(ROOTS[bar % 4] + 7), 0.08, 0.01, 0.8, 0.12, 0, false);
-            if (drums) {
+            // bass: root on the beats, octave and fifth bouncing on the off-beats
+            if (bar >= 1) {
+                int root = ROOTS[bar % 4];
+                int[] line = {root, root + 12, root + 7, root + 12, root, root + 12, root + 7, root + 10};
+                for (int e = 0; e < 8; e++) {
+                    tone(l, r, t0 + e * eighth, eighth * 0.9, hz(line[e]), e % 2 == 0 ? 0.12 : 0.07, 0.004, 0.18, 0.15, 0, false);
+                }
+            }
+            if (full) {
                 for (int b = 0; b < 4; b++) {
                     double tb = t0 + b * BEAT;
-                    if (b == 0 || b == 2) {
-                        kick(l, r, tb, 0.30);
-                    } else {
-                        snare(l, r, tb, 0.055, rnd);
+                    kick(l, r, tb, b % 2 == 0 ? 0.32 : 0.18);
+                    if (b % 2 == 1) {
+                        clap(l, r, tb, 0.09, rnd);
                     }
-                    for (int e = 0; e < 2; e++) {
-                        double swing = e == 1 ? BEAT * 0.58 : 0;
-                        hat(l, r, tb + swing, e == 0 ? 0.03 : 0.02, rnd);
+                    for (int e = 0; e < 4; e++) {                        // sixteenth shaker
+                        hat(l, r, tb + e * BEAT / 4, e == 2 ? 0.026 : 0.014, rnd);
                     }
                 }
             }
-            // sparse bell melody every other bar after the intro
-            if (bar >= 4 && bar % 2 == 0 && t0 < seconds - 3 * BAR) {
-                int notes = 2 + rnd.nextInt(3);
-                for (int k = 0; k < notes; k++) {
-                    double at = t0 + (rnd.nextInt(8) * 0.5) * BEAT;
-                    int note = PENTA[rnd.nextInt(PENTA.length)];
-                    tone(l, r, at, 1.4, hz(note), 0.028, 0.004, 0.7, 0.0, 0.35, false);
+            // marimba melody, glockenspiel echo an octave up on the answer phrases
+            if (bar >= 2 && t0 < seconds - 2 * BAR) {
+                int[][] phrase = MELODY[(bar - 2) % MELODY.length];
+                for (int[] note : phrase) {
+                    double at = t0 + note[0] * eighth;
+                    marimba(l, r, at, note[2] * eighth + 0.3, hz(note[1]), 0.07, -0.15);
+                    if (((bar - 2) / 4) % 2 == 1) {
+                        tone(l, r, at + eighth * 0.5, 0.9, hz(note[1] + 12), 0.016, 0.002, 0.45, 0.0, 0.4, false);
+                    }
                 }
             }
         }
         reverb(l, r);
         // fades and normalisation
-        double fadeIn = 1.5;
-        double fadeOut = 4.0;
+        double fadeIn = 0.8;
+        double fadeOut = 3.5;
         double peak = 1e-9;
         for (int i = 0; i < n; i++) {
             double t = (double) i / RATE;
             double g = Math.min(1, t / fadeIn) * Math.min(1, (seconds - t) / fadeOut);
-            l[i] = Math.tanh(l[i] * 1.2) * g;
-            r[i] = Math.tanh(r[i] * 1.2) * g;
+            l[i] = Math.tanh(l[i] * 1.1) * g;
+            r[i] = Math.tanh(r[i] * 1.1) * g;
             peak = Math.max(peak, Math.max(Math.abs(l[i]), Math.abs(r[i])));
         }
         writeWav(out.toString(), l, r, 0.89 / peak);
+    }
+
+    /** A plucked string (Karplus-Strong): bright attack, quick natural decay, like a ukulele or nylon guitar. */
+    static void pluck(double[] l, double[] r, double start, double length, double f, double amp, double pan, Random rnd) {
+        int period = Math.max(2, (int) Math.round(RATE / f));
+        double[] ring = new double[period];
+        for (int i = 0; i < period; i++) {
+            ring[i] = rnd.nextDouble() * 2 - 1;
+        }
+        int s0 = (int) (start * RATE);
+        int len = (int) (length * RATE);
+        double gl = amp * Math.sqrt((1 - pan) / 2);
+        double gr = amp * Math.sqrt((1 + pan) / 2);
+        int pos = 0;
+        for (int i = 0; i < len; i++) {
+            int at = s0 + i;
+            if (at < 0 || at >= l.length) {
+                continue;
+            }
+            double v = ring[pos];
+            int next = (pos + 1) % period;
+            ring[pos] = 0.5 * (ring[pos] + ring[next]) * 0.994;      // low-pass and damping
+            pos = next;
+            double env = Math.min(1, (len - i) / (0.05 * RATE));
+            l[at] += v * gl * env;
+            r[at] += v * gr * env;
+        }
+    }
+
+    /** A marimba-like bar: sine with a fourth-harmonic strike that fades fast. */
+    static void marimba(double[] l, double[] r, double start, double length, double f, double amp, double pan) {
+        int s0 = (int) (start * RATE);
+        int len = (int) (length * RATE);
+        double gl = amp * Math.sqrt((1 - pan) / 2);
+        double gr = amp * Math.sqrt((1 + pan) / 2);
+        for (int i = 0; i < len; i++) {
+            int at = s0 + i;
+            if (at < 0 || at >= l.length) {
+                continue;
+            }
+            double t = (double) i / RATE;
+            double ph = 2 * Math.PI * f * t;
+            double v = Math.sin(ph) * Math.exp(-t / 0.42) + 0.35 * Math.sin(4 * ph) * Math.exp(-t / 0.05);
+            double env = Math.min(1, t / 0.002) * Math.min(1, (length - t) / 0.08);
+            l[at] += v * env * gl;
+            r[at] += v * env * gr;
+        }
+    }
+
+    /** A hand clap: three quick noise bursts and a short tail. */
+    static void clap(double[] l, double[] r, double start, double amp, Random rnd) {
+        int s0 = (int) (start * RATE);
+        double prev = 0;
+        for (int i = 0; i < 0.2 * RATE; i++) {
+            int at = s0 + i;
+            if (at >= l.length) {
+                break;
+            }
+            double t = (double) i / RATE;
+            double bursts = t < 0.03 ? (Math.sin(Math.PI * t / 0.01) > 0 ? 1 : 0.3) : Math.exp(-(t - 0.03) / 0.06);
+            double x = rnd.nextGaussian();
+            double v = (x - 0.6 * prev) * bursts * amp;
+            prev = x;
+            l[at] += v * 1.05;
+            r[at] += v * 0.95;
+        }
     }
 
     /**
@@ -155,22 +240,6 @@ class OfficeBgm {
             double v = Math.sin(phase) * Math.exp(-t / 0.13) * amp;
             l[at] += v;
             r[at] += v;
-        }
-    }
-
-    static void snare(double[] l, double[] r, double start, double amp, Random rnd) {
-        int s0 = (int) (start * RATE);
-        double lp = 0;
-        for (int i = 0; i < 0.25 * RATE; i++) {
-            int at = s0 + i;
-            if (at >= l.length) {
-                break;
-            }
-            double t = (double) i / RATE;
-            lp += 0.25 * (rnd.nextGaussian() - lp);          // brushed, dark noise
-            double v = (lp * 0.9 + 0.3 * Math.sin(2 * Math.PI * 190 * t)) * Math.exp(-t / 0.07) * amp;
-            l[at] += v * 0.9;
-            r[at] += v * 1.1;
         }
     }
 

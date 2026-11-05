@@ -9,9 +9,12 @@ import javafx.application.Platform;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.ContextMenu;
 import javafx.scene.control.DialogPane;
+import javafx.scene.control.MenuItem;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TextField;
+import javafx.scene.layout.HBox;
 import javafx.stage.Stage;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -228,7 +231,7 @@ class StudioVectorTest {
         robot.interact(() -> view.query.setText("EXPLAIN SELECT c FROM Clip c ORDER BY l2_distance(c.embedding, '[1, 0, 0]') LIMIT 1"));
         robot.interact(() -> view.query.run.fire());
         settle();
-        assertThat(await(() -> view.query.plan.getText().contains("NEAREST embedding by L2"))).as(view.query.plan.getText()).isTrue();
+        assertThat(await(() -> view.query.plan.getText().contains("Nearest  embedding by L2"))).as(view.query.plan.getText()).isTrue();
 
         for (String bad : List.of("SELECT c FROM Clip c ORDER BY cosine_distance(c.embedding, '[1, 0]') LIMIT 1",
                 "SELECT cosine_distance(c.embedding, 'oops') FROM Clip c",
@@ -240,5 +243,95 @@ class StudioVectorTest {
             assertThat(view.query.message.getStyleClass()).as(bad).contains("k-error");
         }
         assertThat(view.query.message.getText()).contains("VECTOR_DIMS takes 1 argument");
+    }
+
+    @ParameterizedTest(name = "on disk = {0}")
+    @ValueSource(booleans = {false, true})
+    void findSimilar(boolean onDisk, FxRobot robot, @TempDir Path tmp) {
+        open(robot, onDisk, tmp);
+        ContextMenu[] menu = new ContextMenu[1];
+        robot.interact(() -> menu[0] = view.data.rowMenu(row("none")));
+        assertThat(menu[0].getItems()).extracting(MenuItem::getText).containsExactly("Open", "Find similar by embedding");
+        assertThat(menu[0].getItems().get(1).isDisable()).isTrue();                  // no vector: nothing to compare
+        robot.interact(() -> menu[0] = view.data.rowMenu(row("x")));
+        MenuItem similar = menu[0].getItems().get(1);
+        assertThat(similar.isDisable()).isFalse();
+        assertThat(view.data.rowMenu(null)).isNull();
+
+        robot.interact(similar::fire);
+        settle();
+        assertThat(view.tabs.getSelectionModel().getSelectedIndex()).isEqualTo(1);
+        assertThat(view.query.editor.getText()).startsWith("SELECT x, cosine_distance(x.embedding, :vector) AS distance FROM Clip x");
+        assertThat(await(() -> view.query.results.getItems().size() == 2)).isTrue();   // y, then "none" (NULLS LAST); x left out
+        assertThat(view.query.message.getStyleClass()).doesNotContain("k-error");
+
+        // "Open" opens the editor
+        boolean[] opened = {false};
+        view.editorDialog = editor -> {
+            opened[0] = true;
+            return Optional.empty();
+        };
+        robot.interact(() -> view.data.rowMenu(row("y")).getItems().get(0).fire());
+        settle();
+        assertThat(opened[0]).isTrue();
+    }
+
+    /** The "From text" button next to the embedding field. */
+    private static Button embedButton(ObjectEditor editor) {
+        Button b = (Button) ((HBox) editor.control("embedding").getParent()).getChildren().get(1);
+        assertThat(b.getId()).isEqualTo("field-embedding-embed");
+        return b;
+    }
+
+    @ParameterizedTest(name = "on disk = {0}")
+    @ValueSource(booleans = {false, true})
+    void fromText(boolean onDisk, FxRobot robot, @TempDir Path tmp) {
+        Session s = open(robot, onDisk, tmp);
+        s.embedder(text -> text.equals("wrong") ? new float[]{1, 2} : new float[]{0, 0, text.length()});
+        List<String> seen = new ArrayList<>();
+        view.editorDialog = editor -> {
+            Button embed = embedButton(editor);
+            assertThat(embed.isDisable()).isFalse();
+            TextField field = (TextField) editor.control("embedding");
+            editor.embedWorker = Runnable::run;                                    // the dialog callback runs on the FX thread
+            editor.askText = p -> null;                                            // cancelled: unchanged
+            robot.interact(embed::fire);
+            assertThat(field.getText()).isEqualTo("[1.0, 0.0, 0.0]");
+            editor.askText = p -> "wrong";                                         // the model's dimension does not fit
+            robot.interact(embed::fire);
+            assertThat(editor.error.getText()).contains("returned 2 numbers, embedding needs 3");
+            editor.askText = p -> "four";
+            robot.interact(embed::fire);
+            assertThat(field.getText()).isEqualTo("[0.0, 0.0, 4.0]");
+            seen.add(field.getText());
+            DynamicObject[] out = new DynamicObject[1];
+            robot.interact(() -> out[0] = editor.result());
+            return Optional.of(out[0]);
+        };
+        robot.interact(() -> view.editObject(row("x")));
+        settle();
+        assertThat(seen).containsExactly("[0.0, 0.0, 4.0]");
+        assertThat((float[]) s.reload(row("x")).get("embedding")).containsExactly(0, 0, 4);
+
+        s.embedder(text -> {
+            throw new IllegalStateException("Ollama is not reachable");
+        });
+        view.editorDialog = editor -> {
+            editor.embedWorker = Runnable::run;
+            editor.askText = p -> "x";
+            robot.interact(embedButton(editor)::fire);
+            assertThat(editor.error.getText()).contains("Ollama is not reachable");
+            return Optional.empty();
+        };
+        robot.interact(() -> view.editObject(row("x")));
+        settle();
+
+        s.embedder(null);
+        view.editorDialog = editor -> {
+            assertThat(embedButton(editor).isDisable()).isTrue();
+            return Optional.empty();
+        };
+        robot.interact(() -> view.editObject(row("x")));
+        settle();
     }
 }

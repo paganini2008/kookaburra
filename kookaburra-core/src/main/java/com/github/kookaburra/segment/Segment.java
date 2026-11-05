@@ -3,6 +3,8 @@ package com.github.kookaburra.segment;
 import com.github.kookaburra.Config;
 import com.github.kookaburra.exec.ColumnIndex;
 import com.github.kookaburra.exec.SegmentView;
+import com.github.kookaburra.exec.TextIndex;
+import com.github.kookaburra.exec.VectorColumn;
 import com.github.kookaburra.io.ByteSource;
 import com.github.kookaburra.io.MappedFile;
 import com.github.kookaburra.mapping.Record;
@@ -45,6 +47,8 @@ public class Segment implements SegmentView {
     private final int bloomK;
     private final Map<Integer, ImmutableRoaringBitmap> types = new HashMap<>();
     private final Map<String, SegmentColumn> columns = new LinkedHashMap<>();
+    private final Map<String, SegmentVectors> vectors = new HashMap<>();
+    private final Map<String, SegmentText> texts = new HashMap<>();
 
     public Segment(int id, MappedFile file, Supplier<Schema> schema, SegmentDeletes deletes) {
         this(id, file, schema, deletes, Config.defaults().postingsOrMax());
@@ -91,6 +95,21 @@ public class Segment implements SegmentView {
         for (int i = 0; i < nc; i++) {
             SegmentColumn c = SegmentColumn.read(this, f);
             columns.put(c.path(), c);
+        }
+        int format = file.getInt(8);
+        if (format >= 2) {
+            int nv = f.readVarInt();
+            for (int i = 0; i < nv; i++) {
+                SegmentVectors v = new SegmentVectors(this, f, format);
+                vectors.put(v.path(), v);
+            }
+        }
+        if (format >= 3) {
+            int ntext = f.readVarInt();
+            for (int i = 0; i < ntext; i++) {
+                SegmentText t = new SegmentText(this, f);
+                texts.put(t.path(), t);
+            }
         }
     }
 
@@ -172,11 +191,34 @@ public class Segment implements SegmentView {
         return RecordCodec.decode(schema.get(), rowSource(doc));
     }
 
-    /** Column value when the path is a column, else only that field is decoded from the row (others are skipped). */
+    /**
+     * Column value when the path is a column, a copy from the vector column for vectors, else only that field is
+     * decoded from the row (others are skipped).
+     */
     @Override
     public Object value(int doc, String path) {
         SegmentColumn c = columns.get(path);
-        return c != null ? c.value(doc) : RecordCodec.readPath(schema.get(), rowSource(doc), path);
+        if (c != null) {
+            return c.value(doc);
+        }
+        SegmentVectors v = vectors.get(path);
+        if (v != null) {
+            float[] f = v.vector(doc);
+            if (f != null) {
+                return f;
+            }
+        }
+        return RecordCodec.readPath(schema.get(), rowSource(doc), path);
+    }
+
+    @Override
+    public TextIndex text(String path) {
+        return texts.get(path);
+    }
+
+    @Override
+    public VectorColumn vectors(String path) {
+        return vectors.get(path);
     }
 
     private ByteSource rowSource(int doc) {

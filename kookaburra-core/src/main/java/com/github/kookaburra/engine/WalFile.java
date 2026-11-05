@@ -33,6 +33,7 @@ class WalFile implements Wal {
     private final Path path;
     private final FileChannel ch;
     private final boolean sync;
+    private volatile long forces;
     private final ByteSink pending = new ByteSink(1 << 16);
     private final ByteSink payload = new ByteSink(1 << 12);
 
@@ -62,6 +63,11 @@ class WalFile implements Wal {
 
     @Override
     public void sync() {
+        flush(sync);
+    }
+
+    @Override
+    public void flush(boolean force) {
         try {
             if (pending.size() > 0) {
                 ByteBuffer b = ByteBuffer.wrap(pending.array(), 0, pending.size());
@@ -70,12 +76,18 @@ class WalFile implements Wal {
                 }
                 pending.reset();
             }
-            if (sync) {
+            if (force) {
                 ch.force(false);
+                forces++;
             }
         } catch (IOException e) {
             throw new UncheckedIOException("WAL write failed", e);
         }
+    }
+
+    @Override
+    public long forces() {
+        return forces;
     }
 
     long size() {

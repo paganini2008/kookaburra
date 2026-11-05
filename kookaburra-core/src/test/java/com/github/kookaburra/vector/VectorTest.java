@@ -155,7 +155,7 @@ class VectorTest {
             assertThat(s.map(Doc::getTitle).toList()).containsExactly("x", "de-x");
         }
         assertThat(db.from(Doc.class).nearest(Doc::getEmbedding, q, 1).explain())
-                .contains("NEAREST embedding by COSINE to a 3-dim vector", "top-N heap");
+                .contains("Nearest  embedding by COSINE to a 3-dim vector, top-N heap");
         assertThat(db.from(Doc.class).nearest(Doc::getEmbedding, q).explain()).contains("full sort");
     }
 
@@ -242,7 +242,7 @@ class VectorTest {
                 .param("q", new float[]{1, 0, 0}).list()).extracting(Doc::getTitle).containsExactly("x", "mostly-x");
         String plan = db.oql("SELECT d FROM Doc d ORDER BY cosine_distance(d.embedding, :q) LIMIT 2").param("q", new float[]{1, 0, 0})
                 .explain();
-        assertThat(plan).contains("NEAREST embedding by COSINE", "nearest neighbours");
+        assertThat(plan).contains("Nearest  embedding by COSINE", "nearest neighbours");
 
         List<Row> rows = db.oql("SELECT d.title, l2_distance(d.embedding, '[1, 0, 0]') AS dist, vector_dims(d.embedding) "
                 + "FROM Doc d ORDER BY dist LIMIT 2").rows();
