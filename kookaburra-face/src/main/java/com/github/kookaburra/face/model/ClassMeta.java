@@ -21,7 +21,7 @@ import java.util.List;
  * @Version 1.0.0
  */
 public record ClassMeta(String name, int id, String parent, String collection, List<String> subclasses, String idField,
-                        String versionField, int layouts, long count, List<FieldMeta> fields) {
+                        String versionField, int layouts, long count, List<FieldMeta> fields, String comment) {
 
     /**
      * One stored field.
@@ -31,7 +31,8 @@ public record ClassMeta(String name, int id, String parent, String collection, L
      * @param index      index kind, or empty when the field has no column
      * @param declaredIn simple name of the class that declares the field
      * @param constraint {@code UNIQUE}, {@code FK → Target · ON DELETE action} (e.g. {@code FK → Customer · CASCADE}), or empty
+     * @param comment    the field's {@code @Comment}, or empty
      */
-    public record FieldMeta(String path, String type, String index, String declaredIn, String constraint) {
+    public record FieldMeta(String path, String type, String index, String declaredIn, String constraint, String comment) {
     }
 }

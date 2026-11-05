@@ -1,6 +1,7 @@
 package com.github.kookaburra.mapping;
 
 import com.github.kookaburra.annotation.VectorDistance;
+import com.github.kookaburra.annotation.VectorQuantization;
 
 import java.util.List;
 import java.util.Objects;
@@ -9,7 +10,8 @@ import java.util.Objects;
  * Self-describing type of a stored value (design §3.4). Recursive for collections, maps and embeddables.
  *
  * @param kind      value type
- * @param name      ENUM: enum class; REF: target class; EMBEDDED: embeddable class; OBJECT: Java type; else null
+ * @param name      ENUM: enum class; REF: target class; EMBEDDED: embeddable class; OBJECT: Java type; VECTOR: default
+ *                  distance; STRING with {@code @FullText}: analyzer name; else null
  * @param constants ENUM constants in declaration order (append-only across versions), else empty
  * @param element   MULTI / EMBEDDED_LIST element, MAP value type, else null
  * @param key       MAP key type, else null
@@ -38,6 +40,11 @@ public record TypeDef(ValueType kind, String name, List<String> constants, TypeD
             throw new IllegalArgumentException("not a plain scalar: " + kind);
         }
         return new TypeDef(kind, null, null, null, null, null, false, 0);
+    }
+
+    /** A string indexed for full-text search with the named analyzer. */
+    public static TypeDef text(String analyzer) {
+        return new TypeDef(ValueType.STRING, analyzer, null, null, null, null, false, 0);
     }
 
     public static TypeDef enumOf(String enumClass, List<String> constants) {
@@ -74,12 +81,25 @@ public record TypeDef(ValueType kind, String name, List<String> constants, TypeD
 
     /** A float32 vector of {@code dim} components (0 = any) searched with {@code distance} by default. */
     public static TypeDef vector(int dim, VectorDistance distance) {
-        return new TypeDef(ValueType.VECTOR, distance.name(), null, null, null, null, false, dim);
+        return vector(dim, distance, VectorQuantization.NONE);
+    }
+
+    /** Same with the quantization of its index ({@code name} = {@code COSINE} or {@code COSINE INT8}). */
+    public static TypeDef vector(int dim, VectorDistance distance, VectorQuantization quantization) {
+        String name = quantization == VectorQuantization.NONE ? distance.name() : distance.name() + " " + quantization.name();
+        return new TypeDef(ValueType.VECTOR, name, null, null, null, null, false, dim);
     }
 
     /** VECTOR: the default distance of nearest-neighbour searches. */
     public VectorDistance distance() {
-        return VectorDistance.valueOf(name);
+        int sp = name.indexOf(' ');
+        return VectorDistance.valueOf(sp < 0 ? name : name.substring(0, sp));
+    }
+
+    /** VECTOR: how its index keeps the vectors. */
+    public VectorQuantization quantization() {
+        int sp = name.indexOf(' ');
+        return sp < 0 ? VectorQuantization.NONE : VectorQuantization.valueOf(name.substring(sp + 1));
     }
 
     /** The scalar type values are compared by: the element type for MULTI, else this. */

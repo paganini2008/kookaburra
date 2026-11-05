@@ -13,7 +13,7 @@ options { caseInsensitive = true; }
 // ---------------------------------------------------------------- statements
 
 statement
-    : EXPLAIN? (selectStmt | updateStmt | deleteStmt) ';'? EOF
+    : (EXPLAIN ANALYZE?)? (selectStmt | updateStmt | deleteStmt) ';'? EOF
     ;
 
 selectStmt
@@ -148,7 +148,7 @@ identifier
     : IDENT
     | QUOTED_IDENT
     | DATE | TIMESTAMP | INSTANT | TYPE | FIRST | LAST | EMPTY | MEMBER | OF | KEY | VALUE
-    | COUNT | SUM | AVG | MIN | MAX | LEFT | INNER | OUTER | NULLS | ESCAPE | OFFSET | LIMIT | EXPLAIN
+    | COUNT | SUM | AVG | MIN | MAX | LEFT | INNER | OUTER | NULLS | ESCAPE | OFFSET | LIMIT | EXPLAIN | ANALYZE
     ;
 
 // ---------------------------------------------------------------- tokens
@@ -158,7 +158,7 @@ GROUP : 'group' ;     BY : 'by' ;              HAVING : 'having' ; ORDER : 'orde
 ASC : 'asc' ;         DESC : 'desc' ;          NULLS : 'nulls' ;   FIRST : 'first' ;   LAST : 'last' ;
 LIMIT : 'limit' ;     OFFSET : 'offset' ;      AS : 'as' ;         NEW : 'new' ;
 JOIN : 'join' ;       INNER : 'inner' ;        LEFT : 'left' ;     OUTER : 'outer' ;
-UPDATE : 'update' ;   SET : 'set' ;            DELETE : 'delete' ; EXPLAIN : 'explain' ;
+UPDATE : 'update' ;   SET : 'set' ;            DELETE : 'delete' ; EXPLAIN : 'explain' ;    ANALYZE : 'analyze' ;
 AND : 'and' ;         OR : 'or' ;              NOT : 'not' ;       BETWEEN : 'between' ;
 IN : 'in' ;           LIKE : 'like' ;          ESCAPE : 'escape' ; IS : 'is' ;
 NULL : 'null' ;       EMPTY : 'empty' ;        MEMBER : 'member' ; OF : 'of' ;

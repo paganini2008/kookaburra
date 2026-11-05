@@ -224,9 +224,9 @@ class OqlTest {
         assertThat(db.oql("UPDATE Person p SET p.age = p.age WHERE p.age > 1000").execute()).isZero();
 
         String plan = db.oql("SELECT p FROM Person p WHERE p.city = 'Sydney' AND p.age * 2 > 10 ORDER BY p.age").explain();
-        assertThat(plan).contains("QUERY Person", "city = 'Sydney'", "RESIDUAL", "ORDER BY pushed down");
+        assertThat(plan).contains("Query  Person", "city = 'Sydney'", "RESIDUAL", "ORDER BY pushed down");
         assertThat(db.oql("SELECT p.name FROM Person p ORDER BY UPPER(p.name)").explain()).contains("ORDER BY in memory");
-        assertThat(db.oql("EXPLAIN SELECT p FROM Person p").list()).first().asString().startsWith("QUERY");
+        assertThat(db.oql("EXPLAIN SELECT p FROM Person p").list()).first().asString().startsWith("Query  Person");
         // EXPLAIN never changes data, even through execute()
         long before = db.from(Person.class).count();
         assertThatThrownBy(() -> db.oql("EXPLAIN DELETE FROM Person p").execute()).hasMessageContaining("nothing was changed");

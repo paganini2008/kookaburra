@@ -11,6 +11,7 @@ import javafx.beans.property.SimpleStringProperty;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
+import javafx.scene.control.ContextMenu;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.MenuButton;
@@ -59,9 +60,12 @@ public class DataView extends BorderPane {
     final SplitPane split;
     final ComboBox<Integer> pageSize = new ComboBox<>();
     private final Supplier<Session> session;
+    private final Consumer<DynamicObject> onOpenObject;
     private final Tasks tasks;
     private final Consumer<String> status;
     private final Consumer<Throwable> error;
+    /** "Find similar": (object, vector path) → nearest neighbours in the console. Set by the main view. */
+    BiConsumer<DynamicObject, String> onSimilar = (o, path) -> { };
     private String className;
     private int pageIndex;
     private String orderBy;
@@ -72,6 +76,7 @@ public class DataView extends BorderPane {
     public DataView(Supplier<Session> session, Tasks tasks, Consumer<String> status, Consumer<Throwable> error,
                     Consumer<DynamicObject> onOpen, BiConsumer<String, Long> onOpenRef) {
         this.session = session;
+        this.onOpenObject = onOpen;
         this.tasks = tasks;
         this.status = status;
         this.error = error;
@@ -108,6 +113,12 @@ public class DataView extends BorderPane {
             row.setOnMouseClicked(e -> {
                 if (e.getClickCount() == 2 && !row.isEmpty()) {
                     onOpen.accept(row.getItem());
+                }
+            });
+            row.setOnContextMenuRequested(e -> {
+                ContextMenu menu = rowMenu(row.getItem());
+                if (menu != null) {
+                    menu.show(row, e.getScreenX(), e.getScreenY());
                 }
             });
             return row;
@@ -230,6 +241,31 @@ public class DataView extends BorderPane {
         return name.substring(name.lastIndexOf('.') + 1);
     }
 
+    /**
+     * Context menu of a row: open, and "Find similar by &lt;field&gt;" per vector field (disabled when the object has no
+     * vector there); null for an empty row.
+     */
+    ContextMenu rowMenu(DynamicObject o) {
+        Session s = session.get();
+        if (o == null || s == null) {
+            return null;
+        }
+        ContextMenu menu = new ContextMenu();
+        menu.setId("row-menu");
+        MenuItem open = new MenuItem("Open");
+        open.setOnAction(e -> onOpenObject.accept(o));
+        menu.getItems().add(open);
+        for (String path : s.vectorFields(o.className()).keySet()) {
+            MenuItem similar = new MenuItem("Find similar by " + path);
+            similar.setId("similar-" + path);
+            similar.setGraphic(Icons.of("mdi2v-vector-link"));
+            similar.setDisable(!(o.get(path) instanceof float[]));
+            similar.setOnAction(e -> onSimilar.accept(o, path));
+            menu.getItems().add(similar);
+        }
+        return menu;
+    }
+
     /** Reloads the current page (after edits). */
     public void refresh() {
         if (className != null) {
@@ -269,6 +305,14 @@ public class DataView extends BorderPane {
         for (Column c : cols) {
             TableColumn<DynamicObject, String> tc = new TableColumn<>(c.path());
             tc.setUserData(c.path());
+            String comment = c.system() ? null : s.comment(className, c.path());
+            if (comment != null) {                                // @Comment: an info mark with the text as tooltip
+                Label info = new Label();
+                info.setGraphic(Icons.of("mdi2i-information-outline"));
+                info.getStyleClass().add("k-col-comment");
+                info.setTooltip(new Tooltip(comment));
+                tc.setGraphic(info);
+            }
             tc.setSortable(c.sortable());
             tc.setCellValueFactory(d -> new SimpleStringProperty(Display.cell(s.cell(d.getValue(), c))));
             tc.setCellFactory(col -> new TableCell<>() {

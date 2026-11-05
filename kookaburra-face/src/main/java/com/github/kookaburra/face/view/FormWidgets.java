@@ -4,6 +4,7 @@ import com.github.kookaburra.Ref;
 import com.github.kookaburra.face.model.Display;
 import com.github.kookaburra.mapping.TypeDef;
 import com.github.kookaburra.mapping.Vectors;
+import javafx.application.Platform;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
@@ -29,8 +30,11 @@ import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executor;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Value widgets of the object form, per stored value type (design §17.3): check box, enum combo, date picker,
@@ -52,8 +56,16 @@ class FormWidgets {
     /**
      * @param files  picks a file: (save?, suggested name) → file, or null when cancelled
      * @param errors receives readable input errors
+     * @param embed  text → embedding by the database's embedder, or null when none is configured
+     * @param ask    asks for a text: (field path) → text, or null when cancelled
+     * @param worker runs slow work (embedding requests) off the UI thread
      */
-    record Context(BiFunction<Boolean, String, File> files, Consumer<String> errors) {
+    record Context(BiFunction<Boolean, String, File> files, Consumer<String> errors, Function<String, float[]> embed,
+                   Function<String, String> ask, Executor worker) {
+
+        Context(BiFunction<Boolean, String, File> files, Consumer<String> errors) {
+            this(files, errors, null, p -> null, Runnable::run);
+        }
     }
 
     private FormWidgets() {
@@ -87,7 +99,7 @@ class FormWidgets {
             }
             case STRING -> inRow ? text(path, t) : longText(path);
             case BYTES -> binary(path, ctx);
-            case VECTOR -> vector(path, t);
+            case VECTOR -> vector(path, t, inRow ? null : ctx);
             case EMBEDDED_LIST, MAP -> inRow ? kept(t) : new CollectionEditor(path, t, ctx).leaf();
             case OBJECT -> kept(t);
             default -> text(path, t);
@@ -114,12 +126,70 @@ class FormWidgets {
                 : v instanceof List<?> l ? String.join(", ", l.stream().map(Display::text).toList()) : String.valueOf(v)));
     }
 
-    /** A vector as text {@code [0.1, 0.2, …]}, checked against the field's dimension. */
-    private static Leaf vector(String path, TypeDef t) {
+    /**
+     * A vector as text {@code [0.1, 0.2, …]}, checked against the field's dimension; with an embedder, a
+     * "From text" button fills it with the embedding of a text (computed off the UI thread).
+     */
+    private static Leaf vector(String path, TypeDef t, Context ctx) {
         TextField c = new TextField();
-        c.setPromptText(t.dim() == 0 ? "[0.1, 0.2, …]" : "[0.1, 0.2, …]  (" + t.dim() + " numbers)");
-        return new Leaf(c, () -> c.getText().isBlank() ? null : Vectors.canonical(t, c.getText(), path),
-                v -> c.setText(v == null ? "" : Display.text(v instanceof float[] ? v : Vectors.of(v, path))));
+        String prompt = t.dim() == 0 ? "[0.1, 0.2, …]" : "[0.1, 0.2, …]  (" + t.dim() + " numbers)";
+        c.setPromptText(prompt);
+        Supplier<Object> read = () -> c.getText().isBlank() ? null : Vectors.canonical(t, c.getText(), path);
+        Consumer<Object> write = v -> c.setText(v == null ? "" : Display.text(v instanceof float[] ? v : Vectors.of(v, path)));
+        if (ctx == null) {
+            return new Leaf(c, read, write);
+        }
+        Button fromText = new Button("From text…");
+        fromText.setId("field-" + path + "-embed");
+        fromText.setGraphic(Icons.of("mdi2t-text-search"));
+        HBox.setHgrow(c, Priority.ALWAYS);
+        HBox box = new HBox(6, c, fromText);
+        box.setAlignment(Pos.CENTER_LEFT);
+        if (ctx.embed() == null) {
+            fromText.setDisable(true);
+            Tooltip.install(box, new Tooltip("No embedder configured: set kookaburra.embedder and kookaburra.embedder-model"));
+        } else {
+            fromText.setTooltip(new Tooltip("Fill this vector with the embedding of a text"));
+        }
+        fromText.setOnAction(e -> {
+            String text = ctx.ask().apply(path);
+            if (text == null || text.isBlank()) {
+                return;
+            }
+            fromText.setDisable(true);
+            c.setPromptText("embedding …");
+            ctx.worker().execute(() -> {
+                String error = null;
+                float[] v = null;
+                try {
+                    v = ctx.embed().apply(text);
+                    if (t.dim() > 0 && v.length != t.dim()) {
+                        error = "the embedder returned " + v.length + " numbers, " + path + " needs " + t.dim()
+                                + ": use a model of that dimension (kookaburra.embedder-model)";
+                        v = null;
+                    }
+                } catch (RuntimeException ex) {
+                    error = ex.getMessage();
+                }
+                float[] result = v;
+                String problem = error;
+                Runnable done = () -> {
+                    fromText.setDisable(false);
+                    c.setPromptText(prompt);
+                    if (result != null) {
+                        c.setText(Display.text(result));
+                    } else {
+                        ctx.errors().accept(problem);
+                    }
+                };
+                if (Platform.isFxApplicationThread()) {
+                    done.run();
+                } else {
+                    Platform.runLater(done);
+                }
+            });
+        });
+        return new Leaf(box, c, read, write);
     }
 
     /** One-line text field; long or multi-line texts (or the expand button) switch to a text area. */

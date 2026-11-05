@@ -30,6 +30,14 @@ public interface WriteBatch extends AutoCloseable {
     /** Applies all queued writes atomically. */
     void commit();
 
+    /**
+     * Durability of this batch's commit, overriding {@code kookaburra.durability} (null = the database's): {@code ASYNC}
+     * for bulk loads into a {@code SYNC} database, {@code SYNC} for an important write in an {@code ASYNC} one.
+     */
+    default WriteBatch durability(Durability durability) {
+        throw new UnsupportedOperationException("this batch commits with its transaction");
+    }
+
     /** Discards uncommitted writes. */
     @Override
     void close();

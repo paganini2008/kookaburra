@@ -104,14 +104,15 @@ class ModelTest {
         assertThat(book.idField()).isEqualTo("oid");
         assertThat(book.versionField()).isNull();
         assertThat(book.layouts()).isEqualTo(1);
-        assertThat(book.fields()).extracting(ClassMeta.FieldMeta::path).containsExactly("title", "sku", "price", "photo", "embedding", "author", "pages");
+        assertThat(book.fields()).extracting(ClassMeta.FieldMeta::path).containsExactly("title", "sku", "price", "photo", "description", "embedding", "author", "pages");
         assertThat(book.fields().get(0).declaredIn()).isEqualTo("Product");
-        assertThat(book.fields().get(4).type()).isEqualTo("VECTOR(4, COSINE)");
-        assertThat(book.fields().get(5).index()).isEqualTo("AUTO");
-        assertThat(book.fields().get(6).index()).isEmpty();
+        assertThat(book.fields().get(5).type()).isEqualTo("VECTOR(4, COSINE)");
+        assertThat(book.fields().get(4).index()).isEqualTo("FULLTEXT");              // description
+        assertThat(book.fields().get(6).index()).isEqualTo("AUTO");
+        assertThat(book.fields().get(7).index()).isEmpty();
         assertThat(book.fields().get(1).index()).isEqualTo("AUTO");                  // implied by @Unique
         assertThat(book.fields().get(1).constraint()).isEqualTo("UNIQUE");
-        assertThat(book.fields().get(5).constraint()).isEmpty();
+        assertThat(book.fields().get(6).constraint()).isEmpty();
         assertThat(demo.meta(PURCHASE).fields()).extracting(ClassMeta.FieldMeta::constraint)
                 .contains("FK → Customer · CASCADE", "FK → Product · RESTRICT");
         ClassMeta customer = demo.meta(CUSTOMER);
@@ -137,10 +138,10 @@ class ModelTest {
         QueryOutcome one = demo.run("SELECT c.name FROM Customer c ORDER BY c.age LIMIT 1");
         assertThat(one.summary()).contains("1 row ");
         QueryOutcome plan = demo.run("EXPLAIN SELECT c FROM Customer c WHERE c.tier = 'GOLD'");
-        assertThat(plan.plan()).contains("QUERY Customer");
+        assertThat(plan.plan()).contains("Query  Customer");
         assertThat(plan.isTable()).isFalse();
         assertThat(plan.summary()).startsWith("plan");
-        assertThat(demo.explain("SELECT c FROM Customer c")).contains("FILTER");
+        assertThat(demo.explain("SELECT c FROM Customer c")).contains("Filter  all objects");
         QueryOutcome upd = demo.run("UPDATE Purchase p SET p.quantity = p.quantity WHERE p.quantity > 100");
         assertThat(upd.affected()).isZero();
         assertThat(upd.summary()).contains("0 objects affected");
@@ -665,5 +666,103 @@ class ModelTest {
         assertThat(gadgets.rows()).extracting(r -> r.get(0)).allMatch(t -> String.valueOf(t).startsWith("Gadget #"));
         assertThat(demo.run("SELECT COUNT(*) FROM Product p WHERE p.embedding IS NOT NULL").rows().get(0).get(0)).isEqualTo(30L);
         assertThat(demo.meta(PRODUCT).fields()).extracting(ClassMeta.FieldMeta::type).contains("VECTOR(4, COSINE)");
+    }
+
+    @Test
+    void findSimilarAndEmbedder() {
+        try (Session s = Session.demo()) {
+            assertThat(s.vectorFields(PRODUCT)).containsOnlyKeys("embedding");
+            assertThat(s.vectorFields(PRODUCT).get("embedding").dim()).isEqualTo(4);
+            assertThat(s.vectorFields("no.such.Class")).isEmpty();
+            DynamicObject book = s.db().oql("SELECT p FROM Product p ORDER BY cosine_distance(p.embedding, '[1, 0, 0, 0]') LIMIT 1",
+                    DynamicObject.class).list().get(0);
+            String q = s.similar(book, "embedding", 5);
+            assertThat(q).isEqualTo("SELECT x, cosine_distance(x.embedding, :vector) AS distance FROM Product x WHERE x.oid <> :self"
+                    + " ORDER BY distance LIMIT 5");
+            assertThat(s.consoleParams()).containsEntry("self", book.oid()).containsKey("vector");
+            QueryOutcome r = s.run(q);
+            assertThat(r.rows()).hasSize(5);
+            assertThat(r.columns()).contains("title").endsWith("distance");
+            int title = r.columns().indexOf("title");
+            int oid = r.columns().indexOf("oid");
+            assertThat(r.rows()).extracting(row -> String.valueOf(row.get(title))).allMatch(t -> t.startsWith("Book #"));
+            assertThat(r.rows()).extracting(row -> row.get(oid)).doesNotContain(book.oid());
+            assertThat(s.explain(q)).contains("Nearest  embedding by COSINE");
+
+            assertThatThrownBy(() -> s.similar(book, "title", 5)).hasMessageContaining("title is not a vector field of Book");
+            DynamicObject bare = s.db().oql("SELECT p FROM Product p", DynamicObject.class).list().get(0).set("embedding", null);
+            assertThatThrownBy(() -> s.similar(bare, "embedding", 5)).hasMessageContaining("has no embedding");
+
+            assertThat(s.embedder()).startsWith("ollama ");                      // bundled default, contacted lazily
+            s.embedder(text -> new float[]{text.length(), 0, 0, 1});
+            assertThat(s.embed("abc")).containsExactly(3, 0, 0, 1);
+            assertThat(s.embedder()).isNotNull();
+            s.embedder(null);
+            assertThat(s.embedder()).isNull();
+            assertThatThrownBy(() -> s.embed("x")).hasMessageContaining("no embedder configured");
+        }
+    }
+
+    @ParameterizedTest(name = "on disk = {0}")
+    @ValueSource(booleans = {false, true})
+    void similarByOtherDistances(boolean onDisk, @TempDir Path tmp) {
+        try (Session s = onDisk ? Session.open(tmp.resolve("db")) : Session.demo()) {
+            s.db().insert(new Spot("a", new float[]{1, 0}, 0, 0));
+            s.db().insert(new Spot("b", new float[]{0.9f, 0.1f}, 5, 5));
+            s.db().insert(new Spot("c", new float[]{-1, 0}, 1, 1));
+            s.db().insert(new Spot("d", null, 9, 9));
+            String spot = Spot.class.getName();
+            assertThat(s.vectorFields(spot)).containsOnlyKeys("dir", "place.pos");
+            DynamicObject a = s.db().oql("SELECT s FROM Spot s WHERE s.name = 'a'", DynamicObject.class).list().get(0);
+
+            String ip = s.similar(a, "dir", 2);                       // inner product: larger is closer
+            assertThat(ip).contains("inner_product(x.dir, :vector)").endsWith("ORDER BY distance DESC NULLS LAST LIMIT 2");   // objects without a vector last
+            QueryOutcome r = s.run(ip);
+            int name = r.columns().indexOf("name");
+            assertThat(r.rows()).extracting(row -> row.get(name)).containsExactly("b", "c");
+
+            String l2 = s.similar(a, "place.pos", 3);                 // L2 inside an embedded value
+            assertThat(l2).contains("l2_distance(x.place.pos, :vector)").endsWith("ORDER BY distance LIMIT 3");
+            QueryOutcome near = s.run(l2);
+            assertThat(near.rows()).extracting(row -> row.get(near.columns().indexOf("name"))).containsExactly("c", "b", "d");
+
+            // EMBED in the console with the bundled embedder: Ollama not running or the model not pulled → a clear error
+            assertThatThrownBy(() -> s.run("SELECT EMBED('x') FROM Spot s")).hasMessageContaining("EMBED: ");
+            s.embedder(null);
+        }
+    }
+
+    @Test
+    void demoFullText() {
+        // descriptions are full-text indexed: words, stems, prefixes and BM25 relevance in the console
+        // a word of the first gadget's description finds it (and only descriptions with that word)
+        String first = String.valueOf(demo.run("SELECT p.description FROM Gadget p ORDER BY p.title LIMIT 1").rows().get(0).get(0));
+        String word = first.split(" ")[1];                                   // e.g. "noise", "compact", "smart"
+        QueryOutcome found = demo.run("SELECT p.title, p.description FROM Product p WHERE MATCH(p.description, '" + word + "')");
+        assertThat(found.rows()).isNotEmpty().allMatch(r -> String.valueOf(r.get(1)).toLowerCase().contains(word.toLowerCase()));
+        assertThat(found.rows()).extracting(r -> r.get(1)).contains(first);
+        QueryOutcome baking = demo.run("SELECT p.title, SCORE(p.description, 'baking bread') AS score FROM Product p"
+                + " ORDER BY SCORE(p.description, 'baking bread') DESC LIMIT 5");
+        assertThat(baking.rows()).isNotEmpty();
+        assertThat(baking.columns()).containsExactly("p.title", "score");
+        assertThat(demo.explain("SELECT p FROM Product p WHERE MATCH(p.description, 'mug*')")).contains("full-text index");
+        assertThat(demo.meta(PRODUCT).fields()).extracting(ClassMeta.FieldMeta::index).contains("FULLTEXT");
+    }
+
+    @Test
+    void comments() {
+        // @Comment on the class and fields: shown on the Schema page and as column header hints
+        ClassMeta m = demo.meta(PRODUCT);
+        assertThat(m.comment()).isEqualTo("Things the shop sells: books, gadgets and home items");
+        assertThat(m.fields()).filteredOn(f -> f.path().equals("sku")).extracting(ClassMeta.FieldMeta::comment)
+                .containsExactly("Stock keeping unit, unique across all products");
+        assertThat(m.fields()).filteredOn(f -> f.path().equals("title")).extracting(ClassMeta.FieldMeta::comment)
+                .containsExactly("");
+        assertThat(demo.comment(PRODUCT, "price")).isEqualTo("Unit price in AUD");
+        assertThat(demo.comment(PRODUCT, "title")).isNull();
+        assertThat(demo.comment(PRODUCT, "no.such")).isNull();
+        assertThat(demo.comment("no.Such", "price")).isNull();
+        assertThat(demo.comment(CUSTOMER, "address.city")).isEqualTo("City or town");   // embeddable path followed
+        assertThat(demo.comment(CUSTOMER, "address.street")).isNull();
     }
 }

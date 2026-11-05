@@ -8,7 +8,10 @@ import com.github.kookaburra.mapping.FieldDef;
 import com.github.kookaburra.mapping.Schema;
 import com.github.kookaburra.mapping.TypeDef;
 import com.github.kookaburra.mapping.ValueType;
+import com.github.kookaburra.query.ElementQuery;
 import com.github.kookaburra.query.Pred;
+import com.github.kookaburra.text.Analyzers;
+import com.github.kookaburra.text.TextQuery;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -163,6 +166,19 @@ public class Planner {
             TypeDef t = typeOf(m.field().path());
             return t == null ? residual(pred) : new Cond.In(m.field().path(), t, new LinkedHashSet<>(oids));
         }
+        if (pred instanceof Pred.ElemMatch<?> m) {
+            // "some element equals" per equality (index of the list path), then the exact per-element check
+            List<Cond> cs = new ArrayList<>();
+            String list = storedPath(m.list().path());
+            for (ElementQuery.Condition c : m.conditions()) {
+                TypeDef t = typeOf(list + "." + c.property());
+                if (t != null && (c.op() == ElementQuery.Op.EQ || c.op() == ElementQuery.Op.IN)) {
+                    cs.add(new Cond.Contains(list + "." + c.property(), t.scalarType(), new LinkedHashSet<>(c.values()), false));
+                }
+            }
+            cs.add(residual(pred));
+            return cs.size() == 1 ? cs.get(0) : new Cond.And(cs);
+        }
         if (pred instanceof Pred.RefMatch<?, ?> || pred instanceof Pred.RefIn<?, ?>) {
             RefField<?, ?> f = pred instanceof Pred.RefMatch<?, ?> m ? m.field() : ((Pred.RefIn<?, ?>) pred).field();
             Set<Long> oids = pred instanceof Pred.RefMatch<?, ?> m ? subquery.apply(f.target(), m.target())
@@ -200,6 +216,10 @@ public class Planner {
         if (pred instanceof Pred.StartsWith<?> s) {
             return new Cond.Prefix(path, s.prefix());
         }
+        if (pred instanceof Pred.Match<?> m) {
+            // read the query with the stored field's analyzer, as the index was built
+            return new Cond.Match(path, TextQuery.parse(m.query().text(), Analyzers.get(type.name())), m.all());
+        }
         Pred.Contains<?, ?> c = (Pred.Contains<?, ?>) pred;
         return new Cond.Contains(path, type.scalarType(), canonical(c.values()), c.all());
     }
@@ -210,6 +230,7 @@ public class Planner {
         if (pred instanceof Pred.Range<?, ?> r) return r.field();
         if (pred instanceof Pred.IsNull<?> n) return n.field();
         if (pred instanceof Pred.StartsWith<?> s) return s.field();
+        if (pred instanceof Pred.Match<?> m) return m.field();
         return ((Pred.Contains<?, ?>) pred).field();
     }
 

@@ -1,0 +1,100 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css">
+<style>
+  .canvas { width: 1720px; }
+  .layer { display: grid; grid-template-columns: 190px 1fr; gap: 14px; align-items: stretch; margin-bottom: 8px; }
+  .layer > .name { border-left: 3px solid var(--accent); padding: 8px 12px; background: #141821; border-radius: 0 4px 4px 0;
+                   display: flex; flex-direction: column; justify-content: center; }
+  .layer > .name b { font-size: 15px; }
+  .layer > .name span { color: var(--muted); font-size: 12px; }
+  .cells { display: grid; gap: 10px; }
+  .box { text-align: left; padding: 9px 12px; }
+  .box b { margin-bottom: 2px; }
+  .box span { display: block; font-size: 12.5px; }
+  .box span span, .box span.mono { display: inline; }
+  .mono { font-family: "SF Mono", Menlo, monospace; font-size: 12px; color: var(--muted); }
+  .flow { display: grid; grid-template-columns: 190px 1fr; gap: 14px; margin: 0 0 8px; }
+  .flow div:last-child { color: var(--line); font-size: 13px; display: flex; gap: 28px; padding-left: 8px; }
+  .w { color: var(--warn); } .r { color: var(--cyan); }
+  .side { border-style: dashed; }
+  .legend { margin-top: 14px; color: var(--muted); font-size: 13px; display: flex; gap: 26px; }
+  .legend i { font-style: normal; font-weight: 700; }
+</style></head><body><div class="canvas" data-size="1720x725">
+<h1>Kookaburra architecture <small>an embedded object database: one library in your process, one data directory on disk</small></h1>
+
+<div class="layer">
+  <div class="name"><b>Applications</b><span>in the same JVM</span></div>
+  <div class="cells" style="grid-template-columns: 1.3fr 1fr 1fr 1fr">
+    <div class="box"><b>Your Java application</b><span>@Entity classes: nested values, lists, maps, references, decimals, binaries, float[] vectors</span></div>
+    <div class="box"><b>Kookaburra Studio</b><span>JavaFX desktop tool: data grid, editor, OQL console, plan diagram, schema, export as Java, stats dashboard</span></div>
+    <div class="box"><b>kookaburra-processor</b><span>annotation processor: type-safe metamodel <span class="mono">Book_.year</span></span></div>
+    <div class="box side"><b>Ollama</b><span>local embedding and rerank models (HTTP), only when text is turned into vectors or results are re-ordered</span></div>
+  </div>
+</div>
+<div class="flow"><div></div><div><span>▼ <span class="w">writes</span>: insert · update · delete · batch · transaction</span><span>▼ <span class="r">reads</span>: get · query · OQL · nearest · search</span></div></div>
+
+<div class="layer">
+  <div class="name"><b>API</b><span><span class="mono">ObjectDB</span> facade, thread-safe</span></div>
+  <div class="cells" style="grid-template-columns: repeat(6, 1fr)">
+    <div class="box"><b class="cyan">Typed queries</b><span><span class="mono">where(Book::getYear).gt(…)</span> filter · sort · group · fetch</span></div>
+    <div class="box"><b class="cyan">OQL</b><span>SQL-style SELECT / UPDATE / DELETE, ANTLR 4 grammar</span></div>
+    <div class="box"><b class="cyan">Dynamic API</b><span><span class="mono">DynamicObject</span>: any database without its classes</span></div>
+    <div class="box"><b class="cyan">Transactions</b><span>READ COMMITTED · SNAPSHOT · SERIALIZABLE, optimistic</span></div>
+    <div class="box"><b class="cyan">Search</b><span><span class="mono">nearest(…, k)</span> · <span class="mono">search(…)</span> · MATCH / SCORE · hybrid · diverse · rerank · <span class="mono">Embedder</span></span></div>
+    <div class="box"><b class="cyan">Operations</b><span>online backup · <span class="mono">stats()</span> · explain analyze · <span class="mono">exportSchema</span> · flush · compact</span></div>
+  </div>
+</div>
+
+<div class="layer">
+  <div class="name"><b>Mapping and schema</b><span>objects ⇄ canonical records</span></div>
+  <div class="cells" style="grid-template-columns: repeat(4, 1fr)">
+    <div class="box"><b>Self-describing schema</b><span>classes, inheritance, layouts per class version, renames, comments; old rows stay readable</span></div>
+    <div class="box"><b>Mappers and codec</b><span>bean mapper · dynamic codec · row encoding (varints, float32 vectors)</span></div>
+    <div class="box"><b>Constraints</b><span>@Unique (single and composite) · @ForeignKey RESTRICT / CASCADE / SET NULL</span></div>
+    <div class="box"><b>Lifecycle</b><span>@PrePersist … @PostLoad callbacks, entity listeners, optimistic @Version</span></div>
+  </div>
+</div>
+
+<div class="layer">
+  <div class="name"><b>Query engine</b><span>one executor for every front end</span></div>
+  <div class="cells" style="grid-template-columns: 1fr 0.15fr 2.2fr">
+    <div class="box"><b>Planner</b><span>predicates → index-aware conditions, subqueries, pushdown of sort / limit / nearest</span></div>
+    <div class="arrow" style="align-self:center;text-align:center">→</div>
+    <div class="box"><b>Executor</b><span>Roaring bitmap algebra on postings · ordinal ranges · top-N in index order · group-by on ordinals · path-only row reads · vector search: HNSW per segment (int8 option), exact scan for selective filters · BM25 on inverted indexes · plan profiles</span></div>
+  </div>
+</div>
+
+<div class="layer">
+  <div class="name"><b>Concurrency</b><span>MVCC, single writer</span></div>
+  <div class="cells" style="grid-template-columns: repeat(4, 1fr)">
+    <div class="box"><b class="r">Snapshots</b><span>immutable segment list + visible sequence number; readers never lock</span></div>
+    <div class="box"><b class="w">Sequencer</b><span>one thread applies batches in order: atomic across collections, group commit</span></div>
+    <div class="box"><b>Transaction registry</b><span>read / write sets, conflict table, timeouts, retries</span></div>
+    <div class="box"><b>Metrics</b><span>counters behind <span class="mono">db.stats()</span></span></div>
+  </div>
+</div>
+
+<div class="layer">
+  <div class="name"><b>Storage engine</b><span>LSM-style, memory-mapped</span></div>
+  <div class="cells" style="grid-template-columns: 1fr 0.12fr 1.1fr 0.12fr 2.1fr 1fr">
+    <div class="box"><b class="w">WAL</b><span>append, fsync per commit group; replayed at open</span></div>
+    <div class="arrow" style="align-self:center;text-align:center">→</div>
+    <div class="box"><b>MemSegments</b><span>in-memory rows, columns and postings; lock-free reads</span></div>
+    <div class="arrow" style="align-self:center;text-align:center">flush<br>→</div>
+    <div class="box"><b class="r">Segments</b><span>immutable files sorted by OID: rows · dictionary + ordinals · postings / sorted docids · null bitmaps · bloom filter · vector columns + HNSW graph · full-text postings + term frequencies</span></div>
+    <div class="box"><b>Background</b><span>flush threads · tiered and garbage compaction · delete logs</span></div>
+  </div>
+</div>
+
+<div class="layer">
+  <div class="name"><b>Data directory</b><span>files on your disk</span></div>
+  <div class="cells" style="grid-template-columns: repeat(5, 1fr)">
+    <div class="box" style="border-color:var(--ok)"><b class="ok">wal/</b><span>write-ahead log files</span></div>
+    <div class="box" style="border-color:var(--ok)"><b class="ok">col/&lt;collection&gt;/</b><span><span class="mono">seg_N.odbf</span> segments, delete logs</span></div>
+    <div class="box" style="border-color:var(--ok)"><b class="ok">schema/</b><span>classes and layouts</span></div>
+    <div class="box" style="border-color:var(--ok)"><b class="ok">commit_N · CURRENT</b><span>atomic list of live segments</span></div>
+    <div class="box" style="border-color:var(--ok)"><b class="ok">LOCK</b><span>one process per directory</span></div>
+  </div>
+</div>
+
+<div class="legend"><span><i class="w">■</i> write path: WAL → in-memory segment → flushed segment file</span><span><i class="r">■</i> read path: snapshot → executor → segments, no locks</span><span>Also in memory only: <span class="mono">ObjectDB.inMemory()</span> (same engine, no files)</span></div>
+</div></body></html>

@@ -20,6 +20,7 @@ import javafx.scene.control.TextField;
 import javafx.scene.control.TreeItem;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
+import javafx.scene.layout.GridPane;
 import javafx.stage.Stage;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -254,7 +255,7 @@ class StudioUiTest {
         assertThat(view.query.results.getItems()).hasSize(3);
         robot.interact(() -> view.query.explain.fire());
         settle();
-        assertThat(view.query.plan.getText()).contains("QUERY Customer");
+        assertThat(view.query.plan.getText()).contains("Query  Customer");
         robot.interact(() -> view.query.setText("EXPLAIN SELECT c FROM Customer c"));
         robot.interact(view.query::runQuery);
         settle();
@@ -432,6 +433,12 @@ class StudioUiTest {
         Platform.runLater(() -> view.about.fire());
         await(() -> robot.lookup("#about-github").tryQuery().isPresent());
         assertThat(robot.lookup("#about-version").queryLabeled().getText()).isEqualTo("Version 1.0.0-SNAPSHOT");
+        GridPane map = robot.lookup("#about-features").queryAs(GridPane.class);
+        assertThat(map.getChildren()).hasSize(About.FEATURES.size());
+        assertThat(robot.lookup(".k-feature-chip").queryAllAs(Label.class)).extracting(Label::getText)
+                .contains("SQL-style OQL", "HNSW search", "BM25 ranking", "Export as Java", "Visual plans");
+        assertThat(robot.lookup(".k-feature-title").queryAllAs(Label.class)).extracting(Label::getText)
+                .containsExactly("Objects", "Query", "Indexes", "Full-text", "Vectors", "Transactions", "Operations", "Studio");
         Shots.save(robot.lookup("#about-github").query().getScene(), "10-about");
         robot.clickOn("#about-github");
         robot.clickOn("#about-email");

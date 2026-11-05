@@ -116,6 +116,10 @@ class Chunks {
             size = n + 1;
         }
 
+        int size() {
+            return size;
+        }
+
         /** Last element, or -1 when empty. */
         int last() {
             int n = size;

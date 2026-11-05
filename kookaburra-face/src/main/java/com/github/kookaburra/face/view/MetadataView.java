@@ -41,11 +41,14 @@ public class MetadataView extends BorderPane {
 
         fields.setId("meta-fields");
         fields.setPlaceholder(new Label("Select a class"));
-        fields.getColumns().add(column("field", ClassMeta.FieldMeta::path, 130));
-        fields.getColumns().add(column("type", ClassMeta.FieldMeta::type, 130));
-        fields.getColumns().add(column("index", ClassMeta.FieldMeta::index, 60));
-        fields.getColumns().add(column("declared in", ClassMeta.FieldMeta::declaredIn, 80));
-        fields.getColumns().add(column("constraint", ClassMeta.FieldMeta::constraint, 170));
+        fields.getColumns().add(column("field", ClassMeta.FieldMeta::path, 120));
+        fields.getColumns().add(column("type", ClassMeta.FieldMeta::type, 110));
+        fields.getColumns().add(column("index", ClassMeta.FieldMeta::index, 70));
+        fields.getColumns().add(column("declared in", ClassMeta.FieldMeta::declaredIn, 90));
+        fields.getColumns().add(column("constraint", ClassMeta.FieldMeta::constraint, 140));
+        fields.getColumns().add(column("comment", ClassMeta.FieldMeta::comment, 130));
+        fields.getColumns().get(2).setMinWidth(80);                 // AUTO, BITMAP, ORDINAL stay readable
+        fields.getColumns().get(3).setMinWidth(84);
         fields.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
         // facts on top, the field table takes all remaining height and scrolls by itself
         setTop(top);
@@ -78,7 +81,10 @@ public class MetadataView extends BorderPane {
         row = fact(row, "subclasses", m.subclasses().isEmpty() ? "none" : String.join(", ", m.subclasses()));
         row = fact(row, "@Id / @Version", m.idField() + " / " + (m.versionField() == null ? "none" : m.versionField()));
         row = fact(row, "layouts", String.valueOf(m.layouts()));
-        fact(row, "objects", String.valueOf(m.count()));
+        row = fact(row, "objects", String.valueOf(m.count()));
+        if (!m.comment().isEmpty()) {
+            fact(row, "comment", m.comment());
+        }
         fields.getItems().setAll(m.fields());
     }
 

@@ -5,13 +5,17 @@ import com.github.kookaburra.WriteBatch;
 import com.github.kookaburra.annotation.VectorDistance;
 import com.github.kookaburra.dynamic.DynField;
 import com.github.kookaburra.dynamic.DynamicObject;
+import com.github.kookaburra.embed.Reranker;
 import com.github.kookaburra.exec.Aggregator;
 import com.github.kookaburra.exec.Cond;
 import com.github.kookaburra.exec.Executor;
 import com.github.kookaburra.exec.Planner;
+import com.github.kookaburra.exec.Profile;
 import com.github.kookaburra.exec.QueryHost;
 import com.github.kookaburra.exec.ReadView;
 import com.github.kookaburra.exec.SegmentView;
+import com.github.kookaburra.exec.TextIndex;
+import com.github.kookaburra.field.AbstractField;
 import com.github.kookaburra.field.BoolGetter;
 import com.github.kookaburra.field.CollectionGetter;
 import com.github.kookaburra.field.ComparableField;
@@ -35,13 +39,19 @@ import com.github.kookaburra.mapping.Schema;
 import com.github.kookaburra.mapping.TypeDef;
 import com.github.kookaburra.mapping.ValueType;
 import com.github.kookaburra.mapping.Vectors;
+import com.github.kookaburra.text.Analyzers;
+import com.github.kookaburra.text.TextQuery;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
@@ -112,8 +122,36 @@ public class QueryStream<T> {
     /** Nearest-neighbour ordering, or null. */
     private final Nearest nearest;
 
-    /** Order by distance of the vector at {@code path} to {@code query} ({@code distance} null = the field's). */
-    private record Nearest(String path, float[] query, VectorDistance distance) {
+    /**
+     * Order by distance of the vector at {@code path} to {@code query} ({@code distance} null = the field's);
+     * {@code candidates}: HNSW candidates per segment, -1 = {@code kookaburra.vector-ef-search}, 0 = exact search.
+     */
+    private record Nearest(String path, float[] query, VectorDistance distance, int candidates, String text, Post post) {
+
+        Nearest with(int c) {
+            return new Nearest(path, query, distance, c, text, post);
+        }
+
+        Nearest with(Post p) {
+            return new Nearest(path, query, distance, candidates, text, p);
+        }
+    }
+
+    /** Re-ordering of the closest {@code fetch} candidates (0 = {@code max(20, 4 k)}). */
+    private sealed interface Post permits Diverse, Rerank, Hybrid {
+        int fetch();
+    }
+
+    /** Maximal marginal relevance: {@code lambda} 1 = closest only, 0 = most different only. */
+    private record Diverse(double lambda, int fetch) implements Post {
+    }
+
+    /** Fusion with a full-text search of {@code field} for {@code query} (null = the nearest(…, text) query). */
+    private record Hybrid(String field, String query, int fetch) implements Post {
+    }
+
+    /** Re-scoring of the candidates' text at {@code field} against {@code query} (null = the nearest(…, text) query). */
+    private record Rerank(String field, String query, int fetch) implements Post {
     }
 
     /** Internal: created by the database or a snapshot ({@code fixed} = snapshot view, or null). */
@@ -250,6 +288,20 @@ public class QueryStream<T> {
         return new Where<>(this, Q.whereAny(list, element));
     }
 
+    /**
+     * Objects with at least one element of the embedded list meeting every condition, all on the same element (as
+     * MongoDB's {@code $elemMatch} or a JPQL {@code JOIN o.lines l WHERE l.sku = 'A' AND l.qty > 5}):
+     * {@code whereElement(Order::getLines, e -> e.where(Line::getSku).eq("A").where(Line::getQty).gt(5))}.
+     * Equalities narrow the candidates through the index of the element path; the conditions are then checked on
+     * each element.
+     */
+    public <E> QueryStream<T> whereElement(CollectionGetter<T, E> list, Consumer<ElementQuery<E>> conditions) {
+        AbstractField<T, ?> field = Fields.listOf(list);                      // a wrong list is reported first
+        ElementQuery<E> q = new ElementQuery<>();
+        conditions.accept(q);
+        return filter(new Pred.ElemMatch<>(field, q.conditions()));
+    }
+
     /** Dynamic queries: condition on a stored path, {@code people.query().where("home.city").eq("Perth")}. */
     @SuppressWarnings("unchecked")
     public Where<T, Object> where(String path) {
@@ -283,6 +335,20 @@ public class QueryStream<T> {
         return nearest(Fields.of(getter), query, null);
     }
 
+    /**
+     * Orders by distance to the embedding of {@code text} by the configured embedder ({@code kookaburra.embedder},
+     * e.g. Ollama): semantic search, {@code nearest(Doc::getEmbedding, "how to bake bread", 10)}.
+     */
+    public QueryStream<T> nearest(VectorGetter<T> getter, String text) {
+        QueryStream<T> q = nearest(Fields.of(getter), host.embed(Objects.requireNonNull(text, "text")), null);
+        return q.withNearest(new Nearest(q.nearest.path(), q.nearest.query(), null, -1, text, null));
+    }
+
+    /** The {@code k} results closest to the embedding of {@code text}. */
+    public QueryStream<T> nearest(VectorGetter<T> getter, String text, int k) {
+        return nearest(getter, text).limit(k);
+    }
+
     /** The {@code k} results closest to {@code query}: {@code nearest(getter, query).limit(k)}. */
     public QueryStream<T> nearest(VectorGetter<T> getter, float[] query, int k) {
         return nearest(getter, query).limit(k);
@@ -309,19 +375,137 @@ public class QueryStream<T> {
     private QueryStream<T> nearestPath(String path, float[] query, VectorDistance distance) {
         require(stage == FILTERING, "nearest() must follow the filters and come before skip() / limit(), once");
         float[] q = Vectors.of(Objects.requireNonNull(query, "query"), "nearest query");
-        return new QueryStream<>(host, target, fixed, filters, keys, skip, limit, SORTED, fetches, new Nearest(path, q, distance));
+        return new QueryStream<>(host, target, fixed, filters, keys, skip, limit, SORTED, fetches, new Nearest(path, q, distance, -1, null, null));
+    }
+
+    /**
+     * Candidates the approximate search keeps per segment ({@code ef}, like {@code num_candidates} in Elasticsearch
+     * or {@code hnsw.ef_search} in pgvector): more finds the true nearest neighbours more often, at some cost. At
+     * least {@code k} are kept. Default {@code kookaburra.vector-ef-search}.
+     */
+    public QueryStream<T> numCandidates(int n) {
+        require(nearest != null && nearest.query() != null, "numCandidates() needs nearest(...)");
+        require(n > 0, "numCandidates must be positive");
+        return withNearest(nearest.with(n));
+    }
+
+    /**
+     * Exact search: compares the query with every matching vector instead of searching the HNSW graphs (always the
+     * true nearest neighbours; slower on large collections without a selective filter).
+     */
+    public QueryStream<T> exact() {
+        require(nearest != null && nearest.query() != null, "exact() needs nearest(...)");
+        return withNearest(nearest.with(0));
+    }
+
+    // ---------------------------------------------------------------- full-text search: .search(Doc::getBody, "bread", 10)
+
+    /**
+     * Full-text relevance search: the objects whose text contains any word of {@code text}, most relevant first by
+     * BM25 (Lucene's scoring; rare words weigh more, short texts with the word rank higher). Uses the field's
+     * {@code @FullText} index, else splits the rows. Follow with {@code limit(k)}; {@code listWithDistance()} gives
+     * the scores. For a filter that needs every word use {@code where(field).matches(text)}.
+     */
+    public QueryStream<T> search(StringGetter<T> getter, String text) {
+        return search(Fields.of(getter).path(), text);
+    }
+
+    /** The {@code k} most relevant results: {@code search(getter, text).limit(k)}. */
+    public QueryStream<T> search(StringGetter<T> getter, String text, int k) {
+        return search(getter, text).limit(k);
+    }
+
+    /** Same by dotted path (dynamic objects, OQL). */
+    public QueryStream<T> search(String path, String text) {
+        require(stage == FILTERING, "search() must follow the filters and come before skip() / limit(), once");
+        TextQuery.parse(text);                                          // fails early on a query without words
+        return new QueryStream<>(host, target, fixed, filters, keys, skip, limit, SORTED, fetches,
+                new Nearest(Objects.requireNonNull(path, "path"), null, null, -1, text, null));
+    }
+
+    /**
+     * Hybrid search: fuses this vector search with a full-text search of {@code text} for the same query text by
+     * reciprocal rank fusion ({@code 1 / (60 + rank)} summed over both lists, as Elasticsearch's RRF retriever), from
+     * the best {@code max(20, 4 k)} of each. Needs {@code nearest(field, "text", k)}.
+     */
+    public QueryStream<T> hybrid(StringGetter<T> text) {
+        return hybrid(Fields.of(text).path(), null, 0);
+    }
+
+    /**
+     * @param query the full-text query (null = the text given to {@code nearest})
+     * @param fetch results taken from each list (0 = {@code max(20, 4 k)})
+     */
+    public QueryStream<T> hybrid(String textPath, String query, int fetch) {
+        require(nearest != null && nearest.query() != null, "hybrid() needs nearest(...)");
+        require(query != null || nearest.text() != null, "hybrid() needs the query text: nearest(field, \"text\", k) or hybrid(field, query, fetch)");
+        require(fetch >= 0, "negative fetch");
+        TextQuery.parse(query != null ? query : nearest.text());
+        return withNearest(nearest.with(new Hybrid(Objects.requireNonNull(textPath, "text"), query, fetch)));
+    }
+
+    /**
+     * Diverse results with maximal marginal relevance (as LangChain's {@code max_marginal_relevance_search}): from the
+     * closest {@code max(20, 4 k)} candidates, picks one by one the object that is close to the query and far from
+     * those already picked; {@code lambda} 0.5. Needs a limit.
+     */
+    public QueryStream<T> diverse() {
+        return diverse(0.5, 0);
+    }
+
+    /**
+     * @param lambda 1 = closest only (plain order), 0 = as different as possible
+     * @param fetch  candidates considered (0 = {@code max(20, 4 k)})
+     */
+    public QueryStream<T> diverse(double lambda, int fetch) {
+        require(nearest != null && nearest.query() != null, "diverse() needs nearest(...)");
+        require(lambda >= 0 && lambda <= 1, "lambda must be between 0 and 1");
+        require(fetch >= 0, "negative fetch");
+        return withNearest(nearest.with(new Diverse(lambda, fetch)));
+    }
+
+    /**
+     * Re-orders the closest candidates by a reranker model ({@code kookaburra.reranker}, e.g. Ollama) that reads the
+     * query text and each candidate's {@code text} field: the order of a cross-encoder, the speed of the vector
+     * search for the first pass. The query is the text of {@code nearest(field, "text", k)}. Needs a limit.
+     */
+    public QueryStream<T> rerank(StringGetter<T> text) {
+        return rerank(text, null, 0);
+    }
+
+    /**
+     * @param query the query text (null = the text given to {@code nearest})
+     * @param fetch candidates re-scored (0 = {@code max(20, 4 k)})
+     */
+    public QueryStream<T> rerank(StringGetter<T> text, String query, int fetch) {
+        return rerank(Fields.of(text).path(), query, fetch);
+    }
+
+    /** Same by dotted path (dynamic objects). */
+    public QueryStream<T> rerank(String textPath, String query, int fetch) {
+        require(nearest != null, "rerank() needs nearest(...) or search(...)");
+        require(query != null || nearest.text() != null, "rerank() needs the query text: nearest(field, \"text\", k) or rerank(field, query, fetch)");
+        require(fetch >= 0, "negative fetch");
+        return withNearest(nearest.with(new Rerank(Objects.requireNonNull(textPath, "text"), query, fetch)));
+    }
+
+    private QueryStream<T> withNearest(Nearest n) {
+        return new QueryStream<>(host, target, fixed, filters, keys, skip, limit, stage, fetches, n);
     }
 
     /** Results of a {@link #nearest} search with their distances, closest first. */
     public List<Neighbor<T>> listWithDistance() {
-        require(nearest != null, "listWithDistance() needs nearest(...)");
+        require(nearest != null, "listWithDistance() needs nearest(...) or search(...)");
         try (Run r = run()) {
             List<Neighbor<T>> out = new ArrayList<>();
             List<T> objects = new ArrayList<>();
-            for (Executor.Near n : r.near()) {
+            List<Executor.Near> near = r.near();
+            for (Executor.Near n : near) {
                 T o = target.result().materialize(host, n.hit().view(), n.hit().doc());
                 objects.add(o);
-                out.add(new Neighbor<>(o, n.distance()));
+                Double score = r.scores == null ? null : r.scores.get(n);
+                double distance = nearest.query() == null ? Double.NaN : n.distance();    // a text search has no distance
+                out.add(new Neighbor<>(o, distance, score == null ? Double.NaN : score));
             }
             preload(r, objects);
             return out;
@@ -540,66 +724,188 @@ public class QueryStream<T> {
         return Optional.ofNullable((V) aggregate(Q.max(field)).get(0));
     }
 
-    /** Query plan in text form (design §10.5). */
+    /** The query plan as text: the steps as a tree, the access path of every condition (see {@link #plan()}). */
     public String explain() {
+        return plan().render();
+    }
+
+    /** Runs the query and returns the plan with actual rows and times per step as text (see {@link #analyze()}). */
+    public String explainAnalyze() {
+        return analyze().render();
+    }
+
+    /**
+     * The plan without running the query: the steps (filter per segment, ordering, slicing) and how each condition
+     * is answered (which index, or a scan of the rows), as PostgreSQL's {@code EXPLAIN}.
+     */
+    public QueryPlan plan() {
         try (Run r = run()) {
-            StringBuilder sb = new StringBuilder();
-            List<SegmentView> views = r.ex.views();
-            sb.append("QUERY ").append(target.label()).append("  snapshot=seq ").append(r.view.seq())
-                    .append("  segments=").append(views.size());
-            if (!views.isEmpty()) {
-                sb.append(" (").append(String.join(", ", views.stream().map(SegmentView::label).toList())).append(')');
-            }
-            sb.append('\n');
-            if (r.types != null) {
-                sb.append("TYPE IN ").append(r.types).append('\n');
-            }
-            sb.append("FILTER");
-            if (r.cond instanceof Cond.Const c && c.value()) {
-                sb.append(" none\n");
-            } else {
-                sb.append('\n');
-                describe(sb, r.cond, views.isEmpty() ? null : views.get(0), "  ");
-            }
-            if (nearest != null) {
-                TypeDef t = r.planner.typeOf(r.planner.storedPath(nearest.path()));
-                VectorDistance d = nearest.distance() != null ? nearest.distance()
-                        : t != null && t.kind() == ValueType.VECTOR ? t.distance() : null;
-                sb.append("NEAREST ").append(nearest.path()).append(" by ").append(d).append(" to a ")
-                        .append(nearest.query().length).append("-dim vector  [exact scan of the filtered objects")
-                        .append(limit >= 0 ? ", top-N heap]" : ", full sort]").append('\n');
-            }
-            if (!keys.isEmpty()) {
-                sb.append("SORT ").append(String.join(", ", keys.stream().map(Order.Key::toString).toList()))
-                        .append(limit >= 0 ? "  [top-N heap]" : "  [full sort]").append('\n');
-            }
-            if (skip > 0 || limit >= 0) {
-                sb.append("SLICE skip=").append(skip).append(" limit=").append(limit < 0 ? "all" : limit).append('\n');
-            }
-            return sb.toString();
+            return new QueryPlan(build(r, null, null), false);
         }
     }
 
-    private static void describe(StringBuilder sb, Cond c, SegmentView v, String indent) {
-        if (c instanceof Cond.And a) {
-            sb.append(indent).append("AND\n");
-            a.conds().forEach(x -> describe(sb, x, v, indent + "  "));
-        } else if (c instanceof Cond.Or o) {
-            sb.append(indent).append("OR\n");
-            o.conds().forEach(x -> describe(sb, x, v, indent + "  "));
-        } else if (c instanceof Cond.Not n) {
-            sb.append(indent).append("NOT\n");
-            describe(sb, n.cond(), v, indent + "  ");
-        } else {
-            sb.append(indent).append(c);
-            if (v != null) {
-                String access = Executor.access(c, v);
-                if (!access.isEmpty()) {
-                    sb.append("  [").append(access).append(']');
-                }
+    /**
+     * Runs the query (materializing the results, as {@code list()}) and returns the plan with the actual rows and
+     * time of every step, as PostgreSQL's {@code EXPLAIN ANALYZE}.
+     */
+    public QueryPlan analyze() {
+        try (Run r = run()) {
+            Profile p = new Profile();
+            r.ex.profile(p);
+            long start = System.nanoTime();
+            List<Executor.Hit> hits = r.hits();
+            long found = System.nanoTime();
+            for (Executor.Hit h : hits) {
+                target.result().materialize(host, h.view(), h.doc());
             }
-            sb.append('\n');
+            long end = System.nanoTime();
+            long[] times = {end - start, found - start, end - found, hits.size()};
+            return new QueryPlan(build(r, p, times), true);
         }
+    }
+
+    /**
+     * The step tree: Query → [Limit] → [re-ordering] → [ranking or sort] → Filter → one step per segment view →
+     * its conditions. {@code times}: total, finding, materializing, results (analyze only).
+     */
+    private QueryPlan.Step build(Run r, Profile p, long[] times) {
+        List<SegmentView> views = r.ex.views();
+        boolean analyzed = p != null;
+        long objects = views.stream().mapToLong(SegmentView::size).sum();
+
+        // filter, one step per view
+        List<QueryPlan.Step> viewSteps = new ArrayList<>();
+        if (analyzed) {
+            for (Profile.View v : p.views()) {
+                List<QueryPlan.Step> conds = nest(v.conditions());
+                viewSteps.add(new QueryPlan.Step(v.label(), objects(v.size()),
+                        QueryPlan.Access.NONE, v.candidates(), v.matched(), v.nanos(), conds));
+            }
+        } else {
+            for (SegmentView v : views) {
+                List<QueryPlan.Step> conds = new ArrayList<>();
+                if (!(r.cond instanceof Cond.Const)) {
+                    conds.add(describe(r.cond, v));
+                }
+                viewSteps.add(new QueryPlan.Step(v.label(), objects(v.size()),
+                        QueryPlan.Access.NONE, conds));
+            }
+        }
+        String filterText = r.cond instanceof Cond.Const c ? (c.value() ? "all objects" : "no objects") : r.cond.toString();
+        if (r.types != null) {
+            Schema schema = host.registry().schema();
+            List<String> names = r.types.stream().map(id -> schema.byId(id).simpleName()).sorted().toList();
+            filterText = "TYPE IN " + names + (r.cond instanceof Cond.Const ? "" : " AND " + filterText);
+        }
+        QueryPlan.Step step = new QueryPlan.Step("Filter", filterText, QueryPlan.Access.NONE,
+                analyzed ? objects : -1, analyzed ? p.matched() : -1, analyzed ? p.filterNanos() : -1, viewSteps);
+
+        long ordered = analyzed ? times[3] : -1;
+        long orderNanos = analyzed ? Math.max(0, times[1] - p.filterNanos()) : -1;
+        long matched = analyzed ? p.matched() : -1;
+        if (nearest != null && nearest.query() == null) {
+            String stored = r.planner.storedPath(nearest.path());
+            List<QueryPlan.Step> per = new ArrayList<>();
+            for (SegmentView v : views) {
+                TextIndex ti = v.text(stored);
+                per.add(new QueryPlan.Step(v.label(), ti != null ? "[" + ti.describe() + "]" : "[scan: words of each row]",
+                        ti != null ? QueryPlan.Access.FULLTEXT : QueryPlan.Access.SCAN, List.of()));
+            }
+            List<QueryPlan.Step> kids = new ArrayList<>(per);
+            kids.add(step);
+            step = new QueryPlan.Step("Full-text search", nearest.path() + " for '" + nearest.text() + "', any word, BM25 relevance"
+                    + (limit >= 0 ? ", top-N heap" : ", full sort"), QueryPlan.Access.FULLTEXT, matched, ordered, orderNanos, kids);
+        } else if (nearest != null) {
+            TypeDef t = r.planner.typeOf(r.planner.storedPath(nearest.path()));
+            VectorDistance d = nearest.distance() != null ? nearest.distance()
+                    : t != null && t.kind() == ValueType.VECTOR ? t.distance() : null;
+            String stored = r.planner.storedPath(nearest.path());
+            long bound = limit < 0 ? -1 : skip + limit;
+            List<QueryPlan.Step> kids = new ArrayList<>();
+            for (SegmentView v : views) {
+                String access = Executor.nearestAccess(v, stored, nearest.query().length, d, bound, r.candidates());
+                kids.add(new QueryPlan.Step(v.label(), "[" + access + "]", access.startsWith("HNSW") ? QueryPlan.Access.VECTOR
+                        : access.contains("rows") ? QueryPlan.Access.SCAN : QueryPlan.Access.VECTOR, List.of()));
+            }
+            kids.add(step);
+            step = new QueryPlan.Step("Nearest", nearest.path() + " by " + d + " to a " + nearest.query().length + "-dim vector"
+                    + (limit >= 0 ? ", top-N heap" : ", full sort"), QueryPlan.Access.VECTOR, matched, ordered, orderNanos, kids);
+        } else if (!keys.isEmpty()) {
+            step = new QueryPlan.Step(limit >= 0 ? "Top-N sort" : "Sort", String.join(", ", keys.stream().map(Order.Key::toString).toList()),
+                    QueryPlan.Access.PROCESS, matched, ordered, orderNanos, List.of(step));
+        }
+        Post post = nearest == null ? null : nearest.post();
+        if (post != null) {
+            String fetch = post.fetch() > 0 ? String.valueOf(post.fetch()) : "max(20, 4 k)";
+            String[] op = post instanceof Diverse dv ? new String[]{"Diverse", "maximal marginal relevance, lambda=" + dv.lambda() + ", from " + fetch + " candidates"}
+                    : post instanceof Hybrid hy ? new String[]{"Hybrid", "full-text search of " + hy.field() + ", reciprocal rank fusion k=60, " + fetch + " from each"}
+                    : new String[]{"Rerank", "by " + ((Rerank) post).field() + " with " + (host.reranker() == null ? "no reranker configured"
+                    : host.reranker().describe()) + ", " + fetch + " candidates"};
+            step = new QueryPlan.Step(op[0], op[1], QueryPlan.Access.PROCESS, List.of(step));
+        }
+        if (skip > 0 || limit >= 0) {
+            step = new QueryPlan.Step("Limit", (skip > 0 ? "skip " + skip + ", then " : "") + (limit < 0 ? "all" : String.valueOf(limit)),
+                    QueryPlan.Access.PROCESS, -1, ordered, -1, List.of(step));
+        }
+        if (analyzed) {
+            step = new QueryPlan.Step("Fetch objects", "materialize the results", QueryPlan.Access.PROCESS, -1, times[3], times[2], List.of(step));
+        }
+        return new QueryPlan.Step("Query", target.label() + " · snapshot " + r.view.seq() + " · " + views.size()
+                + (views.size() == 1 ? " segment" : " segments"), QueryPlan.Access.NONE, -1, analyzed ? times[3] : -1,
+                analyzed ? times[0] : -1, List.of(step));
+    }
+
+    private static String objects(long n) {
+        return String.format(Locale.ROOT, "%,d %s", n, n == 1 ? "object" : "objects");
+    }
+
+    /** A condition as plan steps (no counts). */
+    private static QueryPlan.Step describe(Cond c, SegmentView v) {
+        if (c instanceof Cond.And a) {
+            return new QueryPlan.Step("AND", "", QueryPlan.Access.NONE, a.conds().stream().map(x -> describe(x, v)).toList());
+        }
+        if (c instanceof Cond.Or o) {
+            return new QueryPlan.Step("OR", "", QueryPlan.Access.NONE, o.conds().stream().map(x -> describe(x, v)).toList());
+        }
+        if (c instanceof Cond.Not n) {
+            return new QueryPlan.Step("NOT", "", QueryPlan.Access.NONE, List.of(describe(n.cond(), v)));
+        }
+        String access = Executor.access(c, v);
+        return new QueryPlan.Step(c.toString(), bracket(access), access(access), List.of());
+    }
+
+    /** Measured conditions (flat, with depths) as nested steps. */
+    private static List<QueryPlan.Step> nest(List<Profile.Condition> flat) {
+        List<QueryPlan.Step> out = new ArrayList<>();
+        int[] at = {0};
+        while (at[0] < flat.size()) {
+            out.add(nest(flat, at));
+        }
+        return out;
+    }
+
+    private static QueryPlan.Step nest(List<Profile.Condition> flat, int[] at) {
+        Profile.Condition c = flat.get(at[0]++);
+        List<QueryPlan.Step> kids = new ArrayList<>();
+        while (at[0] < flat.size() && flat.get(at[0]).depth() > c.depth()) {
+            kids.add(nest(flat, at));
+        }
+        boolean group = c.text().equals("AND") || c.text().equals("OR") || c.text().equals("NOT");
+        return new QueryPlan.Step(c.text(), group ? "" : bracket(c.access()), group ? QueryPlan.Access.NONE : access(c.access()),
+                c.in(), c.out(), c.nanos(), kids);
+    }
+
+    /** {@code [postings]}; a row scan says so plainly. */
+    private static String bracket(String access) {
+        return access.isEmpty() ? "" : access.equals("scan") ? "[scan: reads each row]" : "[" + access + "]";
+    }
+
+    /** Access kind of an access description. */
+    private static QueryPlan.Access access(String description) {
+        if (description.startsWith("scan") || description.startsWith("decode")) {
+            return QueryPlan.Access.SCAN;
+        }
+        return description.contains("full-text") ? QueryPlan.Access.FULLTEXT : QueryPlan.Access.INDEX;
     }
 
     // ---------------------------------------------------------------- internals
@@ -700,6 +1006,9 @@ public class QueryStream<T> {
         List<Executor.Near> near() {
             String path = planner.storedPath(nearest.path());
             TypeDef t = planner.typeOf(path);
+            if (nearest.query() == null) {
+                return textSearch(path, t);
+            }
             if (t == null || t.kind() != ValueType.VECTOR) {
                 throw new IllegalArgumentException("nearest(): '" + nearest.path() + "' of " + target.label()
                         + " is not a vector field" + (t == null ? "" : " (" + t + ")"));
@@ -709,7 +1018,156 @@ public class QueryStream<T> {
                         + " dimensions, " + nearest.path() + " has " + t.dim());
             }
             VectorDistance d = nearest.distance() != null ? nearest.distance() : t.distance();
-            return ex.nearest(path, nearest.query(), d, skip, limit);
+            Post post = nearest.post();
+            if (post == null) {
+                return ex.nearest(path, nearest.query(), d, skip, limit, candidates());
+            }
+            if (limit < 0) {
+                throw new IllegalStateException((post instanceof Diverse ? "diverse()" : "rerank()") + " needs a limit: nearest(field, query, k)");
+            }
+            int k = (int) Math.min(Integer.MAX_VALUE, skip + limit);
+            int fetch = Math.max(k, post.fetch() > 0 ? post.fetch() : Math.max(20, 4 * k));
+            List<Executor.Near> pool = ex.nearest(path, nearest.query(), d, 0, fetch, candidates());
+            List<Executor.Near> ordered = post instanceof Diverse dv ? mmr(pool, path, d, dv.lambda(), k)
+                    : post instanceof Hybrid h ? fuse(pool, h, fetch, path, d, k) : rerank(pool, (Rerank) post, k);
+            return ordered.subList((int) Math.min(skip, ordered.size()), ordered.size());
+        }
+
+        /** Scores of the last search, rerank or fusion (for listWithDistance). */
+        Map<Executor.Near, Double> scores;
+
+        /** Full-text search of {@code path}, by BM25; rerank applies to it as to a vector search. */
+        private List<Executor.Near> textSearch(String path, TypeDef t) {
+            if (t == null || t.kind() != ValueType.STRING) {
+                throw new IllegalArgumentException("search(): '" + nearest.path() + "' of " + target.label()
+                        + " is not a string field" + (t == null ? "" : " (" + t + ")"));
+            }
+            TextQuery q = TextQuery.parse(nearest.text(), Analyzers.get(t.name()));
+            Post post = nearest.post();
+            List<Executor.Near> found;
+            if (post == null) {
+                found = ex.search(path, q, skip, limit);
+            } else {
+                if (limit < 0) {
+                    throw new IllegalStateException("rerank() needs a limit: search(field, text, k)");
+                }
+                int k = (int) Math.min(Integer.MAX_VALUE, skip + limit);
+                int fetch = Math.max(k, post.fetch() > 0 ? post.fetch() : Math.max(20, 4 * k));
+                List<Executor.Near> ordered = rerank(ex.search(path, q, 0, fetch), (Rerank) post, k);
+                return ordered.subList((int) Math.min(skip, ordered.size()), ordered.size());
+            }
+            scores = new HashMap<>();
+            found.forEach(n -> scores.put(n, -n.distance()));
+            return found;
+        }
+
+        /**
+         * Reciprocal rank fusion of the vector candidates and the full-text results (constant 60, as Elasticsearch):
+         * the best {@code k}; objects found only by text get their vector distance (NaN without a vector).
+         */
+        private List<Executor.Near> fuse(List<Executor.Near> vector, Hybrid h, int fetch, String vectorPath, VectorDistance d, int k) {
+            String textPath = planner.storedPath(h.field());
+            TypeDef tt = planner.typeOf(textPath);
+            if (tt == null || tt.kind() != ValueType.STRING) {
+                throw new IllegalArgumentException("hybrid(): '" + h.field() + "' of " + target.label() + " is not a string field");
+            }
+            TextQuery q = TextQuery.parse(h.query() != null ? h.query() : nearest.text(), Analyzers.get(tt.name()));
+            List<Executor.Near> text = ex.search(textPath, q, 0, fetch);
+            Map<Long, Double> rrf = new HashMap<>();
+            Map<Long, Executor.Near> byOrder = new LinkedHashMap<>();
+            for (int i = 0; i < vector.size(); i++) {
+                Executor.Near n = vector.get(i);
+                rrf.merge(n.order(), 1.0 / (60 + i + 1), Double::sum);
+                byOrder.put(n.order(), n);
+            }
+            for (int i = 0; i < text.size(); i++) {
+                Executor.Near n = text.get(i);
+                rrf.merge(n.order(), 1.0 / (60 + i + 1), Double::sum);
+                byOrder.computeIfAbsent(n.order(), o -> {
+                    Object v = Executor.value(n.hit(), vectorPath);
+                    double dist = v instanceof float[] f && f.length == nearest.query().length ? d.distance(f, nearest.query()) : Double.NaN;
+                    return new Executor.Near(n.hit(), dist, o);
+                });
+            }
+            List<Executor.Near> all = new ArrayList<>(byOrder.values());
+            all.sort(Comparator.comparingDouble((Executor.Near n) -> -rrf.get(n.order())).thenComparingLong(Executor.Near::order));
+            scores = new HashMap<>();
+            List<Executor.Near> out = new ArrayList<>();
+            for (int i = 0; i < Math.min(k, all.size()); i++) {
+                out.add(all.get(i));
+                scores.put(all.get(i), rrf.get(all.get(i).order()));
+            }
+            return out;
+        }
+
+        /** Greedy maximal marginal relevance over {@code pool} (closest first): {@code k} picks. */
+        private List<Executor.Near> mmr(List<Executor.Near> pool, String path, VectorDistance d, double lambda, int k) {
+            List<float[]> vectors = new ArrayList<>();
+            for (Executor.Near n : pool) {
+                vectors.add((float[]) Executor.value(n.hit(), path));
+            }
+            List<Executor.Near> picked = new ArrayList<>();
+            List<Integer> pickedIdx = new ArrayList<>();
+            boolean[] used = new boolean[pool.size()];
+            while (picked.size() < Math.min(k, pool.size())) {
+                int best = -1;
+                double bestScore = Double.NEGATIVE_INFINITY;
+                for (int i = 0; i < pool.size(); i++) {
+                    if (used[i]) {
+                        continue;
+                    }
+                    double nearestPicked = Double.POSITIVE_INFINITY;    // distance to the closest picked object
+                    for (int j : pickedIdx) {
+                        nearestPicked = Math.min(nearestPicked, d.distance(vectors.get(i), vectors.get(j)));
+                    }
+                    double score = pickedIdx.isEmpty() ? -pool.get(i).distance()
+                            : -lambda * pool.get(i).distance() + (1 - lambda) * nearestPicked;
+                    if (Double.isNaN(score)) {
+                        score = Double.NEGATIVE_INFINITY;
+                    }
+                    if (best < 0 || score > bestScore) {
+                        best = i;
+                        bestScore = score;
+                    }
+                }
+                used[best] = true;
+                picked.add(pool.get(best));
+                pickedIdx.add(best);
+            }
+            return picked;
+        }
+
+        /** The candidates ordered by the reranker's score (ties: vector order), the best {@code k}. */
+        private List<Executor.Near> rerank(List<Executor.Near> pool, Rerank r, int k) {
+            Reranker reranker = host.reranker();
+            if (reranker == null) {
+                throw new IllegalStateException("no reranker configured: set kookaburra.reranker=ollama and kookaburra.reranker-model,"
+                        + " or Config.withReranker(...)");
+            }
+            String field = planner.storedPath(r.field());
+            List<String> texts = new ArrayList<>();
+            for (Executor.Near n : pool) {
+                Object v = Executor.value(n.hit(), field);
+                texts.add(v == null ? "" : String.valueOf(v));
+            }
+            double[] score = pool.isEmpty() ? new double[0] : reranker.score(r.query() != null ? r.query() : nearest.text(), texts);
+            Integer[] order = new Integer[pool.size()];
+            for (int i = 0; i < order.length; i++) {
+                order[i] = i;
+            }
+            Arrays.sort(order, (a, b) -> Double.compare(score[b], score[a]));
+            scores = new HashMap<>();
+            List<Executor.Near> out = new ArrayList<>();
+            for (int i = 0; i < Math.min(k, order.length); i++) {
+                Executor.Near n = pool.get(order[i]);
+                out.add(n);
+                scores.put(n, score[order[i]]);
+            }
+            return out;
+        }
+
+        int candidates() {
+            return nearest.candidates() < 0 ? host.vectorEfSearch() : nearest.candidates();
         }
 
         List<Executor.SortKey> sortKeys() {

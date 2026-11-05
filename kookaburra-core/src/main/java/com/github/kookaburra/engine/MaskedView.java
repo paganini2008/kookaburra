@@ -2,6 +2,8 @@ package com.github.kookaburra.engine;
 
 import com.github.kookaburra.exec.ColumnIndex;
 import com.github.kookaburra.exec.SegmentView;
+import com.github.kookaburra.exec.TextIndex;
+import com.github.kookaburra.exec.VectorColumn;
 import com.github.kookaburra.mapping.Record;
 import org.roaringbitmap.RoaringBitmap;
 
@@ -88,6 +90,16 @@ class MaskedView implements SegmentView {
     @Override
     public ColumnIndex index(String path) {
         return base.index(path);
+    }
+
+    @Override
+    public TextIndex text(String path) {
+        return base.text(path);
+    }
+
+    @Override
+    public VectorColumn vectors(String path) {
+        return base.vectors(path);
     }
 
     @Override

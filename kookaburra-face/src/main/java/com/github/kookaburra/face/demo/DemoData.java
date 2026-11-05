@@ -54,6 +54,7 @@ public class DemoData {
         Random r = new Random(seed);
         Random n = new Random(seed * 31 + 7);              // nested examples: separate stream, base values stay stable
         Random v = new Random(seed * 17 + 3);              // embeddings: separate stream as well
+        Random d = new Random(seed * 31 + 7);              // descriptions: separate stream, other values unchanged
         List<Long> customerOids = new ArrayList<>();
         try (WriteBatch b = db.batch()) {
             for (int i = 0; i < customers; i++) {
@@ -102,6 +103,7 @@ public class DemoData {
             p.price = BigDecimal.valueOf(Math.round(r.nextDouble() * 50_000), 2);
             p.photo = photo(i, p.title);
             p.embedding = embedding(i % 3, v);
+            p.description = description(i % 3, d);
             productOids.add(db.insert(p));
             prices.add(p.price);
         }
@@ -126,6 +128,27 @@ public class DemoData {
     }
 
     /** Cluster centres on the axes {@code [reading, tech, home, outdoor]}: book, gadget, item. */
+    /** Phrases per cluster (books, gadgets, home items) for product descriptions. */
+    private static final String[][][] PHRASES = {
+            {{"A gripping mystery novel", "A history of ancient Rome", "A cookbook of Italian baking", "A science fiction classic",
+                    "A travel guide to Japan", "A children's picture book"},
+                    {"with a twist on every page", "for curious readers", "with photographs and maps", "in a new paperback edition",
+                            "loved by book clubs", "with recipes for bread and pastry"}},
+            {{"Wireless noise cancelling headphones", "A compact mechanical keyboard", "A smart watch with GPS",
+                    "A portable solar charger", "A 4K action camera", "Bluetooth speakers for the garden"},
+                    {"with a long battery life", "for travel and the office", "that pairs with any phone", "with USB-C charging",
+                            "waterproof for hiking", "with a companion app"}},
+            {{"A ceramic coffee mug", "A cast iron frying pan", "A wool blanket", "A bamboo cutting board",
+                    "A scented candle set", "A linen tablecloth"},
+                    {"for a cosy kitchen", "made by local craftspeople", "that is easy to clean", "for camping and the garden",
+                            "in natural colours", "for breakfast and baking"}}};
+
+    /** A description of a product of {@code cluster} (0 book, 1 gadget, 2 item). */
+    static String description(int cluster, Random d) {
+        String[][] p = PHRASES[cluster];
+        return p[0][d.nextInt(p[0].length)] + " " + p[1][d.nextInt(p[1].length)] + ".";
+    }
+
     private static final float[][] CENTRES = {{0.9f, 0.1f, 0.1f, 0.2f}, {0.1f, 0.9f, 0.3f, 0.1f}, {0.1f, 0.2f, 0.8f, 0.4f}};
 
     /** A product embedding: its cluster centre plus a little noise, rounded to two decimals (readable in the grid). */

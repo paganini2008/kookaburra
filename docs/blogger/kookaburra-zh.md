@@ -6,11 +6,16 @@
 
 **Kookaburra**：*像数据库一样查询 Java 对象，就在你的应用里。*
 
-面向 **Java 17+ 的嵌入式对象数据库**。存入的是普通的注解类，查询用类型安全的链式 API 或 SQL 风格的 **OQL**，由索引直接回答，毫秒级返回。支持三种隔离级别的事务、唯一约束和外键、精确小数、向量搜索、在线备份，并配有桌面工具 **Kookaburra Studio**。
+面向 **Java 17+ 的嵌入式对象数据库**：存入普通的注解类，由索引毫秒级回答查询。
+
+- **查询**：类型安全的链式 API，或 SQL 风格的 **OQL**
+- **检索**：向量检索（HNSW）和全文检索（BM25），执行计划清晰易读
+- **数据安全**：三种隔离级别的事务、唯一约束和外键、精确小数、在线备份
+- **工具**：桌面工具 **Kookaburra Studio**，用来浏览、编辑和查询
 
 ![Kookaburra Studio](https://paganini2008.github.io/kookaburra/assets/studio-data.png)
 
-**教学视频（2:56，英文字幕）**：
+**教学视频（2:58，英文字幕）**：
 
 <video controls preload="metadata" playsinline width="100%" poster="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial-poster.jpg">
   <source src="https://paganini2008.github.io/kookaburra/assets/kookaburra-tutorial.mp4" type="video/mp4">
@@ -65,7 +70,14 @@ try (ObjectDB db = ObjectDB.open(Path.of("data"))) {
 [Hyperion, Neuromancer]
 ```
 
-用 Studio 查看：下载最新版（安装包自带 Java 运行时）：[Windows](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-windows-x64.msi) · [macOS Apple 芯片](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-macos-arm64.dmg) · [macOS Intel](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-macos-x64.dmg) · [Linux](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-linux-x64.deb) · [jar（需 Java 17+）](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio.jar)。任意数据库目录都可以用 **Open database…** 打开。
+| Studio 下载（最新版，自带 Java 运行时） | 文件 |
+|---|---|
+| Windows | [.msi](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-windows-x64.msi) |
+| macOS Apple 芯片 / Intel | [.dmg](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-macos-arm64.dmg) / [.dmg](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-macos-x64.dmg) |
+| Linux | [.deb](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio-linux-x64.deb) |
+| 任意装有 Java 17+ 的系统 | [.jar](https://github.com/paganini2008/kookaburra/releases/latest/download/kookaburra-studio.jar) |
+
+任意数据库目录都可以用 **Open database…** 打开。
 
 ## 4. 环境要求
 
@@ -184,6 +196,7 @@ try (ObjectDB copy = ObjectDB.open(info.path())) { … }        // 恢复 = 打�
 ```java
 db.oql("SELECT s.code FROM Shipment s WHERE s.route.to.city = 'Perth'").list();        // [S-1]
 db.oql("SELECT s.code FROM Shipment s WHERE 'kiwi' MEMBER OF s.items.sku").list();     // [S-2]
+db.oql("SELECT s.code FROM Shipment s JOIN s.items i WHERE i.sku = 'A' AND i.qty > 5").list();  // 同一个元素满足全部条件
 db.insert(new Document("scan", text, Files.readAllBytes(Path.of("scan.png"))));        // MiB 级字段
 ```
 
@@ -194,17 +207,94 @@ db.insert(new Document("scan", text, Files.readAllBytes(Path.of("scan.png")))); 
 
 List<Doc> top = db.query(Doc.class).where(Doc::getLang).eq("en")
         .nearest(Doc::getEmbedding, queryVector, 10).list();  // 先过滤，再取最近的 10 条
+List<Doc> byText = db.query(Doc.class)
+        .nearest(Doc::getEmbedding, "在家怎么烤面包", 10).list();   // 由 Ollama 把文本转成向量
 ```
 ```sql
-SELECT d.title, cosine_distance(d.embedding, :q) AS dist FROM Doc d ORDER BY dist LIMIT 10
+SELECT d.title, cosine_distance(d.embedding, embed('在家烤面包')) AS dist FROM Doc d ORDER BY dist LIMIT 10
 ```
 
-| 搜索 | 耗时 |
-|---|---|
-| 10 万条 384 维向量取最近 10 条（精确） | 约 35 ms |
-| 先过滤到 1% 再搜 | 约 1 ms |
+| 搜索 | 耗时 | 与精确结果一致 |
+|---|---|---|
+| 10 万条 384 维向量取最近 10 条（HNSW 索引） | 约 1 ms | 99.6% |
+| 1 万条真实文本向量（Ollama，2560 维）取最近 10 条 | 约 2 ms | 100% |
+| 过滤后只剩少量对象时 | 不到 1 ms | 100%（直接逐个比较） |
 
-**Studio 里**：选中对象的反向链接、每个字段的约束、嵌套值的树形展示，以及带实时写入和事务速率的 **Stats dashboard**。demo 数据库的商品带有向量，可以直接在控制台试向量搜索（`ORDER BY cosine_distance(p.embedding, '[1, 0, 0, 0]')`）。
+| 选项 | API |
+|---|---|
+| 搜得更宽 / 精确结果 | `.numCandidates(n)` / `.exact()` |
+| 去掉近似重复（MMR） | `.diverse()` |
+| 索引只占四分之一内存（int8） | `@Vector(dim = 384, quantization = INT8)` |
+| 本机模型重排（Ollama） | `.rerank(Doc::getText)` |
+| 向量 + 关键词（RRF） | `.hybrid(Doc::getBody)` |
+
+**示例 8：全文检索**
+
+```java
+@FullText String body;                                        // 实体里的字段，默认 english 分词器
+
+db.query(Article.class).where(Article::getBody).matches("bread oven").list();   // 所有词都要有，词形变化也能匹配
+db.query(Article.class).search(Article::getBody, "baking bread", 10).list();     // 按相关度排序（BM25）
+```
+```sql
+SELECT a.title FROM Article a WHERE MATCH(a.body, 'bak*') ORDER BY SCORE(a.body, 'baking bread') DESC LIMIT 10
+```
+
+| 分词器 | 切词方式 |
+|---|---|
+| `english`（默认） | 任何语言都能切词；去掉英文停用词，还原词干（Porter） |
+| `standard` | 任何语言，保持原词 |
+| 自定义 | `Analyzers.register("name", text -> words)` |
+
+| 查询写法 | 含义 |
+|---|---|
+| `"fresh bread"` | 短语：词相邻且顺序一致 |
+| `bak*` | 前缀 |
+| `HIGHLIGHT(a.body, 'bread')` | 命中的词标成 `<em>…</em>`，长文本截取片段 |
+
+中日韩文字按相邻两字切分。
+
+**示例 9：执行计划**
+
+```java
+System.out.println(db.query(Person.class).where(Person::getCity).eq("Perth").limit(10).explainAnalyze());
+```
+
+| | API | OQL | 显示 |
+|---|---|---|---|
+| 计划 | `explain()` | `EXPLAIN SELECT …` | 执行步骤，每个条件用哪个索引 |
+| 计划并执行 | `explainAnalyze()` | `EXPLAIN ANALYZE SELECT …` | 另有每步的输入 → 输出行数和耗时 |
+
+![Studio 里的执行计划](https://paganini2008.github.io/kookaburra/assets/studio-plan.png)
+
+**示例 10：注释、重命名、导出 Java**
+
+```java
+@Entity @Comment("A shop customer") @Renamed("com.example.Client")
+public class Customer {
+    @Id long oid;
+    @Renamed("fullName") @Comment("Given and family name") String name;
+}
+
+db.exportSchema(Path.of("src/main/java"), null);   // the stored schema as Java classes
+```
+
+| | 代码 | 结果 |
+|---|---|---|
+| 注释 | 类或字段上的 `@Comment` | 存入 schema，Studio 中显示 |
+| 重命名 | `@Renamed("old")` | 旧数据按新名字读取 |
+| 导出 | `db.exportSchema(dir, pkg)` | 带注解、getter/setter 的实体类 |
+
+![Studio 导出 Java](https://paganini2008.github.io/kookaburra/assets/studio-java-export.png)
+
+**Studio 里**：
+
+- 选中对象的反向链接、每个字段的约束、嵌套值的树形展示
+- **Stats dashboard**：实时写入和事务速率
+- demo 商品带向量：`ORDER BY cosine_distance(p.embedding, '[1, 0, 0, 0]')`，右键 **Find similar**，编辑器里 **From text…**
+- demo 商品描述有全文索引：`MATCH(p.description, 'kitchen')`
+- **Explain** / **Analyze**：执行计划图；**Format** 一键美化语句
+- **Export as Java**：预览、编辑并保存 schema 生成的类；顶部菜单栏；列头悬停显示注释；About 页功能图谱
 
 ![Studio 反向链接](https://paganini2008.github.io/kookaburra/assets/studio-backlinks.png)
 
@@ -222,6 +312,8 @@ SELECT d.title, cosine_distance(d.embedding, :q) AS dist FROM Doc d ORDER BY dis
 | `kookaburra.transactions` | `false` | 开启事务；关闭时每次写入直接提交 |
 | `kookaburra.tx-isolation` | `SNAPSHOT` | 默认隔离级别：`READ_COMMITTED`、`SNAPSHOT`、`SERIALIZABLE` |
 | `kookaburra.tx-timeout` / `tx-retries` | `60s` / `3` | 事务超时；`inTransaction` 冲突重试次数 |
+| `kookaburra.embedder` / `embedder-model` / `embedder-url` | `ollama` / `nomic-embed-text` / `http://localhost:11434` | 文本转向量，用于 `nearest(field, "文本", k)`、`embed('…')` 和 Studio；设为 `none` 关闭 |
+| `kookaburra.vector-ef-search` | `100` | 向量搜索的搜索宽度；越大越准，略慢 |
 | `kookaburra.data` | jar 同级 `data/` | Studio 默认数据目录 |
 
 内存、文件大小、后台任务等调优项在配置文件里有注释说明，默认值适合大多数应用。
@@ -232,21 +324,22 @@ SELECT d.title, cosine_distance(d.embedding, :q) AS dist FROM Doc d ORDER BY dis
 
 | 操作（1000 万对象） | p50 |
 |---|---|
-| 批量插入，每批 100（`ASYNC`） | 69.6 万对象/秒 |
-| 持久化单条插入（`SYNC`），16 / 128 线程 | 3.2 k/s / 21.2 k/s |
-| `get(oid)` | 0.6 到 1.1 µs |
-| 带索引条件的计数 | 0.24 ms |
-| 等值 + 范围 + limit 100 | 0.21 ms |
+| 批量插入，每批 100（`ASYNC`） | 57.6 万对象/秒 |
+| 持久化单条插入（`SYNC`），16 / 128 线程 | 3.3 k/s / 24.4 k/s |
+| `get(oid)` | 0.7 µs |
+| 带索引条件的计数 | 0.23 ms |
+| 等值 + 范围 + limit 100 | 0.19 ms |
 | 230 万命中中按索引列取 Top-10 | 0.39 ms |
-| `GROUP BY city COUNT(*)` | 4.0 ms |
-| 唯一键查找（OQL） | 0.12 ms |
-| 无索引条件全表扫描 | 0.81 s |
-| 转账，16 线程：SNAPSHOT / READ COMMITTED / SERIALIZABLE | 13.6 / 14.2 / 14.0 万/秒 |
-| 单个热点计数器原子 `increment`，16 线程 | 26.5 万/秒，无丢失更新 |
-| 有 / 无 `@Unique` 的插入（内存库） | 23.5 / 25.8 万/秒 |
-| 1050 万对象在线备份 | 25.4 秒，写入不阻塞 |
-| OQL `DELETE` 全部对象，之后的磁盘占用 | 132 万对象/秒，剩余 0 B |
-| 重新打开 / 打开后堆占用 | 2.0 ms / 6.5 MiB |
+| `GROUP BY city COUNT(*)` | 3.9 ms |
+| 唯一键查找（OQL） | 0.11 ms |
+| 无索引条件全表扫描 | 0.78 s |
+| 向量搜索，10 万条 384 维取最近 10 条（HNSW） | 1.0 ms，99.6% 与精确结果一致 |
+| 转账，16 线程：SNAPSHOT / READ COMMITTED / SERIALIZABLE | 13.6 / 13.9 / 13.6 万/秒 |
+| 单个热点计数器原子 `increment`，16 线程 | 26.2 万/秒，无丢失更新 |
+| 有 / 无 `@Unique` 的插入（内存库） | 25.1 / 31.8 万/秒 |
+| 1050 万对象在线备份 | 25.7 秒，写入不阻塞 |
+| OQL `DELETE` 全部对象，之后的磁盘占用 | 131 万对象/秒，剩余 0 B |
+| 重新打开 / 打开后堆占用 | 2.1 ms / 7.1 MiB |
 
 ## 9. 局限与取舍
 
@@ -266,4 +359,6 @@ SELECT d.title, cosine_distance(d.embedding, :q) AS dist FROM Doc d ORDER BY dis
 7. JPA 风格的生命周期回调和监听器。
 8. 一致性快照的在线备份；恢复就是打开目录。
 9. 千万对象下亚毫秒到几毫秒；秒开，堆很小。
-10. Studio 一个 jar；所有功能在内存和磁盘两种模式下都有测试，覆盖率 ≥ 90%。
+10. Studio 一个 jar；所有功能在内存和磁盘两种模式下都有测试。
+11. 同一个库里既有向量检索（HNSW），也有全文检索（BM25），`hybrid(...)` 把两者融合。
+12. `explainAnalyze()` 和 Studio 的执行计划图标出每一步的行数和耗时。

@@ -14,6 +14,8 @@ public enum IndexKind {
     BITMAP,
     /** Dictionary + ordinals only: range and sort on high-cardinality columns. */
     ORDINAL,
-    /** Bit-sliced index. Reserved, not implemented yet. */
-    BSI
+    /** Bit-sliced index. Reserved, not implemented. */
+    BSI,
+    /** Full-text index of a string field: words → documents with term frequencies (see {@link FullText}). */
+    FULLTEXT
 }

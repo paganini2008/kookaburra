@@ -124,6 +124,20 @@ public class Fields {
         return expect(resolve(getter), ObjectField.class);
     }
 
+    /** A list of embedded objects by its getter (for element conditions); fails for other fields. */
+    public static <T, E> AbstractField<T, ?> listOf(CollectionGetter<T, E> list) {
+        AbstractField<T, ?> l = resolve(list);
+        if (l.type() != ValueType.EMBEDDED_LIST) {
+            throw new IllegalArgumentException(l + " is not a list of @Embeddable objects");
+        }
+        return l;
+    }
+
+    /** The property name a getter method reference reads ({@code Line::getSku} → {@code sku}). */
+    public static String propertyOf(Serializable getter) {
+        return GetterResolver.resolve(getter).property();
+    }
+
     /** A property of the elements of a list of embedded objects, as a multi-valued field ("any element"). */
     public static <T, E, V> ListField<T, V> elementsOf(CollectionGetter<T, E> list, Getter<E, V> element) {
         AbstractField<T, ?> l = resolve(list);                 // an EMBEDDED_LIST field (not a ListField)

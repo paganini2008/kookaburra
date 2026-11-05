@@ -14,6 +14,7 @@ import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
+import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.Tooltip;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.ColumnConstraints;
@@ -29,7 +30,9 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 
 /**
  * Editor for one object: a form with a widget per value type ({@link FormWidgets}; embedded objects as titled
@@ -52,10 +55,27 @@ public class ObjectEditor extends BorderPane {
     private final Map<String, byte[]> kept = new HashMap<>();
     /** Picks a file for binary fields: (save?, suggested name) → file or null. Replaceable in tests. */
     BiFunction<Boolean, String, File> files = this::chooseFile;
-    private final FormWidgets.Context context = new FormWidgets.Context((save, name) -> files.apply(save, name), this::showError);
+    /** Asks for the text of a "From text" embedding: field path → text or null. Replaceable in tests. */
+    Function<String, String> askText = this::askText;
+    /** Runs embedding requests off the UI thread. Replaceable in tests. */
+    Executor embedWorker = r -> {
+        Thread t = new Thread(r, "kookaburra-embed");
+        t.setDaemon(true);
+        t.start();
+    };
+    private final FormWidgets.Context context;
     private DynamicObject object;
 
     public ObjectEditor(ClassDef def, DynamicObject object) {
+        this(def, object, null);
+    }
+
+    /**
+     * @param embed text → embedding for the "From text" button of vector fields, or null (no embedder)
+     */
+    public ObjectEditor(ClassDef def, DynamicObject object, Function<String, float[]> embed) {
+        this.context = new FormWidgets.Context((save, name) -> files.apply(save, name), this::showError, embed,
+                p -> askText.apply(p), r -> embedWorker.execute(r));
         this.def = def;
         this.object = object;
         getStyleClass().add("k-editor");
@@ -125,6 +145,18 @@ public class ObjectEditor extends BorderPane {
             GridPane.setValignment(label, VPos.TOP);               // aligned with the first line of tall widgets
             label.setPadding(new Insets(7, 0, 0, 0));
         }
+    }
+
+    private String askText(String path) {
+        TextInputDialog d = new TextInputDialog();
+        d.setTitle("Embed a text");
+        d.setHeaderText("Text whose embedding becomes " + path);
+        d.setContentText("Text:");
+        d.getEditor().setPrefColumnCount(40);
+        if (getScene() != null) {
+            d.initOwner(getScene().getWindow());
+        }
+        return d.showAndWait().orElse(null);
     }
 
     private File chooseFile(boolean save, String name) {

@@ -1,5 +1,6 @@
 package com.github.kookaburra.face.demo;
 
+import com.github.kookaburra.annotation.Comment;
 import com.github.kookaburra.annotation.Embeddable;
 import com.github.kookaburra.annotation.Index;
 
@@ -12,7 +13,7 @@ import com.github.kookaburra.annotation.Index;
  */
 @Embeddable
 public class Address {
-    @Index String city;
+    @Index @Comment("City or town") String city;
     String street;
     Geo geo;
 

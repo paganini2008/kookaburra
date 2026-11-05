@@ -4,6 +4,7 @@ import com.github.kookaburra.dynamic.DynamicCollection;
 import com.github.kookaburra.dynamic.DynamicObject;
 import com.github.kookaburra.engine.Database;
 import com.github.kookaburra.mapping.Schema;
+import com.github.kookaburra.mapping.SchemaExport;
 import com.github.kookaburra.oql.OqlQuery;
 import com.github.kookaburra.query.QueryStream;
 
@@ -166,6 +167,26 @@ public interface ObjectDB extends AutoCloseable {
     void compact();
 
     Schema schema();
+
+    /**
+     * The stored schema as Java source code (entities, embeddables, enums, annotations, comments, getters and
+     * setters), ready to compile against this database: see {@link SchemaExport}.
+     *
+     * @param targetPackage package for all classes, or null to keep the stored packages
+     */
+    default SchemaExport exportSchema(String targetPackage) {
+        return SchemaExport.of(schema(), targetPackage);
+    }
+
+    /**
+     * Writes {@link #exportSchema(String)} as {@code .java} files under {@code dir} (a source root: package
+     * directories are created).
+     *
+     * @return the written files
+     */
+    default List<Path> exportSchema(Path dir, String targetPackage) {
+        return exportSchema(targetPackage).writeTo(dir);
+    }
 
     /** Path of the database directory, or null for an in-memory database. */
     Path path();

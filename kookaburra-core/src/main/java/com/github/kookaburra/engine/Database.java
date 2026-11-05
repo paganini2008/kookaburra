@@ -18,6 +18,8 @@ import com.github.kookaburra.TxWork;
 import com.github.kookaburra.WriteBatch;
 import com.github.kookaburra.dynamic.DynamicCollection;
 import com.github.kookaburra.dynamic.DynamicObject;
+import com.github.kookaburra.embed.Embedder;
+import com.github.kookaburra.embed.Reranker;
 import com.github.kookaburra.exec.Cond;
 import com.github.kookaburra.exec.Executor;
 import com.github.kookaburra.exec.QueryHost;
@@ -212,8 +214,41 @@ public class Database implements ObjectDB, OqlHost {
                     validateExisting(next, c);
                 }
             }
+            redecodeRenamed(current, next);
         }
         storage.saveSchema(next);
+    }
+
+    /**
+     * In-memory rows of collections whose stored layouts were rewritten ({@code @Renamed} fields) are decoded again,
+     * on the sequencer thread, so their cached records answer to the new names (segments decode on demand).
+     */
+    private void redecodeRenamed(Schema current, Schema next) {
+        Set<String> collections = new HashSet<>();
+        for (ClassDef c : next.classes()) {
+            ClassDef before = current.classes().stream().filter(x -> x.id() == c.id()).findFirst().orElse(null);
+            if (before != null && !c.layouts().subList(0, Math.min(before.layouts().size(), c.layouts().size()))
+                    .equals(before.layouts().subList(0, Math.min(before.layouts().size(), c.layouts().size())))) {
+                collections.add(c.collection());
+            }
+        }
+        if (collections.isEmpty()) {
+            return;
+        }
+        Runnable task = () -> {
+            for (String col : collections) {
+                for (SegmentView v : writerViews.getOrDefault(col, List.of())) {
+                    if (v instanceof MemSegment m) {
+                        m.redecode(next);
+                    }
+                }
+            }
+        };
+        if (sequencer.onThread()) {
+            task.run();                                      // registered while applying a write: already in order
+        } else {
+            join(sequencer.submitTask(task));
+        }
     }
 
     private void validateExisting(Schema schema, Schema.CompositeUnique c) {
@@ -550,6 +585,11 @@ public class Database implements ObjectDB, OqlHost {
         return txRegistry;
     }
 
+    /** WAL forces (fsyncs) so far (diagnostics, tests). */
+    long walForces() {
+        return sequencer.walForces();
+    }
+
     /** Entries of the sequencer's conflict table (diagnostics). */
     int conflictEntries() {
         int[] n = new int[1];
@@ -558,17 +598,22 @@ public class Database implements ObjectDB, OqlHost {
     }
 
     /** Submits a transaction's writes for validation and commit; results as for {@link #write}. */
-    long[] commitTransaction(List<WriteOp> ops, Sequencer.TxCommit tx) {
+    long[] commitTransaction(List<WriteOp> ops, Sequencer.TxCommit tx, Durability durability) {
         checkOpen();
         throttle();
-        return join(sequencer.submitTx(ops, tx));
+        return join(sequencer.submitTx(ops, tx, durability));
     }
 
     /** Submits one atomic batch, waits, and writes back OIDs / versions. */
     long[] write(List<WriteOp> ops) {
+        return write(ops, null);
+    }
+
+    /** Same with a durability for this batch (null = {@code kookaburra.durability}). */
+    long[] write(List<WriteOp> ops, Durability durability) {
         checkOpen();
         throttle();
-        long[] res = join(sequencer.submit(ops));
+        long[] res = join(sequencer.submit(ops, durability));
         writeBack(ops, res);
         firePost(ops, res);
         return res;
@@ -682,7 +727,8 @@ public class Database implements ObjectDB, OqlHost {
             m.live(job.seq()).forEach((int row) ->
                     entries.add(new SegmentWriter.Entry(m.oid(row), m.version(row), m.record(row), m.row(row))));
             entries.sort(Comparator.comparingLong(SegmentWriter.Entry::oid));
-            byte[] bytes = SegmentWriter.write(entries, registry.schema().columns(job.collection()).values(), config.bloomFpp(),
+            byte[] bytes = SegmentWriter.write(entries, registry.schema().columns(job.collection()).values(),
+                    SegmentWriter.VectorSpec.of(registry.schema().vectorColumns(job.collection()), config), config.bloomFpp(),
                     config.autoPostingsRatio());
             int id = segmentIds.incrementAndGet();
             building.add(id);
@@ -836,7 +882,8 @@ public class Database implements ObjectDB, OqlHost {
                 return;
             }
             entries.sort(Comparator.comparingLong(SegmentWriter.Entry::oid));
-            byte[] bytes = SegmentWriter.write(entries, registry.schema().columns(job.collection()).values(), config.bloomFpp(),
+            byte[] bytes = SegmentWriter.write(entries, registry.schema().columns(job.collection()).values(),
+                    SegmentWriter.VectorSpec.of(registry.schema().vectorColumns(job.collection()), config), config.bloomFpp(),
                     config.autoPostingsRatio());
             int id = segmentIds.incrementAndGet();
             building.add(id);
@@ -1087,6 +1134,21 @@ public class Database implements ObjectDB, OqlHost {
     @Override
     public TypeRegistry registry() {
         return registry;
+    }
+
+    @Override
+    public Embedder embedder() {
+        return config.embedder();
+    }
+
+    @Override
+    public Reranker reranker() {
+        return config.reranker();
+    }
+
+    @Override
+    public int vectorEfSearch() {
+        return config.vectorEfSearch();
     }
 
     @Override

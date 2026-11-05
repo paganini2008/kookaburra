@@ -26,8 +26,11 @@ public final class Schema {
 
     private final int version;
     private final Map<String, ClassDef> byName;
+    /** Earlier names of renamed classes. */
+    private final Map<String, ClassDef> formerNames;
     private final ClassDef[] byId;
     private final Map<String, Map<String, ColumnDef>> columns = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, TypeDef>> vectors = new ConcurrentHashMap<>();
     private volatile List<Constraint> constraints;
 
     /**
@@ -60,12 +63,16 @@ public final class Schema {
     public Schema(int version, Collection<ClassDef> classes) {
         this.version = version;
         Map<String, ClassDef> names = new LinkedHashMap<>();
+        Map<String, ClassDef> former = new LinkedHashMap<>();
         int max = 0;
         for (ClassDef c : classes) {
             names.put(c.name(), c);
+            c.formerNames().forEach(n -> former.put(n, c));
             max = Math.max(max, c.id());
         }
+        former.keySet().removeAll(names.keySet());
         this.byName = Collections.unmodifiableMap(names);
+        this.formerNames = Collections.unmodifiableMap(former);
         this.byId = new ClassDef[max + 1];
         for (ClassDef c : classes) {
             if (byId[c.id()] != null) {
@@ -87,8 +94,10 @@ public final class Schema {
         return byName.values();
     }
 
+    /** A class by its name, or by a name it had before a {@code @Renamed} (references, collections, OQL); null if unknown. */
     public ClassDef byName(String name) {
-        return byName.get(name);
+        ClassDef c = byName.get(name);
+        return c != null || name == null ? c : formerNames.get(name);
     }
 
     public ClassDef byId(int id) {
@@ -130,7 +139,7 @@ public final class Schema {
 
     private int depth(ClassDef c) {
         int d = 0;
-        for (ClassDef p = c; p.parent() != null; p = byName.get(p.parent())) {
+        for (ClassDef p = c; p.parent() != null; p = byName(p.parent())) {
             d++;
         }
         return d;
@@ -140,7 +149,7 @@ public final class Schema {
     public Set<Integer> subclassIds(String className) {
         Set<Integer> ids = new TreeSet<>();
         for (ClassDef c : byName.values()) {
-            for (ClassDef p = c; p != null; p = p.parent() == null ? null : byName.get(p.parent())) {
+            for (ClassDef p = c; p != null; p = p.parent() == null ? null : byName(p.parent())) {
                 if (p.name().equals(className)) {
                     ids.add(c.id());
                     break;
@@ -161,6 +170,31 @@ public final class Schema {
             collect(cols, "", c.current().fields(), c.name());
         }
         return Collections.unmodifiableMap(cols);
+    }
+
+    /**
+     * Vector paths of a collection that get a vector column (and an HNSW graph) in segments: VECTOR fields with a
+     * declared dimension, top level or inside embeddables; the first declaration of a path wins.
+     */
+    public Map<String, TypeDef> vectorColumns(String collection) {
+        return vectors.computeIfAbsent(collection, c -> {
+            Map<String, TypeDef> out = new LinkedHashMap<>();
+            for (ClassDef def : classesOf(c)) {
+                collectVectors(out, "", def.current().fields());
+            }
+            return Collections.unmodifiableMap(out);
+        });
+    }
+
+    private static void collectVectors(Map<String, TypeDef> out, String prefix, List<FieldDef> fields) {
+        for (FieldDef f : fields) {
+            String path = prefix + f.name();
+            if (f.type().kind() == ValueType.EMBEDDED) {
+                collectVectors(out, path + ".", f.type().fields());
+            } else if (f.type().kind() == ValueType.VECTOR && f.type().dim() > 0) {
+                out.putIfAbsent(path, f.type());
+            }
+        }
     }
 
     private static void collect(Map<String, ColumnDef> cols, String prefix, List<FieldDef> fields, String owner) {
@@ -299,8 +333,8 @@ public final class Schema {
 
     /** True when an ancestor class declares the same constraint (it already covers {@code def}). */
     private boolean inheritedConstraint(ClassDef def, String path, FieldDef f) {
-        for (ClassDef p = def.parent() == null ? null : byName.get(def.parent()); p != null;
-             p = p.parent() == null ? null : byName.get(p.parent())) {
+        for (ClassDef p = def.parent() == null ? null : byName(def.parent()); p != null;
+             p = p.parent() == null ? null : byName(p.parent())) {
             FieldDef pf = fieldAt(p.current().fields(), path);
             if (pf != null && pf.unique() == f.unique() && pf.onDelete() == f.onDelete()) {
                 return true;
@@ -323,6 +357,7 @@ public final class Schema {
     /** Returns a schema with {@code def} added or replaced, version + 1. Validates column consistency. */
     public Schema with(ClassDef def) {
         Map<String, ClassDef> m = new LinkedHashMap<>(byName);
+        m.values().removeIf(c -> c.id() == def.id() && !c.name().equals(def.name()));     // a renamed class
         m.put(def.name(), def);
         Schema s = new Schema(version + 1, m.values());
         s.columns(def.collection());

@@ -4,6 +4,7 @@ import com.github.kookaburra.Ref;
 import com.github.kookaburra.dynamic.DynamicObject;
 import com.github.kookaburra.engine.Oids;
 import com.github.kookaburra.exec.ReadView;
+import com.github.kookaburra.query.QueryPlan;
 import com.github.kookaburra.query.Row;
 
 import java.lang.reflect.Constructor;
@@ -196,6 +197,37 @@ public class OqlQuery<T> {
             Engine e = new Engine(host, view, named, positional);
             return ast instanceof Ast.Update u ? e.update(u) : e.delete((Ast.Delete) ast);
         }
+    }
+
+    /**
+     * The plan as a tree of steps for a SELECT (with actual rows and times for {@code EXPLAIN ANALYZE}); the root step
+     * is the OQL statement with how its ORDER BY / GROUP BY is executed. Null for UPDATE / DELETE (see {@link #explain()}).
+     */
+    public QueryPlan plan() {
+        if (!(ast instanceof Ast.Select q)) {
+            return null;
+        }
+        try (ReadView view = host.openRead()) {
+            Engine e = new Engine(host, view, named, positional);
+            String text = e.select(q, limit, offset, true).plan();
+            List<String> notes = new ArrayList<>();
+            for (String line : text.split("\n")) {
+                if (line.startsWith("OQL ")) {
+                    notes.add(line.substring(4).strip());
+                }
+            }
+            if (e.streamPlan == null) {
+                return new QueryPlan(new QueryPlan.Step("OQL", String.join("; ", notes), QueryPlan.Access.NONE, List.of()), false);
+            }
+            QueryPlan.Step inner = e.streamPlan.root();
+            return new QueryPlan(new QueryPlan.Step("OQL", String.join("; ", notes), QueryPlan.Access.NONE, -1, inner.rows(),
+                    inner.nanos(), List.of(inner)), e.streamPlan.analyzed());
+        }
+    }
+
+    /** True for {@code EXPLAIN ANALYZE …}: the plan comes with actual rows and times. */
+    public boolean isAnalyze() {
+        return ast instanceof Ast.Select q && q.analyze();
     }
 
     /** Execution plan (pushed-down filters, indexes, sort / group strategy). */

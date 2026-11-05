@@ -1,5 +1,6 @@
 package com.github.kookaburra.engine;
 
+import com.github.kookaburra.Durability;
 import com.github.kookaburra.KookaburraException;
 import com.github.kookaburra.WriteBatch;
 
@@ -18,6 +19,7 @@ class Batch implements WriteBatch {
     private final Database db;
     private final List<WriteOp> ops = new ArrayList<>();
     private boolean done;
+    private Durability durability;
 
     Batch(Database db) {
         this.db = db;
@@ -68,8 +70,15 @@ class Batch implements WriteBatch {
         check();
         done = true;
         if (!ops.isEmpty()) {
-            db.write(ops);
+            db.write(ops, durability);
         }
+    }
+
+    @Override
+    public WriteBatch durability(Durability d) {
+        check();
+        this.durability = d;
+        return this;
     }
 
     private void check() {

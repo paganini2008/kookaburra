@@ -1,9 +1,11 @@
 package com.github.kookaburra.query;
 
 import com.github.kookaburra.dynamic.DynamicObject;
+import com.github.kookaburra.field.AbstractField;
 import com.github.kookaburra.field.Field;
 import com.github.kookaburra.field.RefField;
 import com.github.kookaburra.mapping.ValueType;
+import com.github.kookaburra.text.TextQuery;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -173,6 +175,60 @@ public sealed interface Pred<T> extends Predicate<T> {
         }
     }
 
+    /**
+     * Full-text match: the field's words contain every word of {@code query} ({@code all}) or any of them; a
+     * trailing {@code *} matches a word prefix. False when the field is null.
+     */
+    record Match<T>(Field<T, String> field, TextQuery query, boolean all) implements Pred<T> {
+        public Match {
+            Objects.requireNonNull(field, "field");
+            Objects.requireNonNull(query, "query");
+        }
+
+        @Override
+        public boolean test(T t) {
+            return query.matches(field.get(t), all);
+        }
+
+        @Override
+        public String toString() {
+            return field.path() + (all ? " MATCHES " : " MATCHES ANY ") + literal(query.text());
+        }
+    }
+
+    /**
+     * Element match: at least one element of the list of embedded objects {@code list} meets every condition
+     * (MongoDB's {@code $elemMatch}); false for an empty or null list.
+     */
+    record ElemMatch<T>(AbstractField<T, ?> list, List<ElementQuery.Condition> conditions) implements Pred<T> {
+        public ElemMatch {
+            Objects.requireNonNull(list, "list");
+            conditions = List.copyOf(conditions);
+            if (conditions.isEmpty()) {
+                throw new IllegalArgumentException("whereElement() needs at least one condition");
+            }
+        }
+
+        @Override
+        public boolean test(T t) {
+            Object v = list.get(t);
+            if (!(v instanceof Collection<?> elements)) {
+                return false;
+            }
+            for (Object e : elements) {
+                if (conditions.stream().allMatch(c -> c.test(e))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        @Override
+        public String toString() {
+            return list.path() + " HAS AN ELEMENT WITH " + String.join(" AND ", conditions.stream().map(Object::toString).toList());
+        }
+    }
+
     /** Multi-valued membership: any ({@code all == false}) or all of {@code values} are elements. */
     record Contains<T, E>(Field<T, ? extends Collection<E>> field, Set<E> values, boolean all) implements Pred<T> {
         public Contains {
@@ -306,7 +362,8 @@ public sealed interface Pred<T> extends Predicate<T> {
 
         @Override
         public String toString() {
-            return "RESIDUAL " + predicate;
+            String p = String.valueOf(predicate);
+            return p.contains("$$Lambda") ? "a Java predicate" : p;          // lambdas have no readable text
         }
     }
 

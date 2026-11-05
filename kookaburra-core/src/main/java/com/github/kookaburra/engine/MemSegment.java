@@ -3,8 +3,13 @@ package com.github.kookaburra.engine;
 import com.github.kookaburra.annotation.IndexKind;
 import com.github.kookaburra.exec.ColumnIndex;
 import com.github.kookaburra.exec.SegmentView;
+import com.github.kookaburra.exec.TextIndex;
 import com.github.kookaburra.mapping.ColumnDef;
 import com.github.kookaburra.mapping.Record;
+import com.github.kookaburra.mapping.Schema;
+import com.github.kookaburra.mapping.RecordCodec;
+import com.github.kookaburra.text.Analyzer;
+import com.github.kookaburra.text.Analyzers;
 import org.roaringbitmap.RoaringBitmap;
 
 import java.util.List;
@@ -35,6 +40,7 @@ class MemSegment implements SegmentView {
     private final Chunks.Longs deletedRowSeq = new Chunks.Longs(0);
     private final Map<Long, Integer> latest = new ConcurrentHashMap<>();
     private final Map<String, MemIndex> indexes = new ConcurrentHashMap<>();
+    private final Map<String, MemText> texts = new ConcurrentHashMap<>();
     private volatile int size;
     private volatile int deletedCount;
     private volatile long bytes;
@@ -47,6 +53,8 @@ class MemSegment implements SegmentView {
         for (ColumnDef c : columns.values()) {
             if (c.kind() == IndexKind.BITMAP || c.kind() == IndexKind.AUTO) {
                 indexes.put(c.path(), new MemIndex(c.multi()));
+            } else if (c.kind() == IndexKind.FULLTEXT) {
+                texts.put(c.path(), new MemText(Analyzers.get(c.type().name())));
             }
         }
     }
@@ -84,6 +92,9 @@ class MemSegment implements SegmentView {
         rows.set(r, row);
         deletedSeq.set(r, Long.MAX_VALUE);
         for (Map.Entry<String, MemIndex> e : indexes.entrySet()) {
+            e.getValue().add(r, record.get(e.getKey()));
+        }
+        for (Map.Entry<String, MemText> e : texts.entrySet()) {
             e.getValue().add(r, record.get(e.getKey()));
         }
         latest.put(oid, r);
@@ -200,6 +211,22 @@ class MemSegment implements SegmentView {
         return indexes.get(path);
     }
 
+    /**
+     * Decodes every row again with {@code schema} (its layouts were rewritten by a {@code @Renamed}): the cached
+     * records then answer to the new field names. Sequencer thread.
+     */
+    void redecode(Schema schema) {
+        int n = size;
+        for (int r = 0; r < n; r++) {
+            records.set(r, RecordCodec.decode(schema, rows.get(r)));
+        }
+    }
+
+    @Override
+    public TextIndex text(String path) {
+        return texts.get(path);
+    }
+
     @Override
     public int find(long oid, long seq) {
         Integer r = latest.get(oid);
@@ -263,6 +290,85 @@ class MemSegment implements SegmentView {
         @Override
         public String describe() {
             return "mem postings";
+        }
+    }
+
+    /** Full-text index of one {@code @FullText} path in a MemSegment: postings per word, frequencies per row. */
+    private static class MemText implements TextIndex {
+        private final Map<String, Chunks.IntList> postings = new ConcurrentHashMap<>();
+        private final Chunks.Refs<Map<String, Integer>> frequencies = new Chunks.Refs<>();
+        private final Chunks.Ints lengths = new Chunks.Ints();
+        private volatile long docCount;
+        private volatile long totalWords;
+        private final Analyzer analyzer;
+
+        MemText(Analyzer analyzer) {
+            this.analyzer = analyzer;
+        }
+
+        void add(int doc, Object value) {
+            Map<String, Integer> tf = value instanceof String s ? analyzer.frequencies(s) : Map.of();
+            int len = 0;
+            for (Map.Entry<String, Integer> e : tf.entrySet()) {
+                len += e.getValue();
+            }
+            frequencies.set(doc, tf);
+            lengths.set(doc, len);
+            for (String w : tf.keySet()) {
+                postings.computeIfAbsent(w, k -> new Chunks.IntList()).add(doc);
+            }
+            if (len > 0) {
+                docCount = docCount + 1;
+                totalWords = totalWords + len;
+            }
+        }
+
+        @Override
+        public RoaringBitmap docs(String word) {
+            RoaringBitmap bm = new RoaringBitmap();
+            Chunks.IntList l = postings.get(word);
+            if (l != null) {
+                l.addTo(bm, Integer.MAX_VALUE);
+            }
+            return bm;
+        }
+
+        @Override
+        public List<String> words(String prefix, int max) {
+            return postings.keySet().stream().filter(w -> w.startsWith(prefix)).sorted().limit(max).toList();
+        }
+
+        @Override
+        public int frequency(String word, int doc) {
+            Map<String, Integer> tf = frequencies.get(doc);
+            Integer n = tf == null ? null : tf.get(word);
+            return n == null ? 0 : n;
+        }
+
+        @Override
+        public int length(int doc) {
+            return lengths.get(doc);
+        }
+
+        @Override
+        public long docCount() {
+            return docCount;
+        }
+
+        @Override
+        public long totalWords() {
+            return totalWords;
+        }
+
+        @Override
+        public long docFrequency(String word) {
+            Chunks.IntList l = postings.get(word);
+            return l == null ? 0 : l.size();
+        }
+
+        @Override
+        public String describe() {
+            return "full-text index in memory";
         }
     }
 }

@@ -15,10 +15,15 @@ import com.github.kookaburra.mapping.Schema;
 import com.github.kookaburra.mapping.TypeDef;
 import com.github.kookaburra.mapping.ValueType;
 import com.github.kookaburra.mapping.Vectors;
+import com.github.kookaburra.query.Neighbor;
 import com.github.kookaburra.query.Order;
 import com.github.kookaburra.query.Pred;
+import com.github.kookaburra.query.QueryPlan;
 import com.github.kookaburra.query.QueryStream;
 import com.github.kookaburra.query.Row;
+import com.github.kookaburra.text.Analyzer;
+import com.github.kookaburra.text.Analyzers;
+import com.github.kookaburra.text.TextQuery;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
@@ -63,6 +68,8 @@ class Engine {
         final DynamicCollection coll;
         final String alias;
         final Map<String, List<String>> joins;
+        /** JOIN aliases over lists of embedded objects: alias → list path (one element at a time, as JPQL). */
+        final Map<String, List<String>> elementJoins = new LinkedHashMap<>();
         final Planner planner;
 
         Scope(ClassDef cls, String alias, Map<String, List<String>> joins) {
@@ -148,12 +155,175 @@ class Engine {
         for (Ast.Join j : joins) {
             List<String> local = s.local(j.path());
             Resolved r = s.resolve(local, j.path());
+            if (r.refTarget() == null && r.type().kind() == ValueType.EMBEDDED_LIST && j.path().parts().get(0).equals(from.alias())) {
+                s.elementJoins.put(j.alias(), local);
+                joinMap.put(j.alias(), local);
+                continue;
+            }
             if (r.type().kind() != ValueType.REF || r.refTarget() != null) {
-                throw new OqlException("JOIN path must end at a reference field", j.path().line(), j.path().column());
+                throw new OqlException("JOIN path must end at a reference field or a list of embedded objects",
+                        j.path().line(), j.path().column());
             }
             joinMap.put(j.alias(), local);
         }
         return s;
+    }
+
+    // ---------------------------------------------------------------- joins over lists of embedded objects
+
+    /**
+     * Filters for {@code JOIN s.items i}: the WHERE holds for at least one element bound to {@code i} (each element
+     * on its own, as JPQL / MongoDB's {@code $elemMatch}); an inner join needs an element, a LEFT JOIN binds null when
+     * there is none. Conjuncts without the alias, and plain comparisons on it, are pushed down as "any element"
+     * conditions first (supersets); the correlated check then runs per object.
+     */
+    private QueryStream<DynamicObject> elementJoin(QueryStream<DynamicObject> stream, Ast.Select q, Scope s) {
+        List<Ast.Expr> conjuncts = new ArrayList<>();
+        if (q.where() != null) {
+            flattenAnd(q.where(), conjuncts);
+        }
+        for (Ast.Expr c : conjuncts) {
+            if (!mentions(c, s.elementJoins.keySet())) {
+                stream = stream.filter(pred(c, s));                   // exact: does not depend on the element
+                continue;
+            }
+            Pred<DynamicObject> any = anyElement(c, s);               // superset: some element has the value
+            if (any != null) {
+                stream = stream.filter(any);
+            }
+        }
+        Map<String, Boolean> left = new LinkedHashMap<>();
+        for (Ast.Join j : q.joins()) {
+            if (s.elementJoins.containsKey(j.alias())) {
+                left.put(j.alias(), j.left());
+            }
+        }
+        List<String> aliases = new ArrayList<>(s.elementJoins.keySet());
+        Ast.Expr where = q.where();
+        String text = (where == null ? "" : Render.render(where) + " ") + "for an element of " + String.join(", ", aliases);
+        return stream.filter(new Pred.Residual<>(new Predicate<DynamicObject>() {
+            @Override
+            public boolean test(DynamicObject o) {
+                return bind(o, s, aliases, 0, new HashMap<>(), left, where);
+            }
+
+            @Override
+            public String toString() {
+                return text;
+            }
+        }));
+    }
+
+    /**
+     * {@code i.x = constant} / {@code i.x IN (constants)} on an element alias as "some element has the value" (a
+     * superset of the correlated condition, answered by the index of the list path); null for anything else.
+     */
+    private Pred<DynamicObject> anyElement(Ast.Expr c, Scope s) {
+        Ast.Path p = null;
+        List<Object> values = new ArrayList<>();
+        if (c instanceof Ast.Binary b && b.op().equals("=")) {
+            Ast.Expr other = b.left() instanceof Ast.Path lp ? b.right() : b.left();
+            p = b.left() instanceof Ast.Path lp ? lp : b.right() instanceof Ast.Path rp ? rp : null;
+            if (p == null || !constant(other)) {
+                return null;
+            }
+            values.add(constValue(other));
+        } else if (c instanceof Ast.InList in && !in.not() && in.expr() instanceof Ast.Path ip && in.items().stream().allMatch(Engine::constant)) {
+            p = ip;
+            in.items().forEach(x -> values.add(constValue(x)));
+        }
+        if (p == null || values.contains(null) || !s.elementJoins.containsKey(p.parts().get(0))) {
+            return null;
+        }
+        try {
+            DynField f = s.coll.field(String.join(".", s.local(p)));
+            return values.size() == 1 ? f.contains(values.get(0)) : f.containsAny(values.toArray());
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
+    }
+
+    /** Whether some binding of the element aliases from {@code k} on makes {@code where} true. */
+    private boolean bind(DynamicObject o, Scope s, List<String> aliases, int k, Map<String, Object> bound,
+                         Map<String, Boolean> left, Ast.Expr where) {
+        if (k == aliases.size()) {
+            return where == null || Eval.truth(Eval.eval(where, elementEnv(o, s, bound)));
+        }
+        String alias = aliases.get(k);
+        Object list = value(o, s, s.elementJoins.get(alias));
+        List<?> elements = list instanceof List<?> l ? l : List.of();
+        for (Object e : elements) {
+            bound.put(alias, e);
+            if (bind(o, s, aliases, k + 1, bound, left, where)) {
+                return true;
+            }
+        }
+        if (elements.isEmpty() && left.get(alias)) {
+            bound.put(alias, null);
+            return bind(o, s, aliases, k + 1, bound, left, where);
+        }
+        return false;
+    }
+
+    /** Row environment where paths starting with an element alias read the bound element. */
+    private Eval.Env elementEnv(DynamicObject o, Scope s, Map<String, Object> bound) {
+        Eval.Env row = rowEnv(o, s);
+        return new Eval.Env() {
+            @Override
+            public Object path(Ast.Path p) {
+                String head = p.parts().get(0);
+                if (bound.containsKey(head)) {
+                    Object cur = bound.get(head);
+                    for (String part : p.parts().subList(1, p.parts().size())) {
+                        cur = cur instanceof Map<?, ?> m ? m.get(part) : null;
+                    }
+                    return cur;
+                }
+                return row.path(p);
+            }
+
+            @Override
+            public Object param(Ast.Param p) {
+                return row.param(p);
+            }
+
+            @Override
+            public float[] embed(String text) {
+                return row.embed(text);
+            }
+
+            @Override
+            public Object agg(Ast.Agg a) {
+                return row.agg(a);
+            }
+
+            @Override
+            public String className(String alias) {
+                return row.className(alias);
+            }
+        };
+    }
+
+    private static void flattenAnd(Ast.Expr e, List<Ast.Expr> out) {
+        if (e instanceof Ast.Binary b && b.op().equals("AND")) {
+            flattenAnd(b.left(), out);
+            flattenAnd(b.right(), out);
+        } else {
+            out.add(e);
+        }
+    }
+
+    /** Whether {@code e} reads a path starting with one of {@code aliases}. */
+    private static boolean mentions(Ast.Expr e, Set<String> aliases) {
+        if (e instanceof Ast.Path p) {
+            return aliases.contains(p.parts().get(0));
+        }
+        for (Ast.Expr c : children(e)) {
+            if (mentions(c, aliases)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ---------------------------------------------------------------- parameters and constants
@@ -183,6 +353,18 @@ class Engine {
         return false;
     }
 
+    /** Embeddings of this statement's EMBED() texts, computed once each. */
+    private final Map<String, float[]> embeddings = new HashMap<>();
+
+    float[] embed(String text) {
+        float[] v = embeddings.get(text);
+        if (v == null) {
+            v = host.embed(text);
+            embeddings.put(text, v);
+        }
+        return v;
+    }
+
     Object constValue(Ast.Expr e) {
         return Eval.eval(e, new Eval.Env() {
             @Override
@@ -193,6 +375,11 @@ class Engine {
             @Override
             public Object param(Ast.Param p) {
                 return Engine.this.param(p);
+            }
+
+            @Override
+            public float[] embed(String text) {
+                return Engine.this.embed(text);
             }
 
             @Override
@@ -217,8 +404,34 @@ class Engine {
 
     // ---------------------------------------------------------------- row evaluation
 
+    /** BM25 scores by OID of a pushed-down ORDER BY SCORE(…) DESC, and its expression. */
+    private Map<Long, Double> textScores;
+    private String textScoreExpr;
+
     Eval.Env rowEnv(DynamicObject o, Scope s) {
         return new Eval.Env() {
+            @Override
+            public Analyzer analyzer(Ast.Expr arg) {
+                if (arg instanceof Ast.Path p && !s.local(p).isEmpty()) {
+                    try {
+                        TypeDef t = s.resolve(s.local(p), p).type();
+                        return Analyzers.get(t.kind() == ValueType.STRING ? t.name() : null);
+                    } catch (OqlException e) {
+                        return Analyzers.get(null);
+                    }
+                }
+                return Analyzers.get(null);
+            }
+
+            @Override
+            public double score(Ast.Func f) {
+                Double v = textScores == null || !Render.render(f).equals(textScoreExpr) ? null : textScores.get(o.oid());
+                if (v == null) {
+                    return Eval.Env.super.score(f);
+                }
+                return v;
+            }
+
             @Override
             public Object path(Ast.Path p) {
                 return value(o, s, s.local(p));
@@ -227,6 +440,11 @@ class Engine {
             @Override
             public Object param(Ast.Param p) {
                 return Engine.this.param(p);
+            }
+
+            @Override
+            public float[] embed(String text) {
+                return Engine.this.embed(text);
             }
 
             @Override
@@ -370,6 +588,14 @@ class Engine {
             Pred<DynamicObject> r = onPath(s, p, (sc, f) -> f.typeDef().kind() == ValueType.STRING ? f.startsWith(Eval.prefixOf(pattern)) : null);
             return r == null ? null : l.not() ? r.negate() : r;
         }
+        if (e instanceof Ast.Func f && f.name().equals("MATCH") && f.args().size() == 2 && f.args().get(0) instanceof Ast.Path p
+                && constant(f.args().get(1)) && constValue(f.args().get(1)) instanceof String text) {
+            try {
+                return onPath(s, p, (sc, fld) -> fld.typeDef().kind() == ValueType.STRING ? fld.matches(text, true) : null);
+            } catch (IllegalArgumentException ex) {
+                throw new OqlException("MATCH: " + ex.getMessage(), f.line(), f.column());
+            }
+        }
         if (e instanceof Ast.IsNull n && n.expr() instanceof Ast.Path p) {
             List<String> local = s.local(p);
             if (local.isEmpty()) {
@@ -466,11 +692,23 @@ class Engine {
         StringBuilder plan = new StringBuilder();
         QueryStream<DynamicObject> stream = new QueryStream<>(host, QueryStream.Target.dynamic(s.cls.name()), view);
         for (Ast.Join j : q.joins()) {
-            if (!j.left()) {
+            if (!j.left() && !s.elementJoins.containsKey(j.alias())) {
                 stream = stream.filter(s.coll.field(String.join(".", s.local(j.path()))).isNotNull());
             }
         }
-        if (q.where() != null) {
+        if (!s.elementJoins.isEmpty()) {
+            List<Ast.Expr> outside = new ArrayList<>();
+            q.items().forEach(it -> outside.add(it.expr()));
+            q.orderBy().forEach(o -> outside.add(o.expr()));
+            q.groupBy().forEach(outside::add);
+            for (Ast.Expr e : outside) {
+                if (e != null && mentions(e, s.elementJoins.keySet())) {
+                    throw new OqlException("an element JOIN alias can only be used in WHERE (it selects the objects with a"
+                            + " matching element); select the object or its own fields");
+                }
+            }
+            stream = elementJoin(stream, q, s);
+        } else if (q.where() != null) {
             stream = stream.filter(pred(q.where(), s));
         }
         long limit = limitOverride >= 0 ? limitOverride : q.limit() == null ? -1 : longValue(q.limit(), "LIMIT");
@@ -514,13 +752,36 @@ class Engine {
             return grouped(q, s, stream, itemExprs, names, orderExprs, enumOrder, limit, offset, plan, explainOnly);
         }
 
+        // ---- full-text relevance: ORDER BY SCORE(x.text, 'words') DESC [LIMIT k] runs as a BM25 search
+        TextOrder text = orderExprs.size() == 1 && !(q.distinct() && !objects)
+                ? textOrder(orderExprs.get(0), q.orderBy().get(0), s) : null;
+        if (text != null) {
+            QueryStream<DynamicObject> ordered = stream.search(text.path(), text.query());
+            long want = limit < 0 ? -1 : offset + limit;
+            QueryStream<DynamicObject> sliced = want < 0 ? ordered : ordered.limit(want);
+            plan.append(explainOf(sliced, q));
+            plan.append("OQL ").append(objects ? "objects" : "projection " + names).append("  [ORDER BY pushed down: BM25 relevance]\n");
+            if (explainOnly) {
+                return new Result(List.of("plan"), List.of(), List.of(), q.shape(), false, plan.toString());
+            }
+            List<DynamicObject> found = new ArrayList<>();
+            textScores = new HashMap<>();
+            textScoreExpr = Render.render(orderExprs.get(0));
+            for (Neighbor<DynamicObject> n : sliced.listWithDistance()) {
+                found.add(n.value());
+                textScores.put(n.value().oid(), n.score());
+            }
+            found = found.subList((int) Math.min(offset, found.size()), found.size());
+            return rows(found, objects, itemExprs, names, q, s, plan);
+        }
+
         // ---- nearest neighbours: ORDER BY cosine_distance(x.v, :q) [LIMIT k] runs as a vector search
         NearOrder near = orderExprs.size() == 1 && !(q.distinct() && !objects)
                 ? nearOrder(orderExprs.get(0), q.orderBy().get(0), s) : null;
         if (near != null) {
             QueryStream<DynamicObject> ordered = stream.nearest(near.path(), near.query(), near.distance());
             long want = limit < 0 ? -1 : offset + limit;
-            plan.append((want < 0 ? ordered : ordered.limit(want)).explain());
+            plan.append(explainOf(want < 0 ? ordered : ordered.limit(want), q));
             plan.append("OQL ").append(objects ? "objects" : "projection " + names).append("  [ORDER BY pushed down: nearest neighbours]\n");
             if (explainOnly) {
                 return new Result(List.of("plan"), List.of(), List.of(), q.shape(), false, plan.toString());
@@ -552,7 +813,7 @@ class Engine {
                 stream = stream.limit(limit);
             }
         }
-        plan.append(stream.explain());
+        plan.append(explainOf(stream, q));
         plan.append("OQL ").append(objects ? "objects" : "projection " + names)
                 .append(orderExprs.isEmpty() ? "" : sortPushed ? "  [ORDER BY pushed down]" : "  [ORDER BY in memory]")
                 .append(q.distinct() ? "  [DISTINCT]" : "").append('\n');
@@ -596,6 +857,37 @@ class Engine {
             rows.forEach(r -> objs.add((DynamicObject) r[0]));
         }
         return new Result(names, rows, objs, q.shape(), objects, plan.toString());
+    }
+
+    /** The query plan of the last explained stream (structured, for Studio). */
+    QueryPlan streamPlan;
+
+    /** Plan text of {@code stream}: with actual rows and times for EXPLAIN ANALYZE. */
+    private String explainOf(QueryStream<DynamicObject> stream, Ast.Select q) {
+        streamPlan = q.analyze() ? stream.analyze() : stream.plan();
+        return streamPlan.render();
+    }
+
+    /** A pushed-down full-text ORDER BY item. */
+    private record TextOrder(String path, String query) {
+    }
+
+    /** {@code SCORE(path, constant)} descending on a string of the queried class, else null. */
+    private TextOrder textOrder(Ast.Expr e, Ast.OrderItem item, Scope s) {
+        if (!(e instanceof Ast.Func f) || !f.name().equals("SCORE") || f.args().size() != 2 || !item.desc()
+                || !(f.args().get(0) instanceof Ast.Path p) || !constant(f.args().get(1)) || s.local(p).isEmpty()) {
+            return null;
+        }
+        Resolved r = s.resolve(s.local(p), p);
+        if (r.refTarget() != null || r.type().kind() != ValueType.STRING || !(constValue(f.args().get(1)) instanceof String text)) {
+            return null;
+        }
+        try {
+            TextQuery.parse(text);
+        } catch (IllegalArgumentException ex) {
+            throw new OqlException("SCORE: " + ex.getMessage(), f.line(), f.column());
+        }
+        return new TextOrder(r.local(), text);
     }
 
     /** A pushed-down nearest-neighbour ORDER BY item. */
@@ -920,7 +1212,7 @@ class Engine {
             fns.add(fn);
             argPaths.add(p);
         }
-        plan.append(stream.explain()).append("OQL GROUP BY ").append(keyRender.isEmpty() ? "(all rows)" : keyRender)
+        plan.append(explainOf(stream, q)).append("OQL GROUP BY ").append(keyRender.isEmpty() ? "(all rows)" : keyRender)
                 .append(fast ? "  [canonical fast path]" : "  [evaluated per object]").append('\n');
         if (explainOnly) {
             return new Result(List.of("plan"), List.of(), List.of(), q.shape(), false, plan.toString());
@@ -1145,6 +1437,11 @@ class Engine {
             @Override
             public Object param(Ast.Param p) {
                 return Engine.this.param(p);
+            }
+
+            @Override
+            public float[] embed(String text) {
+                return Engine.this.embed(text);
             }
 
             @Override

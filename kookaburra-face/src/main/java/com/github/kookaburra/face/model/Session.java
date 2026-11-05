@@ -10,7 +10,9 @@ import com.github.kookaburra.Transaction;
 import com.github.kookaburra.TxOptions;
 import com.github.kookaburra.WriteBatch;
 import com.github.kookaburra.dynamic.DynamicCollection;
+import com.github.kookaburra.annotation.VectorDistance;
 import com.github.kookaburra.dynamic.DynamicObject;
+import com.github.kookaburra.embed.Embedder;
 import com.github.kookaburra.engine.Database;
 import com.github.kookaburra.exec.SegmentView;
 import com.github.kookaburra.face.StudioPaths;
@@ -19,10 +21,13 @@ import com.github.kookaburra.mapping.ClassDef;
 import com.github.kookaburra.mapping.DynamicCodec;
 import com.github.kookaburra.mapping.FieldDef;
 import com.github.kookaburra.mapping.Schema;
+import com.github.kookaburra.mapping.SchemaExport;
+import com.github.kookaburra.mapping.TypeDef;
 import com.github.kookaburra.mapping.ValueType;
 import com.github.kookaburra.oql.OqlException;
 import com.github.kookaburra.oql.OqlQuery;
 import com.github.kookaburra.oql.grammar.OqlLexer;
+import com.github.kookaburra.query.QueryPlan;
 import com.github.kookaburra.query.Row;
 import com.github.kookaburra.segment.Segment;
 import org.antlr.v4.runtime.CharStreams;
@@ -62,6 +67,8 @@ public class Session implements AutoCloseable {
 
     private Transaction tx;
     private final Path dir;
+
+    private Config config = config();
 
     private Session(ObjectDB db, String title, Path dir) {
         this.db = db;
@@ -177,7 +184,89 @@ public class Session implements AutoCloseable {
 
     private synchronized OqlQuery<Object> oql(String text) {
         Transaction t = tx();
-        return t == null ? db.oql(text) : t.oql(text);
+        OqlQuery<Object> q = t == null ? db.oql(text) : t.oql(text);
+        consoleParams.forEach(q::param);
+        return q;
+    }
+
+    // ---------------------------------------------------------------- vectors: find similar, embeddings
+
+    /** Named parameters bound to console statements (set by {@link #similar}). */
+    private final Map<String, Object> consoleParams = new LinkedHashMap<>();
+
+    /** Parameters bound to console statements, e.g. {@code :vector} of a "find similar". */
+    public synchronized Map<String, Object> consoleParams() {
+        return Map.copyOf(consoleParams);
+    }
+
+    /** Vector fields of a class (dotted paths, embeddables included) and their types. */
+    public Map<String, TypeDef> vectorFields(String className) {
+        Map<String, TypeDef> out = new LinkedHashMap<>();
+        ClassDef def = classDef(className);
+        if (def != null) {
+            collectVectors(out, "", def.current().fields());
+        }
+        return out;
+    }
+
+    private static void collectVectors(Map<String, TypeDef> out, String prefix, List<FieldDef> fields) {
+        for (FieldDef f : fields) {
+            if (f.type().kind() == ValueType.EMBEDDED) {
+                collectVectors(out, prefix + f.name() + ".", f.type().fields());
+            } else if (f.type().kind() == ValueType.VECTOR) {
+                out.put(prefix + f.name(), f.type());
+            }
+        }
+    }
+
+    /**
+     * A console query for the {@code k} objects closest to {@code o} by its vector at {@code path} (the field's own
+     * distance, the object itself left out), over the class that declares the field (a book finds similar products), with {@code :vector} and {@code :self} bound for the console.
+     */
+    public synchronized String similar(DynamicObject o, String path, int k) {
+        TypeDef t = vectorFields(o.className()).get(path);
+        if (t == null) {
+            throw new IllegalArgumentException(path + " is not a vector field of " + simple(o.className()));
+        }
+        if (!(o.get(path) instanceof float[] v)) {
+            throw new IllegalArgumentException(simple(o.className()) + " #" + o.oid() + " has no " + path);
+        }
+        consoleParams.put("vector", v.clone());
+        consoleParams.put("self", o.oid());
+        String fn = switch (t.distance()) {
+            case COSINE -> "cosine_distance";
+            case L2 -> "l2_distance";
+            case INNER_PRODUCT -> "inner_product";
+        };
+        String id = schema().byName(classDef(o.className()).collection()).idField();
+        int dot = path.lastIndexOf('.');
+        String from = declaring(schema(), classDef(o.className()), dot < 0 ? "" : path.substring(0, dot + 1), path.substring(dot + 1));
+        return "SELECT x, " + fn + "(x." + path + ", :vector) AS distance FROM " + from + " x WHERE x." + id
+                + " <> :self ORDER BY distance" + (t.distance() == VectorDistance.INNER_PRODUCT ? " DESC NULLS LAST" : "") + " LIMIT " + k;
+    }
+
+    /** The embedding of {@code text} by the database's embedder ({@code kookaburra.embedder}). */
+    public float[] embed(String text) {
+        Embedder e = config.embedder();
+        if (e == null) {
+            throw new IllegalStateException("no embedder configured: set kookaburra.embedder=ollama and kookaburra.embedder-model in kookaburra.properties");
+        }
+        return e.embed(text);
+    }
+
+    /** Uses another embedder (tests, settings changed at run time); null = none. */
+    public synchronized void embedder(Embedder e) {
+        config = config.withEmbedder(e);
+    }
+
+    /** Description of the configured embedder, or null. */
+    public String embedder() {
+        Embedder e = config.embedder();
+        return e == null ? null : e.describe();
+    }
+
+    private static String simple(String className) {
+        return className.substring(className.lastIndexOf('.') + 1);
     }
 
     private synchronized <T> OqlQuery<T> oql(String text, Class<T> type) {
@@ -322,7 +411,8 @@ public class Session implements AutoCloseable {
             return new QueryOutcome(List.of(), List.of(), null, n, (System.nanoTime() - start) / 1_000_000);
         }
         if (q.isExplain()) {
-            return new QueryOutcome(List.of(), List.of(), q.explain(), -1, (System.nanoTime() - start) / 1_000_000);
+            QueryPlan tree = q.plan();
+            return QueryOutcome.plan(tree, tree.render(), (System.nanoTime() - start) / 1_000_000);
         }
         boolean paged = pageSize > 0 && !q.isSliced();
         if (paged) {
@@ -331,20 +421,26 @@ public class Session implements AutoCloseable {
         List<Row> rows = q.rows();
         List<String> cols = rows.isEmpty() ? List.of() : rows.get(0).names();
         List<List<Object>> data = new ArrayList<>();
-        if (!rows.isEmpty() && rows.get(0).size() == 1 && rows.get(0).get(0) instanceof DynamicObject) {
-            // whole objects (SELECT x / SELECT *): one column per property, union over the classes found
+        if (!rows.isEmpty() && rows.get(0).get(0) instanceof DynamicObject) {
+            // whole objects (SELECT x / SELECT *): one column per property, union over the classes found, then any
+            // further select items (SELECT x, distance …)
             Map<String, Column> columns = new LinkedHashMap<>();
             for (Row r : rows) {
                 for (Column c : columns(((DynamicObject) r.get(0)).className())) {
                     columns.putIfAbsent(c.path(), c);
                 }
             }
+            List<String> extra = rows.get(0).names().subList(1, rows.get(0).size());
             cols = new ArrayList<>(columns.keySet());
+            cols.addAll(extra);
             for (Row r : rows) {
                 DynamicObject o = (DynamicObject) r.get(0);
                 List<Object> l = new ArrayList<>();
                 for (Column c : columns.values()) {
                     l.add(cell(o, c));
+                }
+                for (int i = 1; i < r.size(); i++) {
+                    l.add(r.get(i));
                 }
                 data.add(l);
             }
@@ -503,6 +599,15 @@ public class Session implements AutoCloseable {
         return oql(oql).explain();
     }
 
+    /** The plan of a SELECT as a tree ({@code analyze}: run it for rows and times), or null for UPDATE / DELETE. */
+    public QueryPlan plan(String oql, boolean analyze) {
+        String text = oql.strip();
+        if (analyze && !text.regionMatches(true, 0, "EXPLAIN", 0, 7)) {
+            text = "EXPLAIN ANALYZE " + text;
+        }
+        return oql(text).plan();
+    }
+
     // ---------------------------------------------------------------- editing
 
     public DynamicObject newObject(String className) {
@@ -561,7 +666,7 @@ public class Session implements AutoCloseable {
         metaFields(s, c, c.current().fields(), "", fields);
         fields = withCompositeUniques(s, c, fields);
         return new ClassMeta(c.name(), c.id(), c.parent(), c.collection(), subs, root.idField(), root.versionField(),
-                c.layouts().size(), dynamic(c.name()).from().count(), fields);
+                c.layouts().size(), dynamic(c.name()).from().count(), fields, c.comment() == null ? "" : c.comment());
     }
 
     /** Adds {@code UNIQUE (a, b)} to the fields of class-level unique constraints of the class or its superclasses. */
@@ -587,7 +692,7 @@ public class Session implements AutoCloseable {
                     parts.add((u.def().name().isEmpty() ? "" : u.def().name() + " ") + "UNIQUE (" + String.join(", ", u.def().paths()) + ")");
                 }
             }
-            out.add(new ClassMeta.FieldMeta(f.path(), f.type(), f.index(), f.declaredIn(), String.join(", ", parts)));
+            out.add(new ClassMeta.FieldMeta(f.path(), f.type(), f.index(), f.declaredIn(), String.join(", ", parts), f.comment()));
         }
         return out;
     }
@@ -595,11 +700,12 @@ public class Session implements AutoCloseable {
     private static void metaFields(Schema s, ClassDef c, List<FieldDef> defs, String prefix, List<ClassMeta.FieldMeta> out) {
         for (FieldDef f : defs) {
             if (f.type().kind() == ValueType.EMBEDDED) {
-                out.add(new ClassMeta.FieldMeta(prefix + f.name(), f.type().toString(), "", declaring(s, c, prefix, f.name()), ""));
+                out.add(new ClassMeta.FieldMeta(prefix + f.name(), f.type().toString(), "", declaring(s, c, prefix, f.name()), "",
+                        f.comment() == null ? "" : f.comment()));
                 metaFields(s, c, f.type().fields(), prefix + f.name() + ".", out);
             } else {
                 out.add(new ClassMeta.FieldMeta(prefix + f.name(), f.type().toString(), f.index() == null ? "" : f.index().name(),
-                        declaring(s, c, prefix, f.name()), constraint(f)));
+                        declaring(s, c, prefix, f.name()), constraint(f), f.comment() == null ? "" : f.comment()));
             }
         }
     }
@@ -627,6 +733,31 @@ public class Session implements AutoCloseable {
             }
         }
         return owner.simpleName();
+    }
+
+    /** The {@code @Comment} of a stored field (dotted path, embeddables followed), or null. */
+    public String comment(String className, String path) {
+        ClassDef c = classDef(className);
+        if (c == null) {
+            return null;
+        }
+        List<FieldDef> fields = c.current().fields();
+        String[] parts = path.split("\\.");
+        FieldDef f = null;
+        for (String part : parts) {
+            f = fields.stream().filter(x -> x.name().equals(part)).findFirst().orElse(null);
+            if (f == null) {
+                return null;
+            }
+            TypeDef t = f.type().kind() == ValueType.EMBEDDED_LIST ? f.type().element() : f.type();
+            fields = t == null ? List.of() : t.fields();
+        }
+        return f.comment();
+    }
+
+    /** The stored schema as Java classes, in {@code targetPackage} or (null) the stored packages. */
+    public SchemaExport javaCode(String targetPackage) {
+        return db().exportSchema(targetPackage);
     }
 
     public ClassDef classDef(String className) {

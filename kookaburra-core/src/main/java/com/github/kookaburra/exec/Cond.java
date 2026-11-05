@@ -2,6 +2,7 @@ package com.github.kookaburra.exec;
 
 import com.github.kookaburra.mapping.Canonical;
 import com.github.kookaburra.mapping.TypeDef;
+import com.github.kookaburra.text.TextQuery;
 
 import java.util.List;
 import java.util.Set;
@@ -100,6 +101,19 @@ public sealed interface Cond {
         }
     }
 
+    /** Full-text match on a string path (every word, or any word). */
+    record Match(String path, TextQuery query, boolean all) implements Leaf {
+        @Override
+        public boolean test(Object v) {
+            return v instanceof String s && query.matches(s, all);
+        }
+
+        @Override
+        public String toString() {
+            return path + (all ? " MATCHES " : " MATCHES ANY ") + lit(query.text());
+        }
+    }
+
     record Contains(String path, TypeDef type, Set<Object> keys, boolean all) implements Leaf {
         @Override
         public boolean test(Object v) {
@@ -159,7 +173,7 @@ public sealed interface Cond {
     record Residual(Predicate<Object> predicate, String text) implements Cond {
         @Override
         public String toString() {
-            return "RESIDUAL " + text;
+            return text.startsWith("RESIDUAL ") ? text : "RESIDUAL " + text;
         }
     }
 

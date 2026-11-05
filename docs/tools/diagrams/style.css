@@ -1,5 +1,5 @@
 /* Shared look of the docs diagrams (dark, like architecture.png). Rendered by make-diagrams.sh. */
-:root { --bg: #0b0f17; --box: #1e2128; --line: #8a92a6; --fg: #e6e9ef; --muted: #9aa3b5; --accent: #d63aa8;
+:root { --bg: #0b0f17; --box: #1e2128; --line: #8a92a6; --fg: #ffffff; --muted: #ffffff; --accent: #d63aa8;
         --ok: #3fb950; --bad: #f85149; --warn: #d29922; --cyan: #00e5ff; }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--fg);

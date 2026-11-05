@@ -41,6 +41,16 @@ public interface SegmentView {
     /** Index on a path, or null. */
     ColumnIndex index(String path);
 
+    /** Full-text index of a {@code @FullText} path, or null (scanned then). */
+    default TextIndex text(String path) {
+        return null;
+    }
+
+    /** Vector column of a {@code @Vector(dim = N)} path, or null (in-memory segments, older segment files). */
+    default VectorColumn vectors(String path) {
+        return null;
+    }
+
     /** Documents whose class id is in {@code classIds}. */
     default RoaringBitmap classes(Set<Integer> classIds, RoaringBitmap within) {
         RoaringBitmap out = new RoaringBitmap();

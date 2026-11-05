@@ -4,7 +4,10 @@ import com.github.kookaburra.annotation.Embeddable;
 import com.github.kookaburra.annotation.ForeignKey;
 import com.github.kookaburra.annotation.Id;
 import com.github.kookaburra.annotation.Index;
+import com.github.kookaburra.annotation.Comment;
+import com.github.kookaburra.annotation.FullText;
 import com.github.kookaburra.annotation.IndexKind;
+import com.github.kookaburra.text.Analyzers;
 import com.github.kookaburra.annotation.OnDelete;
 import com.github.kookaburra.annotation.Unique;
 import com.github.kookaburra.annotation.Vector;
@@ -81,7 +84,7 @@ class JavaTypes {
                 if (va.dim() < 0) {
                     throw new SchemaException("@Vector on " + where + ": negative dimension " + va.dim());
                 }
-                t = TypeDef.vector(va.dim(), va.distance());
+                t = TypeDef.vector(va.dim(), va.distance(), va.quantization());
             }
             IndexKind index = null;
             Index ann = f.getAnnotation(Index.class);
@@ -94,6 +97,19 @@ class JavaTypes {
                     throw new SchemaException("@Index(BSI) on " + where + " is not implemented yet");
                 }
                 index = ann.value();
+            }
+            FullText ft = f.getAnnotation(FullText.class);
+            if (ft != null) {
+                if (ann != null && ann.value() != IndexKind.FULLTEXT) {
+                    throw new SchemaException("@FullText on " + where + " cannot be combined with @Index(" + ann.value() + ")");
+                }
+                index = IndexKind.FULLTEXT;
+            }
+            if (index == IndexKind.FULLTEXT) {
+                if (t.kind() != ValueType.STRING) {
+                    throw new SchemaException("@FullText on " + where + " of type " + t + " is not supported (String fields)");
+                }
+                t = TypeDef.text(ft == null ? Analyzers.DEFAULT : ft.analyzer());
             }
             Unique ua = f.getAnnotation(Unique.class);
             if (ua != null && ua.fields().length > 0) {
@@ -112,10 +128,14 @@ class JavaTypes {
                 }
                 onDelete = fk.onDelete();
             }
+            if (unique && index == IndexKind.FULLTEXT) {
+                throw new SchemaException("@Unique on " + where + " cannot be combined with @FullText");
+            }
             if ((unique || onDelete != null) && index == null) {
                 index = IndexKind.AUTO;                    // constraints are checked through the index
             }
-            defs.add(new FieldDef(f.getName(), t, index, unique, onDelete));
+            Comment comment = f.getAnnotation(Comment.class);
+            defs.add(new FieldDef(f.getName(), t, index, unique, onDelete, comment == null ? null : comment.value()));
         }
         return defs;
     }
@@ -138,7 +158,7 @@ class JavaTypes {
                 Class<?> e = typeArg(generic, 0, 1);
                 boolean set = Set.class.isAssignableFrom(raw);
                 if (e != null && ValueType.of(e).isScalar()) {
-                    return TypeDef.multi(describe(e, e, stack, where), set);
+                    return TypeDef.multi(describe(e, argType(generic, 0, 1, e), stack, where), set);   // keeps Ref<T>'s T
                 }
                 if (e != null && ValueType.of(e) == ValueType.EMBEDDED) {
                     return TypeDef.embeddedList(unconstrained(describe(e, e, stack, where), where), set);
@@ -150,7 +170,8 @@ class JavaTypes {
                 Class<?> v = typeArg(generic, 1, 2);
                 if (k != null && v != null && ValueType.of(k).isScalar()
                         && (ValueType.of(v).isScalar() || ValueType.of(v) == ValueType.EMBEDDED)) {
-                    return TypeDef.map(describe(k, k, stack, where), unconstrained(describe(v, v, stack, where), where));
+                    return TypeDef.map(describe(k, k, stack, where),
+                            unconstrained(describe(v, argType(generic, 1, 2, v), stack, where), where));
                 }
                 return object(raw, where);
             }
@@ -225,11 +246,11 @@ class JavaTypes {
                 continue;
             }
             if (dot < 0) {
-                out.set(i, new FieldDef(f.name(), f.type(), IndexKind.AUTO, f.unique(), f.onDelete()));
+                out.set(i, new FieldDef(f.name(), f.type(), IndexKind.AUTO, f.unique(), f.onDelete(), f.comment()));
             } else {
                 TypeDef t = f.type();
                 TypeDef nested = TypeDef.embedded(t.name(), withIndex(t.fields(), path.substring(dot + 1)));
-                out.set(i, new FieldDef(f.name(), nested, f.index(), f.unique(), f.onDelete()));
+                out.set(i, new FieldDef(f.name(), nested, f.index(), f.unique(), f.onDelete(), f.comment()));
             }
         }
         return out;
@@ -268,6 +289,14 @@ class JavaTypes {
                     + " is not storable (make it @Embeddable or Serializable)");
         }
         return TypeDef.object(raw.getName());
+    }
+
+    /** The full type argument {@code i} of {@code n} (e.g. {@code Ref<Customer>}), or {@code raw} when there is none. */
+    static Type argType(Type generic, int i, int n, Class<?> raw) {
+        if (generic instanceof ParameterizedType p && p.getActualTypeArguments().length == n) {
+            return p.getActualTypeArguments()[i];
+        }
+        return raw;
     }
 
     static Class<?> typeArg(Type generic, int i, int n) {

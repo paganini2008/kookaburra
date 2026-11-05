@@ -225,7 +225,7 @@ class StudioNestedTest {
         assertThat(child(price, "currency").getValue().value()).isEqualTo("AUD");
         assertThat(child(price, "amount").getValue().type()).isEqualTo("Decimal");
         ObjectInspector.Entry product = child(child(linesNode, "[0]"), "product").getValue();
-        assertThat(product.type()).isEqualTo("→ Product");
+        assertThat(product.type()).isEqualTo("Ref<Product>");
         assertThat(view.data.inspector.title.getText()).isEqualTo("Purchase  #" + p.oid());
         if (!onDisk) {
             robot.interact(() -> view.data.inspector.tree.getSelectionModel().select(price));

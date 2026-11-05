@@ -176,6 +176,10 @@
     -fx-font-style: italic;
 }
 
+.k-code .ann {
+    -fx-fill: -k-warn;
+}
+
 .k-code .op {
     -fx-fill: -k-fg-muted;
 }
@@ -279,7 +283,7 @@
 .k-splash-name {
     -fx-font-size: 24px;
     -fx-font-weight: bold;
-    -fx-text-fill: #E6EDF7;
+    -fx-text-fill: #FFFFFF;
 }
 
 .k-splash-version {
@@ -288,7 +292,7 @@
 }
 
 .k-splash-status {
-    -fx-text-fill: #7A8BA8;
+    -fx-text-fill: #FFFFFF;
 }
 
 .k-splash-bar > .bar {
@@ -450,3 +454,64 @@
 .k-chart .default-color2.chart-line-symbol, .k-chart .default-color2.chart-legend-item-symbol { -fx-background-color: -k-warn; }
 .k-chart .default-color0.chart-bar { -fx-bar-fill: -k-accent; }
 .k-chart .default-color1.chart-bar { -fx-bar-fill: -k-accent-2; }
+
+/* ---- query plan diagram (PlanView) ---------------------------------------------------- */
+.k-plan { -fx-background-color: -k-bg-1; }
+.k-plan > .viewport { -fx-background-color: -k-bg-1; }
+.k-plan-summary { -fx-text-fill: -k-fg-muted; }
+.k-plan-legend .label { -fx-text-fill: -k-fg-muted; -fx-font-size: 11px; }
+.k-plan-dot { -fx-min-width: 10px; -fx-min-height: 10px; -fx-max-width: 10px; -fx-max-height: 10px; -fx-background-radius: 5px; }
+.k-plan-row { -fx-padding: 4px 8px; -fx-background-color: -k-bg-2; -fx-background-radius: 4px; }
+.k-plan-row:hover { -fx-background-color: derive(-k-bg-2, 12%); }
+.k-plan-slow-row { -fx-border-color: -k-err; -fx-border-radius: 4px; -fx-border-width: 1px; }
+.k-plan-mark { -fx-min-width: 4px; -fx-max-width: 4px; -fx-min-height: 18px; -fx-background-radius: 2px; }
+.k-plan-op { -fx-font-weight: bold; -fx-text-fill: -k-fg; }
+.k-plan-detail { -fx-text-fill: -k-fg-muted; }
+.k-plan-bar { -fx-background-color: derive(-k-bg-2, -20%); -fx-background-radius: 3px; -fx-min-height: 18px; }
+.k-plan-fill { -fx-background-radius: 3px; -fx-opacity: 0.55; -fx-min-height: 18px; }
+.k-plan-figure { -fx-padding: 0 6px; -fx-text-fill: -k-fg; -fx-font-size: 11px; }
+.k-plan-flag { -fx-text-fill: -k-err; -fx-font-weight: bold; -fx-font-size: 11px; }
+.k-plan-index { -fx-background-color: -k-ok; }
+.k-plan-fulltext { -fx-background-color: -k-accent-2; }
+.k-plan-vector { -fx-background-color: -k-accent; }
+.k-plan-scan { -fx-background-color: -k-warn; }
+.k-plan-process { -fx-background-color: -k-fg-muted; }
+.k-plan-none { -fx-background-color: -k-border; }
+.k-plan-normal { -fx-background-color: -k-accent; }
+.k-plan-slowest { -fx-background-color: -k-err; }
+/* the step rows carry the access class for tests and the mark colour; keep their own background */
+.k-plan-row.k-plan-index, .k-plan-row.k-plan-fulltext, .k-plan-row.k-plan-vector, .k-plan-row.k-plan-scan,
+.k-plan-row.k-plan-process, .k-plan-row.k-plan-none { -fx-background-color: -k-bg-2; }
+.k-plan-row .k-plan-op .ikonli-font-icon { -fx-icon-color: -k-fg-muted; }
+.k-plan-row.k-plan-index .k-plan-op .ikonli-font-icon { -fx-icon-color: -k-ok; }
+.k-plan-row.k-plan-fulltext .k-plan-op .ikonli-font-icon { -fx-icon-color: -k-accent-2; }
+.k-plan-row.k-plan-vector .k-plan-op .ikonli-font-icon { -fx-icon-color: -k-accent; }
+.k-plan-row.k-plan-scan .k-plan-op .ikonli-font-icon { -fx-icon-color: -k-warn; }
+
+/* @Comment mark on a data grid header: hover shows the field comment */
+.k-col-comment .ikonli-font-icon { -fx-icon-size: 12; -fx-icon-color: -k-accent; }
+
+/* Export as Java: file list and editor */
+.k-java-export .k-java-files { -fx-pref-width: 260; }
+.k-java-export .k-java-warnings { -fx-text-fill: -k-warn; -fx-wrap-text: true; }
+.k-java-export .k-java-edited { -fx-text-fill: -k-accent; -fx-font-weight: bold; }
+
+/* About: feature map */
+.k-feature-card {
+    -fx-background-color: -k-bg-1;
+    -fx-border-color: -k-border;
+    -fx-border-radius: 8px;
+    -fx-background-radius: 8px;
+    -fx-padding: 10px;
+}
+.k-feature-title { -fx-text-fill: -k-fg; -fx-font-weight: bold; }
+.k-feature-title .ikonli-font-icon { -fx-icon-color: -k-accent; -fx-icon-size: 16; }
+.k-feature-chip {
+    -fx-text-fill: -k-fg;
+    -fx-font-size: 11px;
+    -fx-background-color: -k-bg-2;
+    -fx-border-color: -k-glow;
+    -fx-border-radius: 10px;
+    -fx-background-radius: 10px;
+    -fx-padding: 2px 8px;
+}

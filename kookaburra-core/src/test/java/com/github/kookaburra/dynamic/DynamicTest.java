@@ -242,7 +242,7 @@ class DynamicTest {
         assertThat(new Pred.TypeIn<Object>(Set.of(Dog.class.getName())).test(new Dog())).isTrue();
         assertThat(animals.from().filter(new Pred.TypeIn<>(Set.of("x.Unknown"))).count()).isZero();
         assertThat(new Pred.TypeIn<>(Set.of(Dog.class.getName())).toString()).isEqualTo("TYPE IN [Dog]");
-        assertThat(animals.from().explain()).contains("QUERY Animal");
+        assertThat(animals.from().explain()).contains("Query  Animal");
     }
 
     @Test

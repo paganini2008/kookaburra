@@ -1,0 +1,14 @@
+/*
+ * Text on dark themes: every text is pure #FFFFFF, no grey (secondary labels, hints, code comments included).
+ * Loaded after studio.css / neon.css, on the main window and on every dialog.
+ */
+.root {
+    -color-fg-default: #FFFFFF;
+    -color-fg-muted: #FFFFFF;
+    -color-fg-subtle: #FFFFFF;
+    -k-fg: #FFFFFF;
+    -k-fg-muted: #FFFFFF;
+}
+
+/* placeholders may stay grey */
+.text-input { -fx-prompt-text-fill: #8B95A8; }

@@ -26,19 +26,22 @@ class BenchTest {
     @Test
     void smallRunProducesReportWithoutProblems() throws IOException {
         Path out = tmp.resolve("out").resolve("report.md");
-        Bench.main(new String[]{"--n=20_000", "--threads=4", "--seconds=1", "--iterations=3",
+        Bench.main(new String[]{"--n=20_000", "--threads=4", "--seconds=1", "--iterations=3", "--vectors=3_000",
                 "--dir=" + tmp.resolve("db"), "--out=" + out});
         String report = Files.readString(out);
         assertThat(tmp.resolve("db")).doesNotExist();            // test data removed after the run
+        assertThat(tmp.resolve("db-vectors")).doesNotExist();
+        assertThat(report).contains("insert 3,000 × 384", "HNSW graphs", "top-10 HNSW, ef=100", "top-10 exact scan",
+                "filter topic = t (2 %)", "recall@10 of HNSW vs exact");
         assertThat(report).contains("| objects | 20,000 |", "bulk insert", "get(oid)", "GROUP BY city", "Mixed",
                 "compact()", "reopen", "heap used", "Transactions", "transfer", "hot counter",
                 "OQL DELETE of all", "after deleting everything", "**Problems**: none");
 
         Bench again = new Bench(Bench.Options.parse("--n=5000", "--threads=2", "--seconds=1", "--iterations=3",
-                "--dir=" + tmp.resolve("db"), "--out=" + out, "--keep"));
+                "--dir=" + tmp.resolve("db"), "--out=" + out, "--keep", "--vectors=0"));
         again.run();
         assertThat(tmp.resolve("db")).isDirectory();             // --keep
-        new Bench(Bench.Options.parse("--n=1000", "--threads=1", "--seconds=1", "--iterations=3",
+        new Bench(Bench.Options.parse("--n=1000", "--threads=1", "--seconds=1", "--iterations=3", "--vectors=0",
                 "--dir=" + tmp.resolve("db"), "--out=" + out)).run();   // wipes the kept directory first
         assertThat(again.problems()).isEmpty();
         assertThat(again.results()).extracting(Bench.Result::section).contains("Write", "Read", "Query", "Storage");
@@ -49,6 +52,7 @@ class BenchTest {
         Bench.Options o = Bench.Options.parse();
         assertThat(o.n()).isEqualTo(1_000_000);
         assertThat(o.threads()).isEqualTo(16);
+        assertThat(o.vectors()).isEqualTo(100_000);
         assertThatThrownBy(() -> Bench.Options.parse("--bogus=1")).isInstanceOf(IllegalArgumentException.class);
         assertThat(new Bench.Result("A", "m", "v", "t", true).row()).endsWith("✅ |");
         assertThat(new Bench.Result("A", "m", "v", "t", false).row()).endsWith("❌ |");

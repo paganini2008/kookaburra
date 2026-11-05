@@ -28,7 +28,9 @@ public class SchemaIO {
     /** Format 3 (2026-10-17): every class also stores its class-level unique constraints (field combinations). */
     private static final long MAGIC_V3 = 0x4B4B4253_43483033L;   // "KKBSCH03"
     /** Format 4 (2026-11-04): every type also stores its vector dimension. */
-    private static final long MAGIC = 0x4B4B4253_43483034L;      // "KKBSCH04"
+    private static final long MAGIC_V4 = 0x4B4B4253_43483034L;   // "KKBSCH04"
+    /** Format 5 (2026-11-05): classes store their former names ({@code @Renamed}); classes and fields a comment. */
+    private static final long MAGIC = 0x4B4B4253_43483035L;      // "KKBSCH05"
 
     private SchemaIO() {
     }
@@ -59,6 +61,11 @@ public class SchemaIO {
                         out.writeUTF(path);
                     }
                 }
+                out.writeInt(c.formerNames().size());
+                for (String former : c.formerNames()) {
+                    out.writeUTF(former);
+                }
+                writeNullable(out, c.comment());
             }
             out.flush();
             byte[] b = body.toByteArray();
@@ -83,7 +90,7 @@ public class SchemaIO {
         try {
             DataInputStream head = new DataInputStream(new ByteArrayInputStream(file));
             long magic = head.readLong();
-            int format = magic == MAGIC ? 4 : magic == MAGIC_V3 ? 3 : magic == MAGIC_V2 ? 2 : magic == MAGIC_V1 ? 1 : 0;
+            int format = magic == MAGIC ? 5 : magic == MAGIC_V4 ? 4 : magic == MAGIC_V3 ? 3 : magic == MAGIC_V2 ? 2 : magic == MAGIC_V1 ? 1 : 0;
             if (format == 0) {
                 throw new SchemaException("not a schema file");
             }
@@ -121,7 +128,13 @@ public class SchemaIO {
                     }
                     uniques.add(new UniqueDef(uname, paths));
                 }
-                classes.add(new ClassDef(id, name, parent, collection, idField, versionField, layouts, uniques));
+                List<String> former = new ArrayList<>();
+                int nf = format >= 5 ? in.readInt() : 0;
+                for (int j = 0; j < nf; j++) {
+                    former.add(in.readUTF());
+                }
+                String comment = format >= 5 ? readNullable(in) : null;
+                classes.add(new ClassDef(id, name, parent, collection, idField, versionField, layouts, uniques, former, comment));
             }
             return new Schema(version, classes);
         } catch (IOException e) {
@@ -137,6 +150,7 @@ public class SchemaIO {
             out.writeBoolean(f.unique());
             writeNullable(out, f.onDelete() == null ? null : f.onDelete().name());
             writeType(out, f.type());
+            writeNullable(out, f.comment());
         }
     }
 
@@ -149,8 +163,10 @@ public class SchemaIO {
             String index = readNullable(in);
             boolean unique = v2 && in.readBoolean();
             String onDelete = v2 ? readNullable(in) : null;
-            fields.add(new FieldDef(name, readType(in, format), index == null ? null : IndexKind.valueOf(index), unique,
-                    onDelete == null ? null : OnDelete.valueOf(onDelete)));
+            TypeDef type = readType(in, format);
+            String comment = format >= 5 ? readNullable(in) : null;
+            fields.add(new FieldDef(name, type, index == null ? null : IndexKind.valueOf(index), unique,
+                    onDelete == null ? null : OnDelete.valueOf(onDelete), comment));
         }
         return fields;
     }
