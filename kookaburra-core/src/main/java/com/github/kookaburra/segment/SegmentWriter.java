@@ -86,8 +86,24 @@ public class SegmentWriter {
      */
     public static byte[] write(List<Entry> entries, Collection<ColumnDef> columns, VectorSpec vectors, double bloomFpp,
                                int autoPostingsRatio) {
+        ByteSink out = writeTo(entries, columns, vectors, bloomFpp, autoPostingsRatio);
+        return out.toByteArray();
+    }
+
+    /**
+     * Same as {@link #write}, into a sink sized from the rows up front (valid up to {@code size()}): flushes and
+     * merges hand its array to the storage without copying the segment once more.
+     */
+    public static ByteSink writeTo(List<Entry> entries, Collection<ColumnDef> columns, VectorSpec vectors, double bloomFpp,
+                                   int autoPostingsRatio) {
         int n = entries.size();
-        ByteSink out = new ByteSink(Math.max(1024, n * 64));
+        long rowBytes = 0;
+        for (Entry e : entries) {
+            rowBytes += e.row().length;
+        }
+        // rows + oids, versions, class ids, offsets + about 12 bytes per row and column (ordinals, postings)
+        long estimate = rowBytes + (long) n * (36 + 12L * columns.size()) + 64 * 1024;
+        ByteSink out = new ByteSink((int) Math.min(Integer.MAX_VALUE - 16, estimate));
         out.writeLong(MAGIC).writeInt(FORMAT).writeInt(0);
         ByteSink footer = new ByteSink();
         footer.writeVarInt(n);
@@ -169,7 +185,7 @@ public class SegmentWriter {
         CRC32C crc = new CRC32C();
         crc.update(f);
         out.writeLong(footerOffset).writeInt((int) crc.getValue()).writeLong(MAGIC);
-        return out.toByteArray();
+        return out;
     }
 
     private static void writeColumn(ByteSink out, ByteSink footer, ColumnDef c, List<Entry> entries, int autoPostingsRatio) {

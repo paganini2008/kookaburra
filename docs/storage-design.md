@@ -398,6 +398,7 @@ flowchart TD
     G --> H["new WAL file, start the sequencer"]
 ```
 
+- Cleanup also runs after every commit while the database is open. A `*.tmp` file is judged by the file it becomes: the temporary file of a segment that a flush or merge thread is writing (its id is in the building set) is kept; stale ones are deleted (S11).
 - WAL record: `len · crc32c · seq · ops` with ops `INSERT oid row | UPDATE oid version row | DELETE oid applied`; cascades of constraints are logged as ops too.
 - Replay applies the logged outcome (OIDs, versions): no re-validation, deterministic.
 - Reopen without WAL to replay: about 2 ms for 10 M objects (only footers are read).
@@ -451,6 +452,8 @@ flowchart TD
 | S6 | Memory-mapped files, little-endian, zero-copy bitmaps | the OS page cache does the caching; tiny heap |
 | S7 | Garbage-driven compaction besides size tiers | deleted space is reclaimed even for lone or oversized segments (design D44) |
 | S8 | Backup = snapshot export into fresh segments | consistent without pausing writers (design D54) |
+| S12 | Segments are written into one sink sized from the rows up front (grows by half if short) and handed to the file without a final copy | a merge of 512 MB of rows used to allocate several humongous arrays (doublings plus a copy): GC pressure slowed bulk loads and fragmentation caused OutOfMemoryError in background merges |
+| S11 | Cleanup keeps the temporary file of a segment being built; only stale `*.tmp` files are deleted | cleanup runs after every commit, concurrently with flush and merge threads; deleting every `*.tmp` made a concurrent rename fail and the database stop (CI, 2026-11-05) |
 | S10 | Inverted index per segment on dictionary + Roaring postings, frequencies aligned to posting order | reuses the column building blocks; term lookups and Boolean matching are bitmap operations; no extra dependency (design D62) |
 | S9 | Vector columns + one HNSW graph per segment, rebuilt on merge | immutable segments never update a graph in place; floats read in place; same shape as Lucene (design D59) |
 

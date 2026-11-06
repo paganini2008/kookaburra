@@ -25,6 +25,7 @@ import com.github.kookaburra.exec.Executor;
 import com.github.kookaburra.exec.QueryHost;
 import com.github.kookaburra.exec.ReadView;
 import com.github.kookaburra.exec.SegmentView;
+import com.github.kookaburra.io.ByteSink;
 import com.github.kookaburra.mapping.ClassDef;
 import com.github.kookaburra.mapping.DynamicCodec;
 import com.github.kookaburra.mapping.EntityType;
@@ -727,19 +728,20 @@ public class Database implements ObjectDB, OqlHost {
             m.live(job.seq()).forEach((int row) ->
                     entries.add(new SegmentWriter.Entry(m.oid(row), m.version(row), m.record(row), m.row(row))));
             entries.sort(Comparator.comparingLong(SegmentWriter.Entry::oid));
-            byte[] bytes = SegmentWriter.write(entries, registry.schema().columns(job.collection()).values(),
+            ByteSink out = SegmentWriter.writeTo(entries, registry.schema().columns(job.collection()).values(),
                     SegmentWriter.VectorSpec.of(registry.schema().vectorColumns(job.collection()), config), config.bloomFpp(),
                     config.autoPostingsRatio());
+            int bytesLength = out.size();
             int id = segmentIds.incrementAndGet();
             building.add(id);
-            Segment seg = new Segment(id, storage.writeSegment(job.collection(), id, bytes), registry::schema,
+            Segment seg = new Segment(id, storage.writeSegment(job.collection(), id, out.array(), bytesLength), registry::schema,
                     new SegmentDeletes(new RoaringBitmap()), config.postingsOrMax());
             long took = System.nanoTime() - start;
             LOG.debug("flushed {} rows of {} into seg#{} ({} bytes) in {} ms", entries.size(), job.collection(), id,
-                    bytes.length, took / 1_000_000);
+                    bytesLength, took / 1_000_000);
             metrics.flushes.increment();
             metrics.flushedRows.add(entries.size());
-            metrics.flushedBytes.add(bytes.length);
+            metrics.flushedBytes.add(bytesLength);
             metrics.flushNanos.add(took);
             sequencer.submitTask(() -> install(job, seg)).whenComplete((r, t) -> {
                 if (t != null) {
@@ -882,16 +884,19 @@ public class Database implements ObjectDB, OqlHost {
                 return;
             }
             entries.sort(Comparator.comparingLong(SegmentWriter.Entry::oid));
-            byte[] bytes = SegmentWriter.write(entries, registry.schema().columns(job.collection()).values(),
+            ByteSink out = SegmentWriter.writeTo(entries, registry.schema().columns(job.collection()).values(),
                     SegmentWriter.VectorSpec.of(registry.schema().vectorColumns(job.collection()), config), config.bloomFpp(),
                     config.autoPostingsRatio());
+            int bytesLength = out.size();
+            int rows = entries.size();
+            entries.clear();                                       // the decoded rows can go before the file is written
             int id = segmentIds.incrementAndGet();
             building.add(id);
-            Segment merged = new Segment(id, storage.writeSegment(job.collection(), id, bytes), registry::schema,
+            Segment merged = new Segment(id, storage.writeSegment(job.collection(), id, out.array(), bytesLength), registry::schema,
                     new SegmentDeletes(new RoaringBitmap()), config.postingsOrMax());
             LOG.info("compacted {} segments of {} into seg#{}: {} live rows, {} bytes, {} ms", job.inputs().size(),
-                    job.collection(), id, entries.size(), bytes.length, (System.nanoTime() - start) / 1_000_000);
-            countCompaction(job, bytes.length, start);
+                    job.collection(), id, rows, bytesLength, (System.nanoTime() - start) / 1_000_000);
+            countCompaction(job, bytesLength, start);
             sequencer.submitTask(() -> installMerge(job, merged)).whenComplete((r, t) -> {
                 if (t != null) {
                     job.done().completeExceptionally(t);

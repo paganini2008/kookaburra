@@ -42,7 +42,8 @@ public class ByteSink {
 
     private void ensure(int extra) {
         if (size + extra > buf.length) {
-            buf = Arrays.copyOf(buf, Math.max(buf.length * 2, size + extra));
+            // grow by half: segments are written into one sink, doubling a few hundred MB costs too much heap
+            buf = Arrays.copyOf(buf, Math.max(buf.length + (buf.length >> 1), size + extra));
         }
     }
 

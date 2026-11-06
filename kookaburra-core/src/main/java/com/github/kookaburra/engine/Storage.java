@@ -4,6 +4,7 @@ import com.github.kookaburra.io.MappedFile;
 import com.github.kookaburra.mapping.Schema;
 import org.roaringbitmap.RoaringBitmap;
 
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 
@@ -29,6 +30,11 @@ interface Storage extends AutoCloseable {
 
     /** Stores a finished segment and returns it mapped / wrapped for reading. */
     MappedFile writeSegment(String collection, int id, byte[] bytes);
+
+    /** Writes a segment from the first {@code length} bytes of {@code buf} (a writer's buffer, not copied on disk). */
+    default MappedFile writeSegment(String collection, int id, byte[] buf, int length) {
+        return writeSegment(collection, id, length == buf.length ? buf : Arrays.copyOf(buf, length));
+    }
 
     MappedFile openSegment(String collection, int id);
 
