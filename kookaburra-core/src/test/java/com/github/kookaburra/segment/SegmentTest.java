@@ -1,5 +1,6 @@
 package com.github.kookaburra.segment;
 
+import com.github.kookaburra.Config;
 import com.github.kookaburra.Ref;
 import com.github.kookaburra.exec.Cond;
 import com.github.kookaburra.exec.SegmentView;
@@ -27,6 +28,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -59,7 +61,7 @@ class SegmentTest {
         registry = new TypeRegistry(Schema.empty(), null, s -> { });
         type = registry.entity(Kitchen.class);
         Random r = new Random(7);
-        List<SegmentWriter.Entry> entries = new ArrayList<>();
+        entries = new ArrayList<>();
         for (int n = 0; n < 500; n++) {
             Kitchen k = new Kitchen();
             k.b = r.nextBoolean();
@@ -83,6 +85,33 @@ class SegmentTest {
         seg = new Segment(9, MappedFile.heap(bytes, "test"), registry::schema, new SegmentDeletes(new RoaringBitmap()));
         all = new RoaringBitmap();
         all.add(0L, records.size());
+    }
+
+    private List<SegmentWriter.Entry> entries;
+
+    @Test
+    void writeToSizesTheBufferFromTheRowsAndMatchesWrite() {
+        // flushes and merges write into one presized sink and hand its array to the storage: no growth, no copy
+        ByteSink sink = SegmentWriter.writeTo(entries, columns(), SegmentWriter.VectorSpec.NONE, 0.01,
+                Config.defaults().autoPostingsRatio());
+        byte[] bytes = SegmentWriter.write(entries, columns(), 0.01);
+        assertThat(sink.size()).isEqualTo(bytes.length);
+        assertThat(Arrays.copyOf(sink.array(), sink.size())).isEqualTo(bytes);
+        long rowBytes = entries.stream().mapToLong(e -> e.row().length).sum();
+        assertThat(sink.array().length).isGreaterThanOrEqualTo(sink.size())        // the estimate was enough
+                .isLessThan((int) (rowBytes * 4 + 128 * 1024));                      // and not far off
+        Segment again = new Segment(10, MappedFile.heap(bytes, "again"), registry::schema, new SegmentDeletes(new RoaringBitmap()));
+        assertThat(again.size()).isEqualTo(500);
+    }
+
+    @Test
+    void sinkGrowsByHalf() {
+        ByteSink s = new ByteSink(100);
+        s.writeBytes(new byte[101]);
+        assertThat(s.array().length).isEqualTo(150);
+        s.writeBytes(new byte[500]);
+        assertThat(s.array().length).isEqualTo(601);
+        assertThat(s.size()).isEqualTo(601);
     }
 
     private Collection<ColumnDef> columns() {

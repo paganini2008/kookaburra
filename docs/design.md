@@ -1272,6 +1272,8 @@ Features to be built next (only what users of the library or Studio will get): n
 
 | Date | Change |
 |---|---|
+| 2026-11-06 | Fix (storage-design S12): segment files are written into a presized sink without a final copy; bulk load back to about 690 k/s, no more OutOfMemoryError in background merges at -Xmx8g |
+| 2026-11-06 | Fix (storage-design S11): cleanup after a commit no longer deletes the temporary file of a segment a flush or merge thread is writing ("cannot rename seg_N.odbf.tmp", then "database failed") |
 | 2026-11-06 | Fix: references inside lists, sets and map values keep their target (`LIST(REF(Member))` instead of `REF(Object)`); list foreign keys check the referenced class; Studio shows `Ref<T>` / `List<Ref<T>>` |
 | 2026-11-06 | `@Comment` on classes and fields (§3.5, D69); `exportSchema` / `SchemaExport` (§3.5); Studio: comments on the Schema page and as grid header hints, Export as Java with editable preview, menu bar, About feature map, pure white / black text (§17.3); tutorial video (2:58) with the Export as Java clip; `bin/data` rebuilt |
 | 2026-11-05 | `@Renamed` fields and classes (§3.5, D65, schema format 5); element conditions `whereElement` / OQL `JOIN` over embedded lists (§10.8, D66); full-text phrases and `HIGHLIGHT` (§10.7, D67); int8 vectors (§10.6, D68, segment format 4); crash-image tests of the search features |

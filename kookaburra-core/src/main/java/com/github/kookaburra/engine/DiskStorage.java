@@ -143,8 +143,13 @@ class DiskStorage implements Storage {
 
     @Override
     public MappedFile writeSegment(String collection, int id, byte[] bytes) {
+        return writeSegment(collection, id, bytes, bytes.length);
+    }
+
+    @Override
+    public MappedFile writeSegment(String collection, int id, byte[] buf, int length) {
         Path p = collectionDir(collection).resolve("seg_" + id + SEGMENT_EXT);
-        writeAtomically(p, bytes);
+        writeAtomically(p, buf, length);
         return MappedFile.map(p);
     }
 
@@ -229,10 +234,14 @@ class DiskStorage implements Storage {
         for (Path colDir : list(dir.resolve("col"))) {
             for (Path p : list(colDir)) {
                 String n = p.getFileName().toString();
-                Matcher seg = SEG.matcher(n);
-                Matcher del = DEL.matcher(n);
-                if ((seg.matches() && !segmentsInUse.contains(Integer.parseInt(seg.group(1))))
-                        || (del.matches() && !keep.contains(n)) || n.endsWith(".tmp")) {
+                // a ".tmp" file is judged by the file it becomes: a segment being written by a flush or merge thread
+                // right now is in use (building) and its temporary file must survive until it is renamed
+                String target = n.endsWith(".tmp") ? n.substring(0, n.length() - 4) : n;
+                Matcher seg = SEG.matcher(target);
+                Matcher del = DEL.matcher(target);
+                boolean inUse = seg.matches() ? segmentsInUse.contains(Integer.parseInt(seg.group(1)))
+                        : del.matches() && keep.contains(target);
+                if ((seg.matches() || del.matches() || n.endsWith(".tmp")) && !inUse) {
                     delete(p);
                 }
             }
@@ -251,10 +260,14 @@ class DiskStorage implements Storage {
     // ---------------------------------------------------------------- helpers
 
     static void writeAtomically(Path target, byte[] bytes) {
+        writeAtomically(target, bytes, bytes.length);
+    }
+
+    static void writeAtomically(Path target, byte[] bytes, int length) {
         Path tmp = target.resolveSibling(target.getFileName() + ".tmp");
         try (FileChannel ch = FileChannel.open(tmp, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
                 StandardOpenOption.TRUNCATE_EXISTING)) {
-            ByteBuffer b = ByteBuffer.wrap(bytes);
+            ByteBuffer b = ByteBuffer.wrap(bytes, 0, length);
             while (b.hasRemaining()) {
                 ch.write(b);
             }
