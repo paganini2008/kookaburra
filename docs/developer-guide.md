@@ -581,7 +581,16 @@ mvn -f kookaburra-face/pom.xml test -P tutorial
 
 - Try a package locally on your OS: build the jar with `mvn -f kookaburra-face/pom.xml -P dist package -DskipTests -Ddist.dir=$PWD/kookaburra-face/target/dist`, then `bash kookaburra-face/src/packaging/package.sh 1.0.0 macos-arm64` (output in `kookaburra-face/target/release`).
 - Release vs snapshot: `v1.2.3` is a release (Windows msi + zip); `v1.2.3-rc1` is a snapshot, like `-SNAPSHOT` in the pom (Windows zip only, published as a pre-release, latest unchanged); "Run workflow" by hand is a snapshot as workflow artifacts only. Locally the third argument of `package.sh` is `release` or `snapshot` (default).
-- Maven Central releases of the library are a separate, manual process.
+- The same tags publish the library (job `maven`): kookaburra-parent, kookaburra-core and kookaburra-processor.
+
+| Tag | Version in the poms | Goes to |
+|---|---|---|
+| `v1.2.3` | `1.2.3` | Maven Central (published automatically) |
+| `v1.2.3-rc1`, `rc2` … | `1.2.3-SNAPSHOT` | Central snapshot repository |
+| anything else | | the job fails, nothing is published |
+
+- Versions in the poms are maintained by hand. Secrets: `CENTRAL_USERNAME`, `CENTRAL_TOKEN`, `GPG_PRIVATE_KEY`, `GPG_PASSPHRASE`.
+- By hand: `mvn -P release clean deploy` uploads and validates; publish it in the Central Portal (or add `-Dcentral.autoPublish=true`).
 
 ---
 

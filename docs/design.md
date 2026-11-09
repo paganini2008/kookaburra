@@ -1136,6 +1136,7 @@ flowchart LR
 - **Always the latest**: file names carry no version (`kookaburra-studio-windows-x64.msi`, …), so `releases/latest/download/<file>` serves the newest release; README and website link there. Windows upgrades in place (fixed upgrade UUID).
 - **Release vs snapshot** (an rc tag is what `-SNAPSHOT` is in the pom): `v1.2.0` is a release (every package, Windows msi + zip, marked latest); `v1.2.0-rc1` is a snapshot (Windows zip only, no msi; a pre-release that leaves latest alone, its notes link to its own files); a manual run is a snapshot as workflow artifacts only. Studio shows the tag as its version (`1.2.0-rc1`); a manual run keeps `-SNAPSHOT`.
 - **Installed app paths**: the launchers set `jpackage.app-path`, so Studio keeps settings, the default database and logs in `~/Kookaburra` (the program folder is read-only); any directory opens with Open… or `--data=PATH`.
+- **Maven** (job `maven`, after the tests): kookaburra-parent, kookaburra-core and kookaburra-processor; `v1.2.0` needs version `1.2.0` in the poms and goes to Maven Central, `v1.2.0-rcN` needs `1.2.0-SNAPSHOT` and goes to the Central snapshot repository; a mismatch fails the job. Release profile: sources, javadoc, GPG, central-publishing-maven-plugin (autoPublish in CI).
 - Not signed yet (Apple notarization, Windows code signing need certificates as repository secrets): first start needs right-click Open (macOS) or "Run anyway" (Windows).
 
 ---
@@ -1272,6 +1273,7 @@ Features to be built next (only what users of the library or Studio will get): n
 
 | Date | Change |
 |---|---|
+| 2026-11-09 | Tag workflow publishes kookaburra-core and kookaburra-processor to Maven: release tags to Maven Central, rc tags to the Central snapshot repository (§17.5) |
 | 2026-11-06 | Fix (storage-design S12): segment files are written into a presized sink without a final copy; bulk load back to about 690 k/s, no more OutOfMemoryError in background merges at -Xmx8g |
 | 2026-11-06 | Fix (storage-design S11): cleanup after a commit no longer deletes the temporary file of a segment a flush or merge thread is writing ("cannot rename seg_N.odbf.tmp", then "database failed") |
 | 2026-11-06 | Fix: references inside lists, sets and map values keep their target (`LIST(REF(Member))` instead of `REF(Object)`); list foreign keys check the referenced class; Studio shows `Ref<T>` / `List<Ref<T>>` |

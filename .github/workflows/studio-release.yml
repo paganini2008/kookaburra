@@ -8,6 +8,14 @@
 #   v1.2.0-rc1    snapshot: Windows gets the zip only (no msi); published as a pre-release, "latest" unchanged
 #   Run workflow  snapshot: packages as workflow artifacts only, no release
 #
+# The same tags publish kookaburra-core and kookaburra-processor (with the parent pom they need) to Maven (job "maven"):
+#   v1.2.0        the poms must say 1.2.0           → Maven Central (published automatically)
+#   v1.2.0-rc1    the poms must say 1.2.0-SNAPSHOT  → Central snapshot repository
+#                 (https://central.sonatype.com/repository/maven-snapshots/; rc2, rc3 … replace it)
+#   The versions in the poms are maintained by hand; a tag that does not match them fails the job, nothing is published.
+#   Secrets: CENTRAL_USERNAME / CENTRAL_TOKEN (Central Portal user token), GPG_PRIVATE_KEY / GPG_PASSPHRASE.
+#   The Central namespace needs snapshots enabled for rc tags.
+#
 # @Author: Fred Feng
 # @Date: 04/11/2026
 # @Version 1.0.0
@@ -97,6 +105,52 @@ jobs:
           name: studio-${{ matrix.label }}
           path: kookaburra-face/target/release/*
           if-no-files-found: error
+
+  maven:
+    name: Publish kookaburra-core and kookaburra-processor to Maven
+    needs: test
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'                                     # the library's baseline
+          cache: maven
+          server-id: central                                     # <server> in settings.xml for the Central Portal
+          server-username: CENTRAL_USERNAME
+          server-password: CENTRAL_TOKEN
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+      - name: Check the tag against the pom version
+        id: target
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          pom="$(mvn -B -ntp -q -N help:evaluate -Dexpression=project.version -DforceStdout)"
+          v="${TAG#v}"
+          if [[ "$v" == *-* ]]; then                               # v1.2.0-rc1: a snapshot of 1.2.0
+            want="${v%%-*}-SNAPSHOT"; target="Central snapshot repository"
+          else
+            want="$v"; target="Maven Central"
+          fi
+          if [[ "$pom" != "$want" ]]; then
+            echo "::error::tag $TAG needs version $want in the poms, they say $pom; nothing is published"
+            exit 1
+          fi
+          echo "kookaburra-core, kookaburra-processor $pom → $target"
+          echo "### kookaburra-core, kookaburra-processor \`$pom\` → $target" >> "$GITHUB_STEP_SUMMARY"
+      - name: Deploy
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_TOKEN: ${{ secrets.CENTRAL_TOKEN }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        # -am adds the parent pom (kookaburra-parent), which both poms refer to; tests ran in "test"
+        run: >
+          mvn -B -ntp -P release -pl kookaburra-core,kookaburra-processor -am deploy
+          -DskipTests -Djacoco.skip=true
+          -Dcentral.autoPublish=true -Dcentral.waitUntil=published
 
   release:
     name: Publish release
